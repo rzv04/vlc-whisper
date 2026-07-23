@@ -164,6 +164,7 @@ models/
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,c,linux
 
 .vscode/
-ai/
-docs/
+# Whisper CPP
 worker/third_party/whisper.cpp
+# VLC source code
+worker/third_party/vlc*/
