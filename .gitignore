@@ -164,3 +164,6 @@ models/
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,c,linux
 
 .vscode/
+ai/
+docs/
+worker/third_party/whisper.cpp
