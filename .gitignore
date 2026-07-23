@@ -85,9 +85,81 @@ dkms.conf
 *.vsix
 
 ### VisualStudioCode Patch ###
+
 # Ignore all local history of files
 .history
 .ionide
+
+### CMake ###
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+### CMake Patch ###
+CMakeUserPresets.json
+
+# External projects
+*-prefix/
+
+# CMake build trees
+/build/
+/build-*/
+/cmake-build-*/
+
+# CMake-generated files, in case one is accidentally generated in source
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+CMakeDoxyfile
+CMakeGraphVizOptions.cmake
+Makefile
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+install_manifest.txt
+
+# Compiler/linker artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dll.a
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Logs and coverage
+*.log
+*.gcda
+*.gcno
+*.gcov
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Application-local models: huge files, download separately
+models/
+*.bin
+*.gguf
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,c,linux
 
