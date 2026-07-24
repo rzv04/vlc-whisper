@@ -88,6 +88,11 @@ vlc-whisper/
 │   └── fixtures/
 │       ├── spoken_english_16khz.wav
 │       └── expected_segments.json
+├── samples/
+│   ├── CMakeLists.txt
+│   ├── snippets/
+│   │   └── whisper_pcm.c
+│   └── audio/
 ├── cmake/
 │   ├── toolchains/mingw-w64-x86_64.cmake
 │   ├── FindWhisperCpp.cmake
@@ -101,6 +106,14 @@ vlc-whisper/
 ├── AGENTS.md
 └── README.md
 ```
+
+## Samples Directory
+
+The `samples/` directory contains standalone C code snippets and reference audio files for experimenting with pipeline stages.
+- Each `.c` file under `samples/snippets/` is automatically registered as a target named `sample_<filename>`.
+- All sample targets use `EXCLUDE_FROM_ALL TRUE`, meaning standard `cmake --build build` will skip them and build only the core project.
+- To compile a specific snippet, pass its target explicitly: `cmake --build build --target sample_<snippet_name>`.
+
 
 ## Plugin Files
 

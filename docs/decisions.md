@@ -62,4 +62,4 @@ MVP persists no audio, transcript, playback history, or database. A future GUI m
 
 **Status:** Accepted.
 
-Use CMake presets/toolchain files and cross-compile Windows x64 worker artifacts from Ubuntu. The VLC native-module build is a risk-managed exception: first prove whether exact SDK/out-of-tree compilation is sufficient; otherwise maintain a small pinned VLC source patch/in-tree module build. A clean out-of-tree experience is desirable, but not allowed to overrule reliability.
+Use CMake presets/toolchain files and cross-compile Windows x64 worker artifacts from Ubuntu. All MinGW runtime dependencies (`libgcc`, `libstdc++`, `libgomp`, `libwinpthread`) are statically linked into target binaries (`vlc-whisper-worker.exe`, sample binaries) to ensure output executables are fully self-contained and run on Windows without missing DLL errors. The VLC native-module build is a risk-managed exception: first prove whether exact SDK/out-of-tree compilation is sufficient; otherwise maintain a small pinned VLC source patch/in-tree module build. A clean out-of-tree experience is desirable, but not allowed to overrule reliability.
