@@ -44,7 +44,14 @@ Seeking must be detected and handled as a session-ending discontinuity: clear ca
 
 **Status:** Accepted.
 
-Ship/support only local `tiny.en` CPU for MVP. Expose a model manifest abstraction now: ID, language scope, model SHA-256, disk/RAM estimate, backend compatibility, and license/notice references. Do not expose model dropdowns until install, validation, benchmarking, and failure UX exist. Whisper.cpp's published model sizes make `large` materially different from `tiny`, not a small preference toggle. [page:0]
+Ship/support only local `tiny.en` CPU for MVP. Expose a model manifest abstraction (`models/manifest.json`): ID, file name, language scope, model SHA-256 hash, disk size, and RAM estimate. Do not expose model dropdowns until install, validation, benchmarking, and failure UX exist.
+
+### Manifest Verification Sequence & Runtime Policy
+
+1. **Manifest Parsing**: Upon worker launch or receiving a `START` frame, `vlc-whisper-worker` reads `models/manifest.json` and matches the requested `model_id` (`tiny.en`).
+2. **SHA-256 Verification**: Worker computes the SHA-256 hash of `models/ggml-tiny.en.bin` prior to passing the path to `whisper_init_from_file_with_params()`.
+3. **Pre-allocation Memory Check**: Compare `ram_bytes_estimate` against available system RAM to prevent OOM panics in the process tree.
+4. **Error Behavior**: If the manifest or binary model is missing or corrupt (SHA-256 mismatch), the worker emits `E_MODEL_MISSING` or `E_MODEL_INVALID` to the plugin. The caption session disables gracefully while VLC media playback continues uninterrupted.
 
 ## ADR-008: Bounded loss over playback impact
 
@@ -63,3 +70,15 @@ MVP persists no audio, transcript, playback history, or database. A future GUI m
 **Status:** Accepted.
 
 Use CMake presets/toolchain files and cross-compile Windows x64 worker artifacts from Ubuntu. All MinGW runtime dependencies (`libgcc`, `libstdc++`, `libgomp`, `libwinpthread`) are statically linked into target binaries (`vlc-whisper-worker.exe`, sample binaries) to ensure output executables are fully self-contained and run on Windows without missing DLL errors. The VLC native-module build is a risk-managed exception: first prove whether exact SDK/out-of-tree compilation is sufficient; otherwise maintain a small pinned VLC source patch/in-tree module build. A clean out-of-tree experience is desirable, but not allowed to overrule reliability.
+
+## ADR-011: Standalone settings GUI binary
+
+**Status:** Accepted.
+
+The post-MVP settings and model-management GUI (`vlc-whisper-settings.exe`) will be authored and packaged as a standalone executable rather than embedded inside the VLC plugin DLL (`libvlc_whisper_plugin.dll`).
+
+Consequences:
+
+1. **Crash & Thread Isolation**: Keeps UI event loop execution out of VLC's process space, preventing UI freezes or thread deadlocks with VLC's main Qt window thread.
+2. **Independent Execution**: Allows end-users to launch settings and pre-download models directly from the Start Menu without opening VLC or playing media first.
+3. **VLC Menu Invocation**: The VLC plugin DLL registers a lightweight menu item under `Tools -> VLC-Whisper Settings...` which invokes `vlc-whisper-settings.exe` out-of-process (`CreateProcess()` / `exec()`).

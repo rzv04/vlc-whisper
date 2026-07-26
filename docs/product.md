@@ -12,7 +12,7 @@ The initial user watches English-language local video in VLC and needs captions 
 
 The problem is not “perfect subtitles”. Speech recognition is delayed, can revise recent text, misses difficult audio, and has hardware-dependent speed. The product must prefer uninterrupted playback and truthful failure over pretending it can caption every source or machine.
 
-## Happy path
+## Optimal flow
 
 1. The user installs the VLC-whisper package into a compatible VLC installation and stores the supplied `tiny.en` model locally.
 2. They open an ordinary local English video, press Play, and VLC activates VLC-whisper.
@@ -30,7 +30,7 @@ The problem is not “perfect subtitles”. Speech recognition is delayed, can r
 - **MVP source:** local file URLs only. “Local” excludes optical media, capture devices, network shares, and remote URLs until explicitly added.
 - **MVP model:** `tiny.en`, CPU backend, English transcription, single active playback session.
 
-## Non-goals
+## Non-goals (MVP)
 
 - Translation, bilingual captions, speaker labels, subtitle-file export, editing, search, model downloading, updates, accounts, analytics, DRM bypass, and accessibility certification.
 - Seeking, playback-rate changes, A/B loops, title/chapter transitions, multiple simultaneous VLC instances, network streams, IPTV, VOD, livestreams, GPU acceleration, or a configuration GUI.

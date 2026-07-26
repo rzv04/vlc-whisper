@@ -157,9 +157,10 @@ install_manifest.txt
 Thumbs.db
 
 # Application-local models: huge files, download separately
-models/
-*.bin
-*.gguf
+models/*.bin
+models/*.gguf
+!models/manifest.json
+
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,c,linux
 

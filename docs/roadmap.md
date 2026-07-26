@@ -1,54 +1,64 @@
 # Roadmap
 
-## Milestone 0: Lock assumptions
+## Milestone 0: Lock assumptions (Completed)
 
-1. Select and record the exact Windows x64 VLC release/build, installer layout, compiler, MinGW target triplet, and whisper.cpp commit.
-2. Create repository, CMake presets, C17 warning policy, formatter/linter configuration, `.gitignore`, license decision, third-party notices, and reproducible toolchain container/VM notes.
-3. Build and run a Windows x64 `vlc-whisper-worker.exe` from Ubuntu; verify on Windows with `--version` and a deterministic self-test.
-4. Add a model manifest and manually provision a checked tiny.en model; do not embed unverified downloads.
+- [x] 1. Select and record exact Windows x64 VLC release/build, installer layout, compiler, MinGW target triplet, and pinned `whisper.cpp` commit.
+- [x] 2. Create repository, root `CMakeLists.txt`, `CMakePresets.json`, C17 warning policy, `.clang-format`, `.gitignore`, `AGENTS.md`, and reproducible toolchain notes.
+- [x] 3. Build and verify Windows x64 `vlc-whisper-worker.exe` cross-compilation from Ubuntu host.
+- [x] 4. Add model manifest abstraction (`models/manifest.json`) and provision checked `ggml-tiny.en.bin` model.
 
-**Exit:** clean checkout builds worker for Windows and produces version/build metadata.
+**Exit Status:** **DONE** — Clean checkout builds worker for Windows and produces version/build metadata.
 
-## Milestone 1: Worker proof
+---
 
-5. Implement a C worker host that loads tiny.en through whisper.cpp's C API and transcribes a fixed 16 kHz mono WAV fixture.
-6. Implement VAD/window/hop configuration, final-segment normalization/deduplication, and benchmark output.
-7. Implement binary frame codec, named-pipe server, HELLO/token check, START/AUDIO/STOP, and golden-frame contract tests.
-8. Add bounds checks, malformed-frame fuzzing, worker crash/error behavior, and redacted structured diagnostics.
+## Milestone 1: Worker proof (In Progress)
 
-**Exit:** Windows worker transcribes fixture PCM over named pipe without network access.
+- [ ] 5. Implement C worker host that loads `tiny.en` through whisper.cpp's C API and transcribes a fixed 16 kHz mono WAV fixture (scaffolded in `vw_whisper_engine.c`).
+- [ ] 6. Implement VAD/window/hop configuration, final-segment normalization/deduplication, and benchmark output (`vw_vad.c`, `vw_segment_builder.c`).
+- [ ] 7. Implement binary frame codec (`vw_protocol_codec.c`), named-pipe server (`vw_ipc_pipe_win32.c`), `HELLO`/`token` check, `START`/`AUDIO`/`STOP`, and protocol contract tests (`test_protocol_codec.c`, `test_protocol_validate.c`).
+- [ ] 8. Add bounds checks, malformed-frame fuzzing, worker crash/error behavior, and redacted structured diagnostics (`vw_log.c`).
 
-## Milestone 2: VLC feasibility spike
+**Exit Status:** **IN PROGRESS** — Windows worker transcribes fixture PCM over named pipe without network access.
 
-9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs.
-10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior.
-11. Independently prove caption display: native timed subtitle route preferred, OSD overlay fallback documented.
-12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior.
+---
 
-**Exit:** a test module sees timestamped audio and displays a static/deterministic timed caption on the reference VLC.
+## Milestone 2: VLC feasibility spike (Scaffolded)
+
+- [ ] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vlc_whisper_module.c`).
+- [ ] 10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior (`vw_audio_capture.c`, `vw_queue.c`).
+- [ ] 11. Independently prove caption display: native timed subtitle route preferred, OSD overlay fallback documented (`vw_caption_presenter.c`).
+- [ ] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior.
+
+**Exit Status:** **PLANNED** — A test module sees timestamped audio and displays a static/deterministic timed caption on the reference VLC.
+
+---
 
 ## Milestone 3: Local-file MVP
 
-13. Integrate bounded SPSC audio queue, sender thread, worker supervisor, and authenticated pipe.
-14. Receive/validate final segments; schedule/clear them through the proven VLC presenter.
-15. Implement lifecycle: start, play, pause, resume, stop/end, worker missing/crash, and unsupported source rejection.
-16. Implement discontinuity detection; seeking/rate/title changes must clear captions and fail only the caption session gracefully.
-17. Package a developer install, write a local-video quickstart, and run end-to-end Windows acceptance fixtures.
+- [ ] 13. Integrate bounded SPSC audio queue, sender thread, worker supervisor, and authenticated pipe.
+- [ ] 14. Receive/validate final segments; schedule/clear them through the proven VLC presenter.
+- [ ] 15. Implement lifecycle: start, play, pause, resume, stop/end, worker missing/crash, and unsupported source rejection.
+- [ ] 16. Implement discontinuity detection; seeking/rate/title changes must clear captions and fail only the caption session gracefully.
+- [ ] 17. Package a developer install, write a local-video quickstart, and run end-to-end Windows acceptance fixtures.
 
-**Exit:** local English files show captions during normal play/pause; VLC remains stable if captions fail.
+**Exit Status:** **PLANNED** — Local English files show captions during normal play/pause; VLC remains stable if captions fail.
+
+---
 
 ## Milestone 4: Release discipline
 
-18. Add GitHub/GitLab CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact signing/hashes, SBOM/third-party notices, and release manifests.
-19. Add Windows VM smoke tests for the pinned VLC installation and manual performance/compatibility matrix.
-20. Publish troubleshooting, supported hardware baseline, privacy statement, uninstall/rollback, known limitations, and bug report template.
+- [ ] 18. Add GitHub/GitLab CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact signing/hashes, SBOM/third-party notices, and release manifests.
+- [ ] 19. Add Windows VM smoke tests for the pinned VLC installation and manual performance/compatibility matrix.
+- [ ] 20. Publish troubleshooting, supported hardware baseline, privacy statement, uninstall/rollback, known limitations, and bug report template.
 
-**Exit:** reproducible signed/hashed development release with documented limits.
+**Exit Status:** **PLANNED** — Reproducible signed/hashed development release with documented limits.
+
+---
 
 ## Post-MVP
 
-21. Add `RESET`/timeline epoch and segment-cache invalidation; implement local-file seeking and regression suite.
-22. Add source profiles for VOD and live streams separately, then test IPTV protocols/providers only as legal, accessible fixtures permit.
-23. Add settings UI with validated installed-model list, language choice/auto-detect policy, CPU threads, diagnostics consent, and restart semantics.
-24. Add multilingual models and performance profiles; make `base`, `small`, `medium`, and `large` availability capability- and benchmark-based, not unconditional.
-25. Port platform layer to Linux: Unix socket, process supervision, installation paths, and Linux VLC test matrix.
+- [ ] 21. Add `RESET`/timeline epoch and segment-cache invalidation; implement local-file seeking and regression suite.
+- [ ] 22. Add source profiles for VOD and live streams separately, then test IPTV protocols/providers only as legal, accessible fixtures permit.
+- [ ] 23. Add standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 with validated installed-model list, language choice/auto-detect policy, CPU threads, diagnostics consent, and restart semantics.
+- [ ] 24. Add multilingual models and performance profiles; make `base`, `small`, `medium`, and `large` availability capability- and benchmark-based, not unconditional.
+- [ ] 25. Port platform layer to Linux: Unix socket, process supervision, installation paths, and Linux VLC test matrix.

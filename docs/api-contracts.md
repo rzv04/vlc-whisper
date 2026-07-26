@@ -6,6 +6,15 @@ This project has **no HTTP endpoints, cloud API, database, account, or authentic
 
 All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The initial protocol is `major=1, minor=0`; a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
+## Terminology & Abbreviations
+
+| Term / Abbreviation | Definition |
+|---|---|
+| **PTS** | **Presentation TimeStamp** — The exact position on the media playback timeline (not wall-clock time) at which audio, video, or captions must be presented. |
+| **`pts_us`** | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$). |
+| **`duration_us`** | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds. |
+| **IPC** | **Inter-Process Communication** — Local authenticated binary message-mode transport (named pipe on Windows, Unix domain socket on Linux). |
+
 ## Envelope
 
 ```c

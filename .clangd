@@ -1,2 +1,2 @@
 CompileFlags:
-  CompilationDatabase: "build"
+  CompilationDatabase: "build/windows-x64-release"

@@ -1,86 +1,70 @@
 # Coding Style Guidelines
 
-This document outlines the code formatting standards and guidelines for `vlc-whisper`.
+This document outlines the code formatting standards and architectural guidelines for `vlc-whisper`.
 
 ---
 
 ## 1. Overview
 
-To maintain consistency and readability across the codebase, code formatting is automated using [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html).
-
-The configuration is specified in the root file.
+Code formatting is strictly automated using [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html). The configuration file `.clang-format` located at the repository root governs formatting across all C and C++ files.
 
 ---
 
 ## 2. Base Style & Core Rules
 
-Our code formatting is based on the **Google Style Guide** with the following key overrides:
+Our code formatting builds upon the **Google Style Guide** with explicit project overrides:
 
 | Parameter | Value | Description |
 | :--- | :--- | :--- |
 | **Base Style** | `Google` | Derived from Google C/C++ Style Guide |
-| **Indent Width** | `2` | 2 spaces per indentation level |
+| **Language Standard** | `C17` | Standard C17 (`-std=c17`) for all authored code |
+| **Indent Width** | `2` | 2 spaces per indentation level (NO hard tabs `\t`) |
 | **Column Limit** | `120` | Maximum line width of 120 characters |
-| **Language** | `Cpp` | Applies to C and C++ source/header files |
+| **Language** | `Cpp` | Applies to `.c`, `.h`, `.cpp`, and `.hpp` files |
 
 ---
 
-## 3. Configuration Summary
+## 3. Naming Conventions
 
-The root file contents:
+To ensure consistent symbol namespacing and prevent linkage conflicts:
 
-```yaml
----
-Language: Cpp
-BasedOnStyle: Google
-IndentWidth: 2
-ColumnLimit: 120
-...
-```
+- **Files**: Lowercase snake_case prefixed with `vw_` (e.g. `vw_protocol_codec.c`, `vw_queue.h`).
+- **Functions**: Lowercase snake_case prefixed with `vw_` (e.g. `vw_protocol_encode_frame()`, `vw_queue_push()`).
+- **Structs / Typedefs**: Lowercase snake_case ending with `_t` and prefixed with `vw_` (e.g. `vw_frame_header_t`, `vw_caption_segment_t`).
+- **Enums**: Uppercase `VW_ENUM_NAME` for enum types, and `VW_PREFIX_KEY` for enum values (e.g. `VW_MSG_HELLO`, `VW_MSG_AUDIO_PCM`).
+- **Macros / Constants**: Uppercase `VW_` (e.g. `VW_MAX_PAYLOAD_BYTES`, `VW_PROTOCOL_VERSION_MAJOR`).
+- **Header Guards**: `VW_<MODULE>_<FILENAME>_H_` (e.g. `#ifndef VW_PROTOCOL_TYPES_H_`, `#define VW_PROTOCOL_TYPES_H_`).
 
 ---
 
-## 4. Key Formatting Rules
+## 4. Header & Include Guidelines
 
-### Indentation & Spacing
+Include headers in the following strict order, separated by blank lines:
 
-- Use **2 spaces** per indentation level. Do not use hard tabs (`\t`).
-- Space around binary operators (`+`, `-`, `=`, `==`, etc.).
-- Space after control flow keywords (`if`, `for`, `while`, `switch`).
+1. Main corresponding header for the `.c` file (e.g. `"vw_protocol_codec.h"` in `vw_protocol_codec.c`).
+2. Standard C system library headers in angle brackets (e.g. `<stdio.h>`, `<stdint.h>`, `<stdbool.h>`).
+3. Third-party library headers in angle brackets or quotes (e.g. `<vlc_common.h>`, `"whisper.h"`).
+4. Internal project headers in quotes using relative or include-path qualified includes (e.g. `"vw_protocol.h"`).
 
-### Line Length & Wrapping
-
-- Limit lines to **120 characters**.
-- When splitting function calls or declarations across lines, align parameters cleanly.
-
-### Language Standards & Dialects
-
-- Authored code in this repository targets **C17** (or **C++17** where applicable).
-- Keep header includes organized and grouped logically:
-  1. Main module header
-  2. System headers (`<stdio.h>`, `<stdlib.h>`, etc.)
-  3. Third-party library headers (e.g. VLC SDK, whisper.h)
-  4. Project headers (`"..."`)
+Every header file MUST be self-contained and include `#pragma once` or header guards.
 
 ---
 
-## 5. Developer Tools & CI
+## 5. Architectural & Real-Time Safety Rules
 
-### Running Formatting Locally
+- **Zero Callback Block**: Never perform IPC I/O, Whisper inference, blocking lock waits, or memory allocation inside VLC audio callbacks.
+- **Bounded Overload Handling**: When audio queues fill up, drop old PCM chunks and increment `audio_dropped_us`. Never stall playback.
+- **Strict Privacy**: Logs must NEVER contain raw PCM samples, transcript text, or local file system paths.
+- **Media Timestamp Alignment**: Always compute and pass media PTS in 64-bit microseconds (`int64_t pts_us`), never wall-clock time.
 
-To check or format code locally:
+---
+
+## 6. Developer Tools & Formatting Checks
 
 ```bash
 # Format a single file in-place
 clang-format -i path/to/file.c
 
-# Format all C/C++ files in the project
-find vlc-plugin worker -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" \) -exec clang-format -i {} +
+# Format all C/C++ files across the project
+find plugin worker protocol tests -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" \) -exec clang-format -i {} +
 ```
-
-### Editor Integration
-
-Most modern IDEs and editors support `.clang-format` automatically:
-
-- **VS Code**: Enable `"editor.formatOnSave": true` and select the C/C++ extension formatter.
-- **CLion / Qt Creator**: Automatically respects `.clang-format` in the project root.

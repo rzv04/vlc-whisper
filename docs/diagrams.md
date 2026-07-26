@@ -10,7 +10,7 @@ flowchart LR
     V -->|Decoded PCM plus media PTS| C[Capture module: C]
     C --> Q[Bounded SPSC audio queue]
     Q --> S[IPC sender thread]
-    S <-->|Authenticated local named pipe\nversioned binary protocol| W[vlc-whisper-worker.exe: C host]
+    S <-->|Authenticated local named pipe \n versioned binary protocol| W[vlc-whisper-worker.exe: C host]
     W --> H[whisper.cpp C API\npinned dependency]
     H --> M[(Local tiny.en model)]
     W -->|Timed final caption segments| R[IPC receiver and presenter: C]
@@ -124,7 +124,7 @@ The queue is capped at 15 seconds of unprocessed audio in the initial design. Lo
 block-beta
   columns 6
   block:header:6
-    A[magic\n32 bits] B[major\n16 bits] C[type\n16 bits] D[payload length\n32 bits] E[sequence\n64 bits]
+    A[magic:32 bits] B[major:16 bits] C[type:16 bits] D[payload length:32 bits] E[sequence:64 bits]
   end
   F[Payload: schema depends on message type]:6
 ```

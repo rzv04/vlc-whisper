@@ -13,13 +13,14 @@ The codebase is an ensemble: a native C17 VLC integration module, an isolated lo
 | `plugin/` | VLC lifecycle, audio capture, bounded queues, worker supervision, caption presentation | Whisper inference, VAD decisions, persistent transcripts |
 | `worker/` | IPC session handling, VAD, audio windows, Whisper inference, final caption segments | VLC callbacks, subtitle internals |
 | `protocol/` | Versioned frames, encoding, decoding, validation, transport abstraction | VLC or Whisper APIs, application policy |
+| `models/` | Local GGML whisper model binary storage and model manifest validation | Model downloading over network at runtime |
 | `tests/` | Automated verification, fixtures, manual E2E procedure | Production implementation logic |
 
 All project-authored source is C17. The pinned `whisper.cpp` dependency may contain C/C++, but project-owned plugin code remains C.
 
 ## Repository Tree
 
-**The repository tree, file roles and naming are orientative and may wildly change; in that case, the AI agent/developer must update this document.**
+The repository tree is subject to change.
 
 ```text
 vlc-whisper/
@@ -52,14 +53,17 @@ vlc-whisper/
 │   │   ├── vw_segment_builder.h
 │   │   ├── vw_audio_buffer.h
 │   │   └── vw_worker_config.h
-│   └── src/
-│       ├── main.c
-│       ├── vw_worker.c
-│       ├── vw_whisper_engine.c
-│       ├── vw_vad.c
-│       ├── vw_segment_builder.c
-│       ├── vw_audio_buffer.c
-│       └── vw_worker_config.c
+│   ├── src/
+│   │   ├── main.c
+│   │   ├── vw_worker.c
+│   │   ├── vw_whisper_engine.c
+│   │   ├── vw_vad.c
+│   │   ├── vw_segment_builder.c
+│   │   ├── vw_audio_buffer.c
+│   │   └── vw_worker_config.c
+│   └── third_party/
+│       ├── vlc-3.0.23/
+│       └── whisper.cpp/
 ├── protocol/
 │   ├── CMakeLists.txt
 │   ├── include/
@@ -72,6 +76,9 @@ vlc-whisper/
 │       ├── vw_protocol_validate.c
 │       ├── vw_ipc_pipe_win32.c
 │       └── vw_ipc_socket_linux.c
+├── models/
+│   ├── ggml-tiny.en.bin              # Default MVP GGML model file (git-ignored binary)
+│   └── manifest.json                 # Offline manifest (SHA-256, model ID, RAM/disk limits)
 ├── tests/
 │   ├── CMakeLists.txt
 │   ├── unit/
@@ -90,30 +97,26 @@ vlc-whisper/
 │       └── expected_segments.json
 ├── samples/
 │   ├── CMakeLists.txt
-│   ├── snippets/
-│   │   └── whisper_pcm.c
-│   └── audio/
+│   ├── audio/
+│   └── snippets/
+│       └── whisper_pcm.c
 ├── cmake/
-│   ├── toolchains/mingw-w64-x86_64.cmake
-│   ├── FindWhisperCpp.cmake
-│   └── CompilerWarnings.cmake
-├── third_party/whisper.cpp/
-├── docs/source-layout.md
-├── ai/project-context.md
-├── ai/task-template.md
+│   └── toolchains/
+│       └── windows-x64-mingw.cmake
+├── docs/
+├── ai/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── AGENTS.md
 └── README.md
 ```
 
-## Samples Directory
+## Models Directory Layout
 
-The `samples/` directory contains standalone C code snippets and reference audio files for experimenting with pipeline stages.
-- Each `.c` file under `samples/snippets/` is automatically registered as a target named `sample_<filename>`.
-- All sample targets use `EXCLUDE_FROM_ALL TRUE`, meaning standard `cmake --build build` will skip them and build only the core project.
-- To compile a specific snippet, pass its target explicitly: `cmake --build build --target sample_<snippet_name>`.
+The `models/` directory serves as the local offline store for GGML model files and manifests:
 
+- **Local Model Files (`models/*.bin`)**: Large binary weights downloaded or copied out-of-band by the developer/user (e.g. `ggml-tiny.en.bin`). Binary model files are git-ignored.
+- **Model Manifest (`models/manifest.json`)**: Declares supported models, expected SHA-256 hashes, language scope (`en`), and disk/RAM footprint bounds per ADR-007.
 
 ## Plugin Files
 
@@ -183,9 +186,3 @@ Frames carry protocol version, message type, session ID, payload size, and paylo
 6. VAD, windows, and `tiny.en` inference.
 7. Final caption delivery and VLC presentation.
 8. Pause/resume and graceful discontinuity: clear captions, end caption session, preserve VLC playback.
-
-## Change Rules
-
-Before adding a source file, record its owner, one responsibility, public API/header where applicable, tests, callback/thread context, and whether it alters IPC, lifecycle, privacy, or platform assumptions.
-
-Changes to accepted decisions, protocol framing, privacy rules, or the plugin/worker boundary require an ADR update first. Do not silently add cloud communication, transcript persistence, authored C++, unbounded queues, or seeking support.

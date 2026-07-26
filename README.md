@@ -1,42 +1,63 @@
-# Building
+# VLC-Whisper
 
-## Worker Executable
+Offline, real-time speech captions inside VLC for local media.
 
-To configure and build the main `vlc-whisper-worker` binary:
+---
+
+## Building the Project
+
+The project uses CMake (minimum version 3.20) with Ninja and CMake Presets for cross-compiling Windows x64 binaries from Linux using MinGW GCC.
+
+### Option 1: Using CMake Presets (Recommended)
 
 ```bash
-cmake -S worker -B build \
+# Configure the Windows x64 Release build
+cmake --preset windows-x64-release
+
+# Build primary targets (protocol library, worker executable, native plugin, unit tests)
+cmake --build --preset windows-x64-release
+
+# Run unit and integration tests
+ctest --preset windows-x64-release
+```
+
+Available presets in `CMakePresets.json`:
+- `windows-x64-release` (Windows x64 Release via MinGW cross-compiler)
+- `windows-x64-debug` (Windows x64 Debug via MinGW cross-compiler)
+- `linux-x64-debug` (Host native Linux debug build for local testing)
+
+---
+
+### Option 2: Manual CMake Configuration
+
+```bash
+# Configure from repository root
+cmake -S . -B build/windows-x64 \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchains/windows-x64-mingw.cmake"
 
-# Builds the worker executable only (samples are excluded from default build)
-cmake --build build
+# Build all primary targets
+cmake --build build/windows-x64
 ```
-
-### Static Runtime Linking (MinGW)
-
-The MinGW cross-compilation setup automatically configures static linking for all target binaries (`-static`, `-static-libgcc`, `-static-libstdc++`, static `libgomp.a`, and static `libwinpthread.a`).
-
-This ensures that output binaries (`vlc-whisper-worker.exe`, `sample_whisper_pcm.exe`) are completely self-contained and run natively on Windows without requiring external MinGW runtime DLLs (`libgomp-1.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`, etc.).
 
 ---
 
 ## Building Sample Snippets
 
-Code snippets located in `samples/snippets/` are registered dynamically as standalone CMake targets (`sample_<snippet_name>`).
+Code snippets located in `samples/snippets/` are registered as standalone CMake targets (`sample_<snippet_name>`).
 
-By default, samples are marked with `EXCLUDE_FROM_ALL` and are **not** compiled during a standard `cmake --build build`. To compile a specific snippet:
+By default, samples are marked `EXCLUDE_FROM_ALL` and are **not** compiled during standard project builds. To compile sample binaries separately:
 
 ```bash
-# Build a specific snippet (e.g. samples/snippets/whisper_pcm.c)
-cmake --build build --target sample_whisper_pcm
+# Build a specific sample snippet (e.g. samples/snippets/whisper_pcm.c)
+cmake --build --preset windows-x64-release --target sample_whisper_pcm
 
 # Build all sample snippets at once
-cmake --build build --target samples
+cmake --build --preset windows-x64-release --target samples
 ```
 
-The compiled Windows `.exe` sample binaries are output to `build/samples/` (e.g. `build/samples/sample_whisper_pcm.exe`).
+The compiled Windows `.exe` sample binaries are output to `build/windows-x64-release/samples/` (e.g., `sample_whisper_pcm.exe`).
 
 ### Running Sample Snippets on Windows
 
@@ -47,4 +68,10 @@ Sample snippet executables accept the path to a GGML model file via command-line
 sample_whisper_pcm.exe C:\path\to\ggml-tiny.en.bin
 ```
 
-Standard output and error streams (`stdout`/`stderr`) are unbuffered in sample binaries, guaranteeing immediate output printing in Windows CMD or PowerShell.
+---
+
+## Static Runtime Linking (MinGW)
+
+The MinGW cross-compilation setup automatically configures static linking (`-static`, `-static-libgcc`, `-static-libstdc++`, static `libgomp.a`, and static `libwinpthread.a`).
+
+This ensures that output binaries (`vlc-whisper-worker.exe`, `vlc_whisper_plugin.dll`, `sample_whisper_pcm.exe`) are completely self-contained and run natively on Windows without requiring external MinGW runtime DLLs (`libgomp-1.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`, etc.).

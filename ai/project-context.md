@@ -24,10 +24,10 @@ Build offline, real-time speech captions inside VLC for local media. The first d
 /plugin               Native C VLC integration (capture, IPC client, presenter)
 /worker               C worker host; links pinned whisper.cpp
 /protocol             Frame/message definitions and golden fixtures
+/models               Local GGML model files and offline manifest.json
 /third_party          Pinned dependencies, preferably git submodules
 /cmake                Toolchains, presets, helper modules
 /tests                Unit, protocol, integration, e2e fixtures/harnesses
-/packaging/windows    Installer/layout/manifest scripts
 /scripts              Reproducible developer and CI commands
 ```
 

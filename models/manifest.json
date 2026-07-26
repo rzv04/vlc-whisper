@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "default_model_id": "tiny.en",
+  "models": [
+    {
+      "id": "tiny.en",
+      "filename": "ggml-tiny.en.bin",
+      "language": "en",
+      "sha256": "c78c86576ed16665798939f268b20902c347d21098f98d71be68b3d61e0b0486",
+      "disk_bytes": 77704715,
+      "ram_bytes_estimate": 286365440,
+      "multilingual": false
+    }
+  ]
+}

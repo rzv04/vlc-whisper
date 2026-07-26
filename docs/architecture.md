@@ -88,9 +88,9 @@ The worker emits only final segments in MVP. Partial/revision messages are reser
 ## Data model
 
 ```c
-typedef struct { uint8_t bytes[16]; } vlcw_session_id;
-typedef struct { int64_t start_pts_us, end_pts_us; uint64_t id; bool final; char *utf8; } vlcw_caption_segment;
-typedef struct { int64_t start_pts_us, duration_us; uint32_t sample_rate, channels; uint32_t bytes; } vlcw_audio_chunk;
+typedef struct { uint8_t bytes[16]; } vw_session_id;
+typedef struct { int64_t start_pts_us, end_pts_us; uint64_t id; bool final; char *utf8; } vw_caption_segment;
+typedef struct { int64_t start_pts_us, duration_us; uint32_t sample_rate, channels; uint32_t bytes; } vw_audio_chunk;
 ```
 
 Text is UTF-8, normalized only as required for display, with a conservative maximum of 1,024 bytes per segment. Segment IDs are worker-monotonic within a session. The plugin keeps only a small time-ordered caption cache, e.g. 60 seconds, and never persists audio or transcript in MVP.
@@ -101,11 +101,47 @@ There is no user auth because there is no user-facing service or remote API. The
 
 Treat model files and worker binaries as trusted package inputs: verify manifest hashes at install/startup and reject paths outside the application data directory. Avoid logging audio, raw transcript, full media path, or command lines containing the capability token.
 
-## Deployment
+## Deployment & Distribution Layout
 
-Package a versioned set: plugin DLL(s), worker EXE, required runtime DLLs, a pinned model manifest, licenses/notices, and installer/uninstaller. Models are optional separate local assets because sizes are material: whisper.cpp lists roughly 75 MiB disk/273 MB memory for tiny and 2.9 GiB disk/3.9 GB memory for large, which makes “choose any model” a real storage/RAM and performance commitment. [page:0]
+### 1. Component Binary Artifacts
 
-The supported matrix must name: Windows build, x64 architecture, VLC exact version/build hash, plugin ABI/build toolchain, worker version, whisper.cpp commit, model hash, and protocol version. The Linux port uses the same C core and protocol but gets its own packaging and test matrix.
+| Binary Artifact | Type | Target Installation Location | Purpose |
+|---|---|---|---|
+| `libvlc_whisper_plugin.dll` | Native C VLC Module | `VLC/plugins/misc/` | VLC audio capture, SPSC queue, IPC client, subtitle renderer |
+| `vlc-whisper-worker.exe` | Standalone C Host | `%LOCALAPPDATA%\VLC-Whisper\bin\` | Isolated Whisper inference worker & named pipe IPC server |
+| `manifest.json` | JSON Registry | `%LOCALAPPDATA%\VLC-Whisper\models\` | Offline model manifest and SHA-256 integrity rules |
+| `ggml-tiny.en.bin` | GGML Weights | `%LOCALAPPDATA%\VLC-Whisper\models\` | Default MVP GGML model weights (~75 MB) |
+| `vlc-whisper-settings.exe` *(Post-MVP)* | Standalone GUI | `%LOCALAPPDATA%\VLC-Whisper\bin\` | Configuration GUI (Model downloader, GPU backends, diagnostics) |
+
+### 2. MVP Distribution Package (Windows x64)
+
+Distributed as a single self-contained Windows Installer (`setup.exe` via NSIS / InnoSetup) or standalone zip archive:
+
+```text
+vlc-whisper-v1.0.0-win64/
+├── setup.exe                         # Automated Windows installer
+├── plugin/
+│   └── libvlc_whisper_plugin.dll     # Copied to VLC plugins folder
+├── bin/
+│   └── vlc-whisper-worker.exe        # Statically linked self-contained executable
+├── models/
+│   ├── manifest.json                 # Offline model manifest
+│   └── ggml-tiny.en.bin              # Bundled tiny.en GGML weights
+└── LICENSE & NOTICES.txt             # Licenses and third-party notices
+```
+
+**Installation Flow**:
+1. Installer detects the local VLC installation directory (e.g. `C:\Program Files\VideoLAN\VLC`).
+2. Copies `libvlc_whisper_plugin.dll` to `VLC/plugins/misc/`.
+3. Copies `vlc-whisper-worker.exe`, `manifest.json`, and `ggml-tiny.en.bin` to `%LOCALAPPDATA%\VLC-Whisper\`.
+4. When VLC starts playback, `libvlc_whisper_plugin.dll` loads, validates local paths, and launches `vlc-whisper-worker.exe` via an authenticated current-user named pipe.
+
+### 3. Post-MVP Distribution Expansion (GUI, Multi-Model, Linux)
+
+- **Optional Model Downloader GUI**: `vlc-whisper-settings.exe` allows users to download larger models (`base`, `small`, `medium`) or language packs on-demand into `%LOCALAPPDATA%\VLC-Whisper\models\`.
+- **GPU Accelerator Variants**: Optional backend DLLs (`ggml-cuda.dll`, `ggml-vulkan.dll`) bundled with worker package for GPU acceleration.
+- **Linux Distribution**: Packaged as `.deb`, Flatpak extension, or tarball placing `libvlc_whisper_plugin.so` in `~/.local/lib/vlc/plugins/` and `vlc-whisper-worker` in `~/.local/bin/`.
+
 
 ## Observability
 
