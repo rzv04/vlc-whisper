@@ -88,9 +88,22 @@ The worker emits only final segments in MVP. Partial/revision messages are reser
 ## Data model
 
 ```c
-typedef struct { uint8_t bytes[16]; } vw_session_id;
-typedef struct { int64_t start_pts_us, end_pts_us; uint64_t id; bool final; char *utf8; } vw_caption_segment;
-typedef struct { int64_t start_pts_us, duration_us; uint32_t sample_rate, channels; uint32_t bytes; } vw_audio_chunk;
+typedef struct { 
+	uint8_t bytes[16];
+} vw_session_id;
+
+typedef struct { 
+	int64_t start_pts_us, end_pts_us; 
+	uint64_t id; 
+	bool final; 
+	char *utf8; 
+} vw_caption_segment;
+
+typedef struct { 
+	int64_t start_pts_us, duration_us; 
+	uint32_t sample_rate, channels; 
+	uint32_t bytes; 
+} vw_audio_chunk;
 ```
 
 Text is UTF-8, normalized only as required for display, with a conservative maximum of 1,024 bytes per segment. Segment IDs are worker-monotonic within a session. The plugin keeps only a small time-ordered caption cache, e.g. 60 seconds, and never persists audio or transcript in MVP.
