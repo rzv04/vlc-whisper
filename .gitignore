@@ -174,4 +174,8 @@ worker/third_party/vlc*/
 # Obsidian Vaults
 .obsidian/
 
+.copilot/
+
 .trash/
+
+.cache/

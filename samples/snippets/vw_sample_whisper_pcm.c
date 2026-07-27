@@ -40,7 +40,7 @@
 #define VW_DEFAULT_WAV_PATH "samples/audio/output.wav"
 
 // Whisper model input invariants: 16kHz sample rate, 1 channel (mono)
-#define VW_EXPECTED_SAMPLE_RATE 16000
+#define VW_EXPECTED_SAMPLE_RATE WHISPER_SAMPLE_RATE
 #define VW_EXPECTED_NUM_CHANNELS 1
 
 // Reads a WAV file (16-bit signed PCM or 32-bit float PCM), downmixes multi-channel audio to mono,

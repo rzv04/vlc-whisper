@@ -33,7 +33,6 @@ vlc-whisper/
 │   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC OSD/subtitle cues
 │   │   ├── vw_worker_client.h                 # Authenticated IPC client, worker process supervisor
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
-│   │   ├── vw_log.h                           # Redacted, privacy-safe diagnostic logging utilities
 │   │   └── vw_platform.h                      # OS abstraction interface for paths, security tokens, and timing
 │   └── src/
 │       ├── vlc_whisper_module.c               # Entry point: VLC module descriptor, open/close hooks
@@ -42,7 +41,6 @@ vlc-whisper/
 │       ├── vw_caption_presenter.c             # Schedules and renders timed text captions in VLC
 │       ├── vw_worker_client_win32.c           # Windows Named Pipe IPC client & process launcher
 │       ├── vw_queue.c                         # Non-blocking lock-free SPSC queue implementation
-│       ├── vw_log.c                           # Redacted diagnostic logging implementation
 │       └── vw_platform_win32.c                # Windows API paths, security tokens, and process management
 ├── worker/                                    # Standalone local transcription worker application
 │   ├── CMakeLists.txt                         # Builds vlc-whisper-worker executable and links whisper.cpp
@@ -64,18 +62,20 @@ vlc-whisper/
 │   └── third_party/                           # Pinned external C/C++ dependencies
 │       ├── vlc-3.0.23/                        # Pinned VLC header SDK headers
 │       └── whisper.cpp/                       # Pinned whisper.cpp C/C++ inference engine
-├── protocol/                                  # Shared C17 IPC protocol & framing library
+├── protocol/                                  # Shared C17 IPC protocol, logging & framing library
 │   ├── CMakeLists.txt                         # Builds vw_protocol library
 │   ├── include/
 │   │   ├── vw_protocol.h                      # High-level protocol encoder/decoder API
 │   │   ├── vw_protocol_types.h                # Binary message headers, magic bytes, and struct definitions
 │   │   ├── vw_protocol_codec.h                # Serialization/deserialization helper signatures
-│   │   └── vw_ipc_transport.h                 # Platform transport abstraction (Named Pipe / Unix Domain Socket)
+│   │   ├── vw_ipc_transport.h                 # Platform transport abstraction (Named Pipe / Unix Domain Socket)
+│   │   └── vw_log.h                           # Privacy-safe variadic diagnostic logging API
 │   └── src/
 │       ├── vw_protocol_codec.c                # Binary frame pack & unpack implementations
 │       ├── vw_protocol_validate.c             # Frame bounds checking, magic verification & UTF-8 validation
 │       ├── vw_ipc_pipe_win32.c                # Windows Named Pipe server/client transport implementation
-│       └── vw_ipc_socket_linux.c              # Linux Unix Domain Socket transport implementation
+│       ├── vw_ipc_socket_linux.c              # Linux Unix Domain Socket transport implementation
+│       └── vw_log.c                           # Privacy-safe variadic logger & customizable sink implementation
 ├── models/                                    # Offline local GGML model storage & manifests
 │   ├── ggml-tiny.en.bin                       # Default GGML tiny.en weights file (git-ignored binary)
 │   └── manifest.json                          # Offline manifest (SHA-256 integrity, RAM bounds)

@@ -5,7 +5,6 @@ add_library(vlc_whisper_plugin SHARED
     src/vw_caption_presenter.c
     src/vw_worker_client_win32.c
     src/vw_queue.c
-    src/vw_log.c
     src/vw_platform_win32.c
 )
 

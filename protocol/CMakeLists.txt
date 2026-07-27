@@ -3,6 +3,7 @@ add_library(vw_protocol STATIC
     src/vw_protocol_validate.c
     src/vw_ipc_pipe_win32.c
     src/vw_ipc_socket_linux.c
+    src/vw_log.c
 )
 
 target_include_directories(vw_protocol PUBLIC
