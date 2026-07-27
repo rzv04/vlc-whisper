@@ -9,6 +9,17 @@
 #define VW_PROTOCOL_VERSION_MAJOR 1U
 #define VW_PROTOCOL_VERSION_MINOR 0U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
+#define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
+#define VW_MAX_MODEL_ID_BYTES 64U        // Model identifier string limit
+#define VW_AUTH_TOKEN_BYTES 32U          // Local IPC 32-byte secret authentication token
+
+// Capability flags (bitfield)
+#define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)
+#define VW_CAPABILITY_PARTIAL_SEGMENTS (1U << 1)
+#define VW_CAPABILITY_SEEK_RESET (1U << 2)
+
+// Source kind enum
+typedef enum vw_source_kind { VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
@@ -32,24 +43,80 @@ typedef enum vw_message_type {
   VW_MSG_CAPTION_SEGMENT = 8,
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
-  VW_MSG_SHUTDOWN = 11
+  VW_MSG_SHUTDOWN = 11,
+  VW_MSG_STARTED = 12
 } vw_message_type_t;
 
 typedef struct vw_session_id {
   uint8_t bytes[16];
 } vw_session_id_t;
 
-// Segment structure containing start/end timestamps, text, and flags
-// A segment contains a single timestamped utterance.
-typedef struct vw_caption_segment {
+// Payload Structs
+
+typedef struct vw_msg_hello {
+  uint16_t min_major;
+  uint16_t max_major;
+  uint8_t token[VW_AUTH_TOKEN_BYTES];
+  uint16_t client_version_length;
+  char* client_version;
+} vw_msg_hello_t;
+
+typedef struct vw_msg_hello_ack {
+  uint16_t selected_major;
+  uint16_t selected_minor;
+  uint32_t capability_flags;
+  uint16_t worker_version_length;
+  char* worker_version;
+} vw_msg_hello_ack_t;
+
+typedef struct vw_msg_start {
+  vw_session_id_t session_id;
+  int64_t timeline_origin_pts_us;
+  uint32_t sample_rate;
+  uint16_t channels;
+  uint16_t sample_format;
+  char model_id[VW_MAX_MODEL_ID_BYTES];
+  char language[16];
+  uint16_t source_kind;
+} vw_msg_start_t;
+
+typedef struct vw_msg_audio {  // plugin to worker
+  vw_session_id_t session_id;
+  int64_t start_pts_us;
+  int64_t duration_us;
+  uint32_t pcm_bytes;
+  const uint8_t* pcm_data;
+} vw_msg_audio_t;
+
+typedef struct vw_msg_control {
+  vw_session_id_t session_id;
+  uint16_t reason;
+} vw_msg_control_t;
+
+typedef struct vw_msg_status {
+  vw_session_id_t session_id;
+  uint32_t state;
+  int64_t queued_audio_us;
+  int64_t inference_us;
+  int64_t dropped_audio_us;
+} vw_msg_status_t;
+
+typedef struct vw_msg_error {
+  vw_session_id_t session_id;
+  uint32_t error_code;
+  uint8_t recoverable;
+  char message[VW_MAX_ERROR_MSG_BYTES];
+} vw_msg_error_t;
+
+// Segment structure containing start/end timestamps and text
+typedef struct vw_caption_segment {  // worker to plugin
+  vw_session_id_t session_id;
   uint64_t segment_id;
   int64_t start_pts_us;
   int64_t end_pts_us;
   bool is_final;
   char* text_utf8;
   uint16_t text_bytes;
-  uint8_t flags;  // bit0: final, bit1: replace
-
 } vw_caption_segment_t;
 
 #endif  // VW_PROTOCOL_TYPES_H_

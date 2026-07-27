@@ -53,7 +53,7 @@ Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u
 
 ### SEGMENT
 
-Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `u8 flags` (`bit0=final`, `bit1=replace` reserved), `u16 text_bytes`, UTF-8 text. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
+Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `bool is_final`, `u16 text_bytes`, UTF-8 text. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
 
 Example semantic value, shown as JSON only for readability:
 

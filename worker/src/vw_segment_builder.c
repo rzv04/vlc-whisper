@@ -59,7 +59,7 @@ static void vw_segment_builder_write_slot(struct vw_segment_builder_t* builder, 
   builder->segment_queue[slot].segment_id = builder->next_segment_id++;
   builder->segment_queue[slot].start_pts_us = start_pts_us;
   builder->segment_queue[slot].end_pts_us = end_pts_us;
-  builder->segment_queue[slot].is_final = true;
+  builder->segment_queue[slot].is_final = true;  // TODO: Determine if this segment is final based on context
   builder->segment_queue[slot].text_utf8 = strdup(text);
   builder->segment_queue[slot].text_bytes = (uint16_t)len;
 

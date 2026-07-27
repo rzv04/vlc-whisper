@@ -1,6 +1,6 @@
 #include "vw_protocol_codec.h"
 
-bool vw_protocol_validate_header(const vw_frame_header_t *header) {
+bool vw_protocol_validate_header(const vw_frame_header_t* header) {
   if (!header) {
     return false;
   }

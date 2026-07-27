@@ -163,7 +163,8 @@ typedef enum vw_message_type {
     VW_MSG_CAPTION_SEGMENT = 8,
     VW_MSG_STATUS = 9,
     VW_MSG_ERROR = 10,
-    VW_MSG_SHUTDOWN = 11
+    VW_MSG_SHUTDOWN = 11,
+    VW_MSG_STARTED = 12
 } vw_message_type_t;
 ```
 

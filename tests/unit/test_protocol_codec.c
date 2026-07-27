@@ -1,14 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
+
 #include "vw_protocol.h"
 
-#define EXPECT(cond)                                                           \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      fprintf(stderr, "Test failed: %s at %s:%d\n", #cond, __FILE__,           \
-              __LINE__);                                                       \
-      exit(1);                                                                 \
-    }                                                                          \
+#define EXPECT(cond)                                                            \
+  do {                                                                          \
+    if (!(cond)) {                                                              \
+      fprintf(stderr, "Test failed: %s at %s:%d\n", #cond, __FILE__, __LINE__); \
+      exit(1);                                                                  \
+    }                                                                           \
   } while (0)
 
 int main(void) {

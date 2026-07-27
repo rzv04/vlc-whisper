@@ -81,7 +81,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 | `SEGMENT` | worker -> plugin | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence |
 | `STATUS` | worker -> plugin | state, queue depth, inference latency, dropped audio |
 | `ERROR` | both | stable code, recoverability, safe diagnostic text |
-| `PING` / `PONG` | both | nonce |
+| `SHUTDOWN` | both | none |
 
 The worker emits only final segments in MVP. Partial/revision messages are reserved for protocol major 1 now so seek/live support does not force a new transport; the presenter may ignore them safely.
 
