@@ -14,7 +14,7 @@
 ## Milestone 1: Worker proof (In Progress)
 
 - [x] 5. Implement C worker host that loads `tiny.en` through whisper.cpp's C API and transcribes a fixed 16 kHz mono WAV fixture (scaffolded in `vw_whisper_engine.c`).
-- [ ] 6. Implement VAD/window/hop(process frequency) configuration, final-segment normalization/deduplication, and benchmark output (`vw_vad.c`, `vw_segment_builder.c`).
+- [ ] 6. Implement VAD/window/hop(process frequency) configuration and final-segment normalization/deduplication (`vw_vad.c`, `vw_segment_builder.c`).
 - [ ] 7. Implement binary frame codec (`vw_protocol_codec.c`), named-pipe server (`vw_ipc_pipe_win32.c`), `HELLO`/`token` check, `START`/`AUDIO`/`STOP`, and protocol contract tests (`test_protocol_codec.c`, `test_protocol_validate.c`).
 - [ ] 8. Add bounds checks, malformed-frame fuzzing, worker crash/error behavior, and redacted structured diagnostics (`vw_log.c`).
 
@@ -39,7 +39,8 @@
 - [ ] 14. Receive/validate final segments; schedule/clear them through the proven VLC presenter.
 - [ ] 15. Implement lifecycle: start, play, pause, resume, stop/end, worker missing/crash, and unsupported source rejection.
 - [ ] 16. Implement discontinuity detection; seeking/rate/title changes must clear captions and fail only the caption session gracefully.
-- [ ] 17. Package a developer install, write a local-video quickstart, and run end-to-end Windows acceptance fixtures.
+- [ ] 17. Implement benchmark suite and performance output metrics (inference latency, queue high-water mark, audio processing speed).
+- [ ] 18. Package a developer install, write a local-video quickstart, and run end-to-end Windows acceptance fixtures.
 
 **Exit Status:** **PLANNED** — Local English files show captions during normal play/pause; VLC remains stable if captions fail.
 
@@ -47,9 +48,9 @@
 
 ## Milestone 4: Release discipline
 
-- [ ] 18. Add GitHub/GitLab CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact signing/hashes, SBOM/third-party notices, and release manifests.
-- [ ] 19. Add Windows VM smoke tests for the pinned VLC installation and manual performance/compatibility matrix.
-- [ ] 20. Publish troubleshooting, supported hardware baseline, privacy statement, uninstall/rollback, known limitations, and bug report template.
+- [ ] 19. Add GitHub/GitLab CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact signing/hashes, SBOM/third-party notices, and release manifests.
+- [ ] 20. Add Windows VM smoke tests for the pinned VLC installation and manual performance/compatibility matrix.
+- [ ] 21. Publish troubleshooting, supported hardware baseline, privacy statement, uninstall/rollback, known limitations, and bug report template.
 
 **Exit Status:** **PLANNED** — Reproducible signed/hashed development release with documented limits.
 
@@ -57,8 +58,8 @@
 
 ## Post-MVP
 
-- [ ] 21. Add `RESET`/timeline epoch and segment-cache invalidation; implement local-file seeking and regression suite.
-- [ ] 22. Add source profiles for VOD and live streams separately, then test IPTV protocols/providers only as legal, accessible fixtures permit.
-- [ ] 23. Add standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 with validated installed-model list, language choice/auto-detect policy, CPU threads, diagnostics consent, and restart semantics.
-- [ ] 24. Add multilingual models and performance profiles; make `base`, `small`, `medium`, and `large` availability capability- and benchmark-based, not unconditional.
-- [ ] 25. Port platform layer to Linux: Unix socket, process supervision, installation paths, and Linux VLC test matrix.
+- [ ] 22. Add `RESET`/timeline epoch and segment-cache invalidation; implement local-file seeking and regression suite.
+- [ ] 23. Add source profiles for VOD and live streams separately, then test IPTV protocols/providers only as legal, accessible fixtures permit.
+- [ ] 24. Add standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 with validated installed-model list, language choice/auto-detect policy, CPU threads, diagnostics consent, and restart semantics.
+- [ ] 25. Add multilingual models and performance profiles; make `base`, `small`, `medium`, and `large` availability capability- and benchmark-based, not unconditional.
+- [ ] 26. Port platform layer to Linux: Unix socket, process supervision, installation paths, and Linux VLC test matrix.

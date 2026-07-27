@@ -11,5 +11,5 @@ This repository enforces strict C17 standards, architectural invariants, and pri
 5. **Offline & Privacy Invariants**: Authenticated local IPC only (named pipe / Unix domain socket with 32-byte secret token). Zero network requests, cloud APIs, telemetry, or transcript/PCM disk logging.
 6. **Timeline Synchronization**: Use signed 64-bit microsecond media timestamps (`int64_t pts_us`). Never use wall-clock time for caption timing.
 7. **Discontinuity Handling**: Seeking, rate changes, or media swaps clear captions and end caption session gracefully without affecting VLC media playback.
-8. **Mandatory Documentation Inspection**: Before planning or implementing any feature, refactor, or sample, ALWAYS inspect relevant project documentation in `docs/` (`architecture.md`, `product.md`, `source-layout.md`, `api-contracts.md`) to align with project design and contracts.
-
+8. **Mandatory Documentation Inspection**: Before planning or implementing any feature, refactor, or sample, ALWAYS inspect relevant project documentation in `docs/` (`architecture.md`, `product.md`, `source-layout.md`, `api-contracts.md`, `whisper-api.md`) to align with project design and contracts.
+9. **Task Planning Template Enforcement**: When creating implementation plans, task breakdowns, or planning artifacts (`/plan`), AI agents MUST follow the task structure in `ai/task-template.md`.
