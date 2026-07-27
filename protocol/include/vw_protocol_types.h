@@ -23,14 +23,6 @@ typedef enum vw_source_kind { VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
-typedef struct vw_frame_header {
-  uint32_t magic;           // VW_PROTOCOL_MAGIC
-  uint16_t major;           // VW_PROTOCOL_VERSION_MAJOR
-  uint16_t type;            // vw_message_type_t
-  uint32_t payload_length;  // payload byte count
-  uint64_t sequence;        // monotonic sequence counter per session
-} vw_frame_header_t;
-#pragma pack(pop)
 
 typedef enum vw_message_type {
   VW_MSG_HELLO = 1,
@@ -46,6 +38,15 @@ typedef enum vw_message_type {
   VW_MSG_SHUTDOWN = 11,
   VW_MSG_STARTED = 12
 } vw_message_type_t;
+
+typedef struct vw_frame_header {
+  uint32_t magic;           // VW_PROTOCOL_MAGIC
+  uint16_t major;           // VW_PROTOCOL_VERSION_MAJOR
+  vw_message_type_t type;   // vw_message_type_t
+  uint32_t payload_length;  // payload byte count
+  uint64_t sequence;        // monotonic sequence counter per session
+} vw_frame_header_t;
+#pragma pack(pop)
 
 typedef struct vw_session_id {
   uint8_t bytes[16];

@@ -8,12 +8,12 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 
 ## Terminology & Abbreviations
 
-| Term / Abbreviation | Definition |
-|---|---|
-| **PTS** | **Presentation TimeStamp** — The exact position on the media playback timeline (not wall-clock time) at which audio, video, or captions must be presented. |
-| **`pts_us`** | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$). |
-| **`duration_us`** | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds. |
-| **IPC** | **Inter-Process Communication** — Local authenticated binary message-mode transport (named pipe on Windows, Unix domain socket on Linux). |
+| Term / Abbreviation | Definition                                                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PTS**             | **Presentation TimeStamp** — The exact position on the media playback timeline (not wall-clock time) at which audio, video, or captions must be presented. |
+| **`pts_us`**        | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$).                      |
+| **`duration_us`**   | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds.                                                    |
+| **IPC**             | **Inter-Process Communication** — Local authenticated binary message-mode transport (named pipe on Windows, Unix domain socket on Linux).                  |
 
 ## Envelope
 
@@ -21,7 +21,7 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 struct vlcw_frame_header {
   uint32_t magic;          // 0x564C4357, 'VLCW'
   uint16_t major;          // 1
-  uint16_t type;
+  vw_message_type_t type;
   uint32_t payload_length; // <= 1,048,576
   uint64_t sequence;       // starts at 1, rises per sender/session
 };
@@ -58,7 +58,14 @@ Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i6
 Example semantic value, shown as JSON only for readability:
 
 ```json
-{"session_id":"d4...","segment_id":42,"start_pts_us":12000000,"end_pts_us":14100000,"final":true,"text":"Example caption."}
+{
+  "session_id": "d4...",
+  "segment_id": 42,
+  "start_pts_us": 12000000,
+  "end_pts_us": 14100000,
+  "final": true,
+  "text": "Example caption."
+}
 ```
 
 ### Control and status
@@ -67,17 +74,17 @@ Example semantic value, shown as JSON only for readability:
 
 ## Error catalog
 
-| Code | Meaning | Plugin action |
-|---|---|---|
-| `E_PROTOCOL_VERSION` | No common major protocol | Disable captions for item; show compatibility diagnostic |
-| `E_AUTH` | Pipe token/ACL validation failed | Close pipe; never fall back to network |
-| `E_MODEL_MISSING` | Selected local model absent | Disable captions; explain local model requirement |
-| `E_MODEL_INVALID` | Hash/load failed | Disable captions; retain playback |
-| `E_AUDIO_FORMAT` | Canonical PCM cannot be produced | Disable captions |
-| `E_BACKPRESSURE` | Audio was discarded | Continue; rate-limit diagnostic |
-| `E_DISCONTINUITY` | Seek/rate/source timeline changed | Clear captions and end MVP session gracefully |
-| `E_WORKER_CRASH` | Worker exit/pipe close | Clear captions; one bounded restart only before first audio, otherwise disable |
-| `E_INTERNAL` | Unclassified worker failure | Disable captions; offer redacted diagnostics |
+| Code                 | Meaning                           | Plugin action                                                                  |
+| -------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| `E_PROTOCOL_VERSION` | No common major protocol          | Disable captions for item; show compatibility diagnostic                       |
+| `E_AUTH`             | Pipe token/ACL validation failed  | Close pipe; never fall back to network                                         |
+| `E_MODEL_MISSING`    | Selected local model absent       | Disable captions; explain local model requirement                              |
+| `E_MODEL_INVALID`    | Hash/load failed                  | Disable captions; retain playback                                              |
+| `E_AUDIO_FORMAT`     | Canonical PCM cannot be produced  | Disable captions                                                               |
+| `E_BACKPRESSURE`     | Audio was discarded               | Continue; rate-limit diagnostic                                                |
+| `E_DISCONTINUITY`    | Seek/rate/source timeline changed | Clear captions and end MVP session gracefully                                  |
+| `E_WORKER_CRASH`     | Worker exit/pipe close            | Clear captions; one bounded restart only before first audio, otherwise disable |
+| `E_INTERNAL`         | Unclassified worker failure       | Disable captions; offer redacted diagnostics                                   |
 
 ## Compatibility rules
 
