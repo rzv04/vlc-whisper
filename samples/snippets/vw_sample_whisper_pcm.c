@@ -24,7 +24,7 @@
 // 40      4     number_of_audio_bytes
 // 44      ...   PCM samples: int16 little-endian
 
-// Usage: ./sample_vw_sample_whisper_pcm <path_to_model.gguf> <path_to_wav_audio>
+// Usage: ./sample_vw_sample_whisper_pcm <path_to_ggml_model> <path_to_wav_audio>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,6 +33,8 @@
 #include <string.h>
 #include <whisper.h>
 
+#include "vw_audio_buffer.h"
+
 // Default file paths for model weights and test audio fixtures
 #define VW_DEFAULT_MODEL_PATH "models/ggml-tiny.en.bin"
 #define VW_DEFAULT_WAV_PATH "samples/audio/output.wav"
@@ -40,39 +42,6 @@
 // Whisper model input invariants: 16kHz sample rate, 1 channel (mono)
 #define VW_EXPECTED_SAMPLE_RATE 16000
 #define VW_EXPECTED_NUM_CHANNELS 1
-
-// Structure holding normalized 32-bit floating point PCM audio samples
-typedef struct {
-  float* samples;        // Heap-allocated array of normalized float [-1.0f, +1.0f] samples
-  size_t count;          // Total number of audio frames/samples
-  uint32_t sample_rate;  // Audio sample rate in Hz (normalized to 16000)
-  uint16_t channels;     // Audio channel count (normalized to 1 mono)
-} vw_audio_pcm32_t;
-
-// Standard RIFF file header (12 bytes)
-typedef struct {
-  char chunk_id[4];     // Must contain "RIFF" ASCII tag
-  uint32_t chunk_size;  // Total file size in bytes minus 8
-  char format[4];       // Must contain "WAVE" ASCII tag
-} vw_riff_header_t;
-
-// Sub-chunk 'fmt ' header defining audio stream dimensions
-typedef struct {
-  char subchunk_id[4];       // Must contain "fmt " ASCII tag
-  uint32_t subchunk_size;    // Size of format chunk payload (16 bytes for standard PCM)
-  uint16_t audio_format;     // Audio format tag: 1 = PCM integer, 3 = IEEE float
-  uint16_t num_channels;     // Channel count (1 = mono, 2 = stereo)
-  uint32_t sample_rate;      // Audio sampling frequency in Hz (e.g. 16000, 44100, 48000)
-  uint32_t byte_rate;        // Byte rate = sample_rate * num_channels * bits_per_sample / 8
-  uint16_t block_align;      // Block alignment = num_channels * bits_per_sample / 8
-  uint16_t bits_per_sample;  // Bit depth per sample (16 for int16, 32 for float)
-} vw_fmt_chunk_t;
-
-// Generic sub-chunk header for stepping past metadata/list chunks
-typedef struct {
-  char subchunk_id[4];     // Sub-chunk identifier tag (e.g. "data", "LIST", "JUNK")
-  uint32_t subchunk_size;  // Size of sub-chunk payload in bytes
-} vw_chunk_header_t;
 
 // Reads a WAV file (16-bit signed PCM or 32-bit float PCM), downmixes multi-channel audio to mono,
 // and resamples to 16000 Hz if necessary using linear interpolation.

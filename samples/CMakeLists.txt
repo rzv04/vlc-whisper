@@ -16,11 +16,20 @@ foreach(SNIPPET_SRC ${SNIPPET_SOURCES})
     # Add header include directories for whisper.cpp and VLC
 
     target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../protocol
+        ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../worker/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../plugin/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../worker/third_party/whisper.cpp/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../worker/third_party/vlc-3.0.23/include
     )
 
-    # Link against whisper library target
+    # Link against protocol & whisper library targets
+    if(TARGET vw_protocol)
+        target_link_libraries(${TARGET_NAME} PRIVATE vw_protocol)
+    endif()
+
     if(TARGET whisper)
         target_link_libraries(${TARGET_NAME} PRIVATE whisper)
         if(OpenMP_CXX_FOUND)
