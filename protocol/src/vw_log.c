@@ -9,24 +9,29 @@
 #include <string.h>
 
 static vw_log_sink_fn g_log_sink = NULL;
-static void *g_log_user_data = NULL;
+static void* g_log_user_data = NULL;
 
-void vw_log_set_sink(vw_log_sink_fn sink, void *user_data) {
+void vw_log_set_sink(vw_log_sink_fn sink, void* user_data) {
   g_log_sink = sink;
   g_log_user_data = user_data;
 }
 
-static const char *vw_log_level_to_string(vw_log_level_t level) {
+static const char* vw_log_level_to_string(vw_log_level_t level) {
   switch (level) {
-    case VW_LOG_LEVEL_DEBUG: return "DEBUG";
-    case VW_LOG_LEVEL_INFO:  return "INFO";
-    case VW_LOG_LEVEL_WARN:  return "WARN";
-    case VW_LOG_LEVEL_ERROR: return "ERROR";
-    default:                 return "UNKNOWN";
+    case VW_LOG_LEVEL_DEBUG:
+      return "DEBUG";
+    case VW_LOG_LEVEL_INFO:
+      return "INFO";
+    case VW_LOG_LEVEL_WARN:
+      return "WARN";
+    case VW_LOG_LEVEL_ERROR:
+      return "ERROR";
+    default:
+      return "UNKNOWN";
   }
 }
 
-void vw_log_event(vw_log_level_t level, const char *event_id, const char *fmt, ...) {
+void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, ...) {
   if (event_id == NULL) {
     event_id = "UNKNOWN_EVENT";
   }

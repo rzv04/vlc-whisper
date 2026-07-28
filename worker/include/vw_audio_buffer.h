@@ -61,7 +61,9 @@ typedef struct __attribute__((packed)) {
   uint32_t subchunk_size;  // Size of sub-chunk payload in bytes
 } vw_chunk_header_t;
 
-typedef struct vw_audio_buffer vw_audio_buffer_t;
+typedef struct vw_audio_buffer {
+  size_t max_samples;
+} vw_audio_buffer_t;
 
 vw_audio_buffer_t* vw_audio_buffer_create(size_t max_samples);
 void vw_audio_buffer_free(vw_audio_buffer_t* buf);

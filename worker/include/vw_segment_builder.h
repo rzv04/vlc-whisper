@@ -11,19 +11,19 @@
 #define VW_HOP_DURATION_US 2000000              // 2s hop length for segmenting audio
 #define VW_WINDOW_DURATION_US 8000000           // 8s max window length
 
-struct vw_segment_builder_t {
+typedef struct vw_segment_builder {
   uint64_t next_segment_id;
-  struct vw_caption_segment* segment_queue;  // circular buffer of caption segments
+  vw_caption_segment_t* segment_queue;  // circular buffer of caption segments
   size_t head;                               // Next write position (0..19)
   size_t count;                              // Active item count (0..20)
-};
+} vw_segment_builder_t;
 
-struct vw_segment_builder_t* vw_segment_builder_create(void);
+vw_segment_builder_t* vw_segment_builder_create(void);
 
-void vw_segment_builder_free(struct vw_segment_builder_t* builder);
+void vw_segment_builder_free(vw_segment_builder_t* builder);
 
 // Pushes a new caption segment hypothesis into the segment builder, ensuring no overlapping timestamps and valid text
 // length. Returns true if the hypothesis was successfully added, false otherwise.
-bool vw_segment_builder_push_hypothesis(struct vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
+bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
                                         int64_t end_pts_us);
 #endif  // VW_SEGMENT_BUILDER_H_

@@ -9,7 +9,7 @@
 #include "vw_segment_builder.h"
 
 static void test_create_and_free(void) {
-  struct vw_segment_builder_t *builder = vw_segment_builder_create();
+  vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(builder->next_segment_id == 1);
   assert(builder->count == 0);
@@ -18,7 +18,7 @@ static void test_create_and_free(void) {
 }
 
 static void test_invalid_hypothesis_rejection(void) {
-  struct vw_segment_builder_t *builder = vw_segment_builder_create();
+  vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
   // NULL builder or NULL text
@@ -43,7 +43,7 @@ static void test_invalid_hypothesis_rejection(void) {
 }
 
 static void test_push_and_deduplication(void) {
-  struct vw_segment_builder_t *builder = vw_segment_builder_create();
+  vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
   // Push first valid segment
@@ -65,7 +65,7 @@ static void test_push_and_deduplication(void) {
 }
 
 static void test_circular_buffer_wrap(void) {
-  struct vw_segment_builder_t *builder = vw_segment_builder_create();
+  vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
   // Push 25 distinct segments to force ring buffer wrap (capacity 20)

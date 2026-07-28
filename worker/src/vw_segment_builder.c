@@ -5,14 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct vw_segment_builder_t* vw_segment_builder_create(void) {
-  struct vw_segment_builder_t* b = (struct vw_segment_builder_t*)calloc(1, sizeof(struct vw_segment_builder_t));
+vw_segment_builder_t* vw_segment_builder_create(void) {
+  vw_segment_builder_t* b = (vw_segment_builder_t*)calloc(1, sizeof(vw_segment_builder_t));
   if (b == NULL) {
     return NULL;
   }
   b->next_segment_id = 1;
   b->segment_queue =
-      (struct vw_caption_segment*)calloc(VW_SEGMENT_BUILDER_MAX_BUFSZ, sizeof(struct vw_caption_segment));
+      (vw_caption_segment_t*)calloc(VW_SEGMENT_BUILDER_MAX_BUFSZ, sizeof(vw_caption_segment_t));
   if (b->segment_queue == NULL) {
     free(b);
     return NULL;
@@ -20,7 +20,7 @@ struct vw_segment_builder_t* vw_segment_builder_create(void) {
   return b;
 }
 
-void vw_segment_builder_free(struct vw_segment_builder_t* builder) {
+void vw_segment_builder_free(vw_segment_builder_t* builder) {
   if (builder != NULL) {
     if (builder->segment_queue != NULL) {
       for (size_t i = 0; i < VW_SEGMENT_BUILDER_MAX_BUFSZ; i++) {
@@ -33,7 +33,7 @@ void vw_segment_builder_free(struct vw_segment_builder_t* builder) {
 }
 
 // Returns pointer to the last pushed segment in the circular buffer, or NULL if empty
-static const vw_caption_segment_t* vw_segment_builder_get_last_segment(const struct vw_segment_builder_t* builder) {
+static const vw_caption_segment_t* vw_segment_builder_get_last_segment(const vw_segment_builder_t* builder) {
   if (builder == NULL || builder->count == 0) {
     return NULL;
   }
@@ -44,7 +44,7 @@ static const vw_caption_segment_t* vw_segment_builder_get_last_segment(const str
 // Writes a segment entry into the current ring buffer slot and advances head & count
 // The text is not validated for length or content; caller must ensure it is valid.
 // Also, the text is strdup'd, and the caller is responsible for freeing the text in the segment when done.
-static void vw_segment_builder_write_slot(struct vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
+static void vw_segment_builder_write_slot(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
                                           int64_t end_pts_us) {
   size_t slot = builder->head;
   if (!builder->segment_queue) {
@@ -86,7 +86,7 @@ static size_t vw_find_text_overlap(const char* prev, const char* curr) {
   return 0;  // No overlap
 }
 
-bool vw_segment_builder_push_hypothesis(struct vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
+bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
                                         int64_t end_pts_us) {
   if (builder == NULL || text == NULL || start_pts_us < 0 || end_pts_us <= start_pts_us) {
     return false;

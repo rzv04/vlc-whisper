@@ -2,9 +2,7 @@
 
 #include <stdlib.h>
 
-struct vw_session {
-  vw_session_state_t state;
-};
+
 
 vw_session_t *vw_session_create(void) {
   vw_session_t *session = (vw_session_t *)calloc(1, sizeof(vw_session_t));

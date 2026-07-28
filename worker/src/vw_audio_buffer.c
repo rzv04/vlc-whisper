@@ -2,9 +2,7 @@
 
 #include <stdlib.h>
 
-struct vw_audio_buffer {
-  size_t max_samples;
-};
+
 
 vw_audio_buffer_t *vw_audio_buffer_create(size_t max_samples) {
   vw_audio_buffer_t *buf = (vw_audio_buffer_t *)calloc(1, sizeof(vw_audio_buffer_t));

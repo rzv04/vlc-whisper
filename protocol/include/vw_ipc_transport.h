@@ -5,7 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct vw_ipc_handle vw_ipc_handle_t;
+typedef struct vw_ipc_handle {
+  void *pipe_handle;
+} vw_ipc_handle_t;
 
 // Platform transport abstraction prototypes
 vw_ipc_handle_t *vw_ipc_listen(const char *endpoint_name, const uint8_t token[32]);

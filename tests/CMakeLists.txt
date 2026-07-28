@@ -5,6 +5,7 @@ macro(add_vw_test test_name)
         ${CMAKE_SOURCE_DIR}/worker/include
         ${CMAKE_SOURCE_DIR}/plugin/include
         ${CMAKE_SOURCE_DIR}/worker/third_party/whisper.cpp/include
+        ${CMAKE_SOURCE_DIR}/tests/include
     )
     target_link_libraries(${test_name} PRIVATE vw_protocol)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)

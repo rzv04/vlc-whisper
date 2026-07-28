@@ -5,7 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct vw_whisper_engine vw_whisper_engine_t;
+typedef struct vw_whisper_engine {
+  void *ctx;
+} vw_whisper_engine_t;
 
 vw_whisper_engine_t *vw_whisper_engine_init(const char *model_path);
 void vw_whisper_engine_free(vw_whisper_engine_t *engine);

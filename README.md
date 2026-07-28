@@ -28,6 +28,35 @@ Available presets in `CMakePresets.json`:
 
 ---
 
+## Running Tests
+
+The project includes unit and integration tests.
+
+### Using CMake Presets (Linux native)
+
+To compile and run tests natively on Linux during development:
+
+```bash
+# Configure the native Linux debug build
+cmake --preset linux-x64-debug
+
+# Build tests with 4 parallel jobs
+cmake --build --preset linux-x64-debug -j4
+
+# Run tests and show output for failed ones
+ctest --preset linux-x64-debug --output-on-failure
+```
+
+### Manual Configuration (Without presets)
+
+```bash
+cmake -B build -S .
+cmake --build build -j4
+cd build && ctest --output-on-failure
+```
+
+---
+
 ### Option 2: Manual CMake Configuration
 
 ```bash

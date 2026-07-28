@@ -15,7 +15,9 @@ typedef enum vw_session_state {
   VW_SESSION_STATE_FAILED
 } vw_session_state_t;
 
-typedef struct vw_session vw_session_t;
+typedef struct vw_session {
+  vw_session_state_t state;
+} vw_session_t;
 
 vw_session_t *vw_session_create(void);
 void vw_session_destroy(vw_session_t *session);

@@ -1,8 +1,6 @@
 #include "vw_caption_presenter.h"
 
-struct vw_caption_presenter {
-  void *vlc_subpicture;
-};
+
 
 bool vw_caption_presenter_show_segment(vw_caption_presenter_t *presenter, const vw_caption_segment_t *segment) {
   (void)presenter;
