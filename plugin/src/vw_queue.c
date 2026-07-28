@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-
+#include "vw_audio_capture.h"
 
 
 vw_spsc_queue_t* vw_spsc_queue_create(size_t capacity_bytes) {

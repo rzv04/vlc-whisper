@@ -14,7 +14,7 @@
 ## Milestone 1: Worker proof (In Progress)
 
 - [x] 5. Implement C worker host that loads `tiny.en` through whisper.cpp's C API and transcribes a fixed 16 kHz mono WAV fixture (scaffolded in `vw_whisper_engine.c`).
-- [ ] 6. Implement VAD/window/hop(process frequency) configuration and final-segment normalization/deduplication (`vw_vad.c`, `vw_segment_builder.c`).
+- [x] 6. Implement VAD/window/hop(process frequency) configuration and final-segment normalization/deduplication (`vw_vad.c`, `vw_segment_builder.c`).
 - [ ] 7. Implement binary frame codec (`vw_protocol_codec.c`), named-pipe server (`vw_ipc_pipe_win32.c`), `HELLO`/`token` check, `START`/`AUDIO`/`STOP`, and protocol contract tests (`test_protocol_codec.c`, `test_protocol_validate.c`).
 - [ ] 8. Add bounds checks, malformed-frame fuzzing, worker crash/error behavior, and redacted structured diagnostics (`vw_log.c`).
 
