@@ -62,6 +62,25 @@ cd build
 ctest -T memcheck --output-on-failure
 ```
 
+### Code Coverage Testing (Linux Native Only)
+
+To generate code coverage reports for project-authored C17 code (excluding third-party libraries and tests), ensure `gcovr` is installed and run:
+
+```bash
+# Configure the native Linux coverage build
+cmake --preset linux-x64-coverage
+
+# Build and run tests to generate coverage data (.gcda)
+cmake --build --preset linux-x64-coverage
+ctest --preset linux-x64-coverage
+
+# Generate HTML coverage report (output to build/coverage.html)
+gcovr -r . --html-details build/coverage.html --exclude 'worker/third_party/' --exclude 'tests/'
+
+# Or print coverage summary to terminal
+gcovr -r . --exclude 'worker/third_party/' --exclude 'tests/'
+```
+
 ---
 
 ### Option 2: Manual CMake Configuration

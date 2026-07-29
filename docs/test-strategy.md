@@ -16,6 +16,14 @@ The primary invariant is: **captioning must never harm playback**. A transcripti
 | Performance | Reference machines | Real-time factor, p50/p95 caption latency, CPU/RAM, queue drops |
 | Security/privacy | Local boundary | Pipe ACLs, random name/token, no listener, no remote traffic, log redaction |
 
+## Code Coverage
+
+Code coverage instrumentation (`--coverage`) is configured for native Linux builds to ensure project-authored C17 logic is thoroughly exercised. 
+
+- **Target Matrix**: Coverage generation and reporting run natively on Linux (`linux-x64-coverage`). Code coverage is not executed for Windows MinGW cross-builds or macOS. 
+- **Invariant Rules**: Third-party libraries (`worker/third_party/whisper.cpp`, `ggml`), VLC SDK headers, and test suite code are strictly **excluded** from coverage calculations (via `gcovr` `--exclude` flags). ZERO modifications are permitted to third-party/VLC codebase.
+- **Reporting**: HTML and CLI reports are generated using `gcovr` after running the automated `ctest` suite.
+
 ## Fixtures
 
 Keep legal, small, versioned fixtures: synthetic tones/silence, public-domain or licensed English speech with known transcript/timestamps, short local MP4/MKV containers, malformed frames, and controlled PTS discontinuities. Never commit proprietary films, user audio, production model binaries, or personal transcripts.

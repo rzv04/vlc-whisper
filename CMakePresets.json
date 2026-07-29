@@ -40,6 +40,18 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON"
       }
+    },
+    {
+      "name": "linux-x64-coverage",
+      "displayName": "Linux x64 Coverage",
+      "description": "Native Linux x64 debug build with code coverage instrumentation",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x64-coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON",
+        "ENABLE_COVERAGE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -54,6 +66,10 @@
     {
       "name": "linux-x64-debug",
       "configurePreset": "linux-x64-debug"
+    },
+    {
+      "name": "linux-x64-coverage",
+      "configurePreset": "linux-x64-coverage"
     }
   ],
   "testPresets": [
@@ -67,6 +83,13 @@
     {
       "name": "linux-x64-debug",
       "configurePreset": "linux-x64-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-x64-coverage",
+      "configurePreset": "linux-x64-coverage",
       "output": {
         "outputOnFailure": true
       }
