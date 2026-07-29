@@ -179,3 +179,6 @@ worker/third_party/vlc*/
 .trash/
 
 .cache/
+
+diff.md
+review.md
