@@ -21,28 +21,45 @@ Complete Milestone 1.7: Implement platform IPC transport server (`vw_ipc_pipe_wi
 
 ## Architectural Answers & Design Clarifications
 
-### 1. Protocol & Versioning Strategy
-- **Protocol Schema Versioning**: Hardcoded C macros `VW_PROTOCOL_VERSION_MAJOR` (1) and `VW_PROTOCOL_VERSION_MINOR` (0) in `vw_protocol_types.h`. Handshake negotiates major/minor compatibility.
-- **Binary Build Versioning**: Single central header `protocol/include/vw_version.h` defines `VW_VERSION_STRING "1.0.0"` (populated via CMake compile definitions). Sent in `vw_msg_hello_t.client_version` and `vw_msg_hello_ack_t.worker_version`.
-- **Model Integrity Versioning**: `models/manifest.json` tracks SHA-256 integrity and model compatibility.
+### 1. Model `manifest.json` Location & Creation
+- **Installation Location**: On Windows, models and `manifest.json` live at `%LOCALAPPDATA%\vlc-whisper\models\` (or `~/.config/vlc-whisper/models/` on Linux).
+- **Creation Lifecycle**: Provisioned by installer (Inno Setup / package script) alongside GGML model binaries (`ggml-tiny.en.bin`). Contains SHA-256 integrity hashes, RAM bounds, and model capabilities.
+- **Worker Verification**: Worker verifies `manifest.json` SHA-256 before initializing Whisper engine. If hash fails, worker emits `VW_MSG_ERROR(E_MODEL_INVALID)` and halts captioning without affecting VLC playback.
 
-### 2. Error and Shutdown Control Flow & Directionality
-- **`VW_MSG_SHUTDOWN` (Plugin -> Worker)**:
-  - Sent by **Plugin to Worker** when VLC stops captioning or unloads module.
-  - Upon receiving `VW_MSG_SHUTDOWN`, the Worker host closes IPC handles and exits cleanly with status code `0`.
-  - Plugin does NOT shut down; VLC playback is untouched.
-- **`VW_MSG_ERROR` (Worker -> Plugin / Bi-directional)**:
-  - Sent primarily by **Worker to Plugin** (or by Plugin if a malformed frame is received).
-  - Contains `uint8_t recoverable`:
-    - `recoverable == 0` (Fatal): Plugin disables captions for current item, closes IPC pipe, logs redacted diagnostic. VLC media playback remains active.
-    - `recoverable == 1` (Non-fatal, e.g., `E_BACKPRESSURE` audio drop): Plugin logs diagnostic; captioning session continues.
+### 2. Logging & Redacted Diagnostics on Errors
+- **Logging Integration**: Every sent/received `VW_MSG_ERROR`, failed authentication, or malformed frame automatically triggers `vw_log.c` calls (`VW_LOG_ERROR` / `VW_LOG_WARN`).
+- **Privacy Invariant**: Logs contain error codes and static diagnostic strings ONLY. Zero raw PCM, transcript text, or disk paths logged.
 
-### 3. Reason & Error Codes Requirements
-- **`VW_MSG_PAUSE` / `VW_MSG_RESUME` / `VW_MSG_STOP_SESSION`**:
-  - Struct `vw_msg_control_t` contains `vw_session_id_t session_id` and `uint16_t reason`.
-  - Reason codes: `VW_REASON_USER_ACTION = 1`, `VW_REASON_SEEK_DISCONTINUITY = 2`, `VW_REASON_MEDIA_END = 3`.
-- **`VW_MSG_ERROR`**:
-  - Struct `vw_msg_error_t` contains `uint32_t error_code` (e.g. `E_AUTH`, `E_MODEL_MISSING`, `E_PROTOCOL_VERSION`), `uint8_t recoverable`, and `char message[256]` (safe redacted diagnostic description).
+### 3. Windows API vs POSIX Linux Target
+- **Ubuntu MinGW Cross-Compilation**: WinAPI calls (`CreateNamedPipeA`, `ConnectNamedPipe`, `ReadFile`, `WriteFile`, `CloseHandle`) are compiled via MinGW GCC (`x86_64-w64-mingw32-gcc`) under `#if defined(_WIN32) || defined(__MINGW32__)`.
+- **Native Linux Development Host**: `protocol/src/vw_ipc_socket_linux.c` implements POSIX Unix Domain Sockets (`AF_UNIX`, `SOCK_SEQPACKET`) under `#if defined(__linux__)`. Enables 100% native compilation and CTest execution on Ubuntu.
+
+### 4. Secret Token Generation & Constant-Time XOR Proof
+- **Creation**: Generated fresh **once per session / process launch** by the plugin using `vw_platform_get_random_bytes(token, 32)` (`BCryptGenRandom` on Win32, `/dev/urandom` on Linux).
+- **Transmission**: Plugin passes token to worker via command-line argument (`--token <32-bytes>`).
+- **Constant-Time Match Proof**:
+  ```c
+  static bool vw_auth_verify_token_constant_time(const uint8_t token_a[32], const uint8_t token_b[32]) {
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < 32; i++) {
+      diff |= (token_a[i] ^ token_b[i]);
+    }
+    return (diff == 0);
+  }
+  ```
+  - XOR (`a ^ b`) yields `0` if and only if `a == b`.
+  - Accumulating `diff |= (token_a[i] ^ token_b[i])` across all 32 bytes yields `diff == 0` **if and only if all 32 bytes match identically**.
+  - Always executes exactly 32 iterations, preventing timing side-channel attacks.
+
+### 5. Socket I/O Performance, Buffering & Header Junk Protection
+- **Transfer Throughput**: 8 seconds of 16 kHz 16-bit mono PCM is 256 KB. Over local Unix domain socket / Windows named pipe, transferring 256 KB takes **< 0.1 ms** (RAM-to-RAM memory copy). PCM is streamed in 500 ms chunks (16 KB each), taking ~5 µs per chunk.
+- **Blocking & Timeouts**: Transport calls (`vw_ipc_send`/`vw_ipc_receive`) use 3-second blocking timeouts (`SO_RCVTIMEO` / `SO_SNDTIMEO` on socket, `PIPE_WAIT` on Win32 pipe) executed on dedicated worker/sender threads outside VLC audio callback loop.
+- **Junk Header Validation**: Every received frame validates `magic == 0x564C4357 ('VLCW')`, `major == 1`, `payload_length <= 1,048,576` BEFORE allocating memory or reading payload. Junk frames immediately terminate transport connection.
+
+### 6. Protocol Control Flow & Idempotency
+- **`VW_MSG_SHUTDOWN` (Plugin -> Worker)**: Plugin sends SHUTDOWN when VLC stops captioning or unloads plugin. Worker exits cleanly with code `0`. Plugin does not exit.
+- **`VW_MSG_STOP_SESSION`**: Idempotent. Calling `STOP` multiple times on an already stopped/idle session is a safe no-op.
+- **`RESUME`**: Resumes active captioning after `PAUSE`. Payload `vw_msg_control_t` (reason `USER_RESUME=1`).
 
 ---
 

@@ -8,8 +8,10 @@ typedef struct vw_worker_config {
   char model_path[256];
   char language[8];
   uint32_t sample_rate;
+  char pipe_name[256];
+  uint8_t token[32];
 } vw_worker_config_t;
 
 bool vw_worker_config_init_defaults(vw_worker_config_t *config);
 
-#endif // VW_WORKER_CONFIG_H_
+#endif  // VW_WORKER_CONFIG_H_

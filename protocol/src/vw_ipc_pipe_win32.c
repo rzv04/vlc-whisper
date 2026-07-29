@@ -1,71 +1,144 @@
+#if defined(_WIN32) || defined(__MINGW32__)
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <windows.h>
 
 #include "vw_ipc_transport.h"
 
-#if defined(_WIN32) || defined(__MINGW32__)
-// Windows named pipe implementation stubs
-vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name, const uint8_t token[32]) {
-  (void)endpoint_name;
-  (void)token;
-  return NULL;
+vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
+  HANDLE pipe = CreateNamedPipeA(endpoint_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                 PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1, 65536, 65536, 0, NULL);
+
+  if (pipe == INVALID_HANDLE_VALUE) return NULL;
+
+  OVERLAPPED ov = {0};
+  ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+  BOOL connected = ConnectNamedPipe(pipe, &ov);
+  if (!connected) {
+    DWORD err = GetLastError();
+    if (err == ERROR_IO_PENDING) {
+      if (WaitForSingleObject(ov.hEvent, 10000) == WAIT_OBJECT_0) {
+        DWORD dummy;
+        connected = GetOverlappedResult(pipe, &ov, &dummy, FALSE);
+      } else {
+        CancelIo(pipe);
+      }
+    } else if (err == ERROR_PIPE_CONNECTED) {
+      connected = TRUE;
+    }
+  }
+  if (ov.hEvent) CloseHandle(ov.hEvent);
+
+  if (!connected) {
+    CloseHandle(pipe);
+    return NULL;
+  }
+
+  vw_ipc_handle_t* handle = (vw_ipc_handle_t*)calloc(1, sizeof(vw_ipc_handle_t));
+  if (!handle) {
+    CloseHandle(pipe);
+    return NULL;
+  }
+  handle->pipe_handle = pipe;
+  return handle;
 }
 
-vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name, const uint8_t token[32]) {
-  (void)endpoint_name;
-  (void)token;
-  return NULL;
+vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
+  HANDLE pipe =
+      CreateFileA(endpoint_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+
+  if (pipe == INVALID_HANDLE_VALUE) return NULL;
+
+  DWORD mode = PIPE_READMODE_MESSAGE;
+  if (!SetNamedPipeHandleState(pipe, &mode, NULL, NULL)) {
+    CloseHandle(pipe);
+    return NULL;
+  }
+
+  vw_ipc_handle_t* handle = (vw_ipc_handle_t*)calloc(1, sizeof(vw_ipc_handle_t));
+  if (!handle) {
+    CloseHandle(pipe);
+    return NULL;
+  }
+  handle->pipe_handle = pipe;
+  return handle;
 }
 
 bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
-  (void)handle;
-  (void)data;
-  (void)size;
-  return false;
+  if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE) return false;
+  HANDLE pipe = (HANDLE)handle->pipe_handle;
+
+  OVERLAPPED ov = {0};
+  ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+  if (!ov.hEvent) return false;
+
+  DWORD bytes_written = 0;
+  BOOL res = WriteFile(pipe, data, (DWORD)size, &bytes_written, &ov);
+  if (!res) {
+    DWORD err = GetLastError();
+    if (err == ERROR_IO_PENDING) {
+      if (WaitForSingleObject(ov.hEvent, 3000) == WAIT_OBJECT_0) {
+        GetOverlappedResult(pipe, &ov, &bytes_written, FALSE);
+        res = TRUE;
+      } else {
+        CancelIo(pipe);
+        res = FALSE;
+      }
+    }
+  }
+  CloseHandle(ov.hEvent);
+  return res && (bytes_written == size);
 }
 
 int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) {
-  (void)handle;
-  (void)buffer;
-  (void)buffer_size;
-  return -1;
+  if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE) return -1;
+  HANDLE pipe = (HANDLE)handle->pipe_handle;
+
+  OVERLAPPED ov = {0};
+  ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+  if (!ov.hEvent) return -1;
+
+  DWORD bytes_read = 0;
+  BOOL res = ReadFile(pipe, buffer, (DWORD)buffer_size, &bytes_read, &ov);
+  if (!res) {
+    DWORD err = GetLastError();
+    if (err == ERROR_IO_PENDING) {
+      if (WaitForSingleObject(ov.hEvent, 3000) == WAIT_OBJECT_0) {
+        GetOverlappedResult(pipe, &ov, &bytes_read, FALSE);
+        res = TRUE;
+      } else {
+        CancelIo(pipe);
+        res = FALSE;
+      }
+    }
+  }
+  CloseHandle(ov.hEvent);
+
+  if (!res || bytes_read == 0) {
+    return -1;
+  }
+  return (int32_t)bytes_read;
 }
 
 void vw_ipc_close(vw_ipc_handle_t* handle) {
   if (handle) {
+    if (handle->pipe_handle && handle->pipe_handle != INVALID_HANDLE_VALUE) {
+      CloseHandle((HANDLE)handle->pipe_handle);
+    }
     free(handle);
   }
 }
 #else
-// Non-Windows fallback stubs
-vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name, const uint8_t token[32]) {
-  (void)endpoint_name;
-  (void)token;
-  return NULL;
-}
+// Non-Windows fallback stubs for platforms other than Linux/Mac
+#if !defined(__linux__) && !defined(__APPLE__) && !defined(__unix__)
+#include <stdlib.h>
 
-vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name, const uint8_t token[32]) {
-  (void)endpoint_name;
-  (void)token;
-  return NULL;
-}
-
-bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
-  (void)handle;
-  (void)data;
-  (void)size;
-  return false;
-}
-
-int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) {
-  (void)handle;
-  (void)buffer;
-  (void)buffer_size;
-  return -1;
-}
-
-void vw_ipc_close(vw_ipc_handle_t* handle) {
-  if (handle) {
-    free(handle);
-  }
-}
+#include "vw_ipc_transport.h"
+vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) { return NULL; }
+vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) { return NULL; }
+bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) { return false; }
+int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) { return -1; }
+void vw_ipc_close(vw_ipc_handle_t* handle) {}
+#endif
 #endif

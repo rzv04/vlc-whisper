@@ -13,3 +13,5 @@ This repository enforces strict C17 standards, architectural invariants, and pri
 7. **Discontinuity Handling**: Seeking, rate changes, or media swaps clear captions and end caption session gracefully without affecting VLC media playback.
 8. **Mandatory Documentation Inspection**: Before planning or implementing any feature, refactor, or sample, ALWAYS inspect relevant project documentation in `docs/` (`architecture.md`, `product.md`, `source-layout.md`, `api-contracts.md`, `whisper-api.md`) to align with project design and contracts.
 9. **Task Planning Template Enforcement**: When creating implementation plans, task breakdowns, or planning artifacts (`/plan`), AI agents MUST follow the task structure in `ai/task-template.md`.
+10. **Mandatory Verification Checklist**: NEVER declare a task complete without running code format verification (`clang-format --dry-run --Werror <files>`), native build & test suite (`cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug && ctest --preset linux-x64-debug`), and Valgrind memory leak verification (`ctest --test-dir build/linux-x64-debug -T memcheck`).
+

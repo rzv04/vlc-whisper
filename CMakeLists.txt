@@ -30,6 +30,7 @@ add_subdirectory(plugin)
 
 # Automated unit & integration tests
 if(BUILD_TESTING)
+    include(CTest)
     enable_testing()
     add_subdirectory(tests)
 endif()

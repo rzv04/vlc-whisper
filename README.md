@@ -55,6 +55,13 @@ cmake --build build -j4
 cd build && ctest --output-on-failure
 ```
 
+To run the test suite through Valgrind to check for memory leaks and invalid accesses (requires `valgrind` installed):
+
+```bash
+cd build
+ctest -T memcheck --output-on-failure
+```
+
 ---
 
 ### Option 2: Manual CMake Configuration

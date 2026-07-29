@@ -56,7 +56,7 @@ typedef enum vw_message_type {
 typedef struct vw_frame_header {
   uint32_t magic;           // VW_PROTOCOL_MAGIC
   uint16_t major;           // VW_PROTOCOL_VERSION_MAJOR
-  vw_message_type_t type;   // vw_message_type_t
+  uint16_t type;            // vw_message_type_t, default to 2 bytes instead of enum 4
   uint32_t payload_length;  // payload byte count
   uint64_t sequence;        // monotonic sequence counter per session
 } vw_frame_header_t;

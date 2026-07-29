@@ -94,6 +94,7 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
       if (p->duration_us <= 0 || p->duration_us > 30000000) return false;
       // pcm_bytes = duration_us * 16000 / 1000000 * 2 = duration_us * 32 / 1000
+      // integer truncated; valid audio under 31.25 µs silently passes?. Negligible at 16kHz (0.5 sample)
       uint32_t expected_bytes = (uint32_t)((p->duration_us * 32) / 1000);
       if (p->pcm_bytes != expected_bytes) return false;
       if (p->pcm_bytes > 0 && !p->pcm_data) return false;

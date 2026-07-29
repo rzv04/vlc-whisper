@@ -59,6 +59,10 @@ MVP discontinuity policy: detect a non-monotonic PTS, seek event, rate change, s
 
 Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit capability token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
 
+### Transport Timeouts
+- **Connection Accept Timeout**: 10 seconds. `vw_ipc_listen()` waits up to 10s (`poll()` on POSIX, `WaitForSingleObject` on Win32) for an incoming plugin connection before closing the socket/pipe and self-terminating.
+- **I/O Read/Write Timeout**: 3 seconds. `vw_ipc_receive()` and `vw_ipc_send()` enforce a 3-second timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO` on POSIX, overlapped `WaitForSingleObject(3000)` on Win32) to prevent blocking indefinitely on hung peers.
+
 Each frame is binary and little-endian:
 
 ```text
