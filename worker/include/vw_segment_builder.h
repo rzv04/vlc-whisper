@@ -14,8 +14,8 @@
 typedef struct vw_segment_builder {
   uint64_t next_segment_id;
   vw_caption_segment_t* segment_queue;  // circular buffer of caption segments
-  size_t head;                               // Next write position (0..19)
-  size_t count;                              // Active item count (0..20)
+  size_t head;                          // Next write position (0..19)
+  size_t count;                         // Active item count (0..20)
 } vw_segment_builder_t;
 
 vw_segment_builder_t* vw_segment_builder_create(void);

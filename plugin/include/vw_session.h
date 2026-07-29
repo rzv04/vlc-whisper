@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
 #include "vw_protocol.h"
 
 typedef enum vw_session_state {
@@ -24,4 +25,4 @@ void vw_session_destroy(vw_session_t *session);
 bool vw_session_start(vw_session_t *session);
 void vw_session_handle_discontinuity(vw_session_t *session);
 
-#endif // VW_SESSION_H_
+#endif  // VW_SESSION_H_

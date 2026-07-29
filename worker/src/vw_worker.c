@@ -12,7 +12,7 @@
 static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES],
                                        const uint8_t token_b[VW_AUTH_TOKEN_BYTES]) {
   volatile uint8_t diff = 0;
-  for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
+  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
     diff |= (token_a[i] ^ token_b[i]);
   }
   return diff == 0;

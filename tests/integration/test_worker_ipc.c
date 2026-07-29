@@ -50,7 +50,7 @@ int main(void) {
   vw_worker_config_t config;
   memset(&config, 0, sizeof(config));
   strncpy(config.pipe_name, "test_ipc_socket", sizeof(config.pipe_name) - 1);
-  for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.token[i] = (uint8_t)i;
+  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.token[i] = (uint8_t)i;
 
   pthread_t thread;
   int err = pthread_create(&thread, NULL, worker_thread, &config);

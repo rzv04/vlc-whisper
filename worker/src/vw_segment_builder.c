@@ -11,8 +11,7 @@ vw_segment_builder_t* vw_segment_builder_create(void) {
     return NULL;
   }
   b->next_segment_id = 1;
-  b->segment_queue =
-      (vw_caption_segment_t*)calloc(VW_SEGMENT_BUILDER_MAX_BUFSZ, sizeof(vw_caption_segment_t));
+  b->segment_queue = (vw_caption_segment_t*)calloc(VW_SEGMENT_BUILDER_MAX_BUFSZ, sizeof(vw_caption_segment_t));
   if (b->segment_queue == NULL) {
     free(b);
     return NULL;

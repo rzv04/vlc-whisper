@@ -12,6 +12,6 @@ typedef struct vw_worker_config {
   uint8_t token[32];
 } vw_worker_config_t;
 
-bool vw_worker_config_init_defaults(vw_worker_config_t *config);
+bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 
 #endif  // VW_WORKER_CONFIG_H_

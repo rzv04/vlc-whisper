@@ -1,11 +1,14 @@
 #include "vw_worker_client.h"
-#include "vw_ipc_transport.h"
+
 #include <stdlib.h>
 
-vw_worker_client_t *vw_worker_client_launch_and_connect(const char *executable_path, const char *endpoint_name, const uint8_t token[32]) {
+#include "vw_ipc_transport.h"
+
+vw_worker_client_t *vw_worker_client_launch_and_connect(const char *executable_path, const char *endpoint_name,
+                                                        const uint8_t token[32]) {
   (void)executable_path;
   (void)token;
-  
+
   vw_ipc_handle_t *ipc = vw_ipc_connect(endpoint_name);
   if (!ipc) {
     return NULL;

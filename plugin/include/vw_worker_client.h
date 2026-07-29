@@ -8,7 +8,8 @@ typedef struct vw_worker_client {
   void *pipe_handle;
 } vw_worker_client_t;
 
-vw_worker_client_t *vw_worker_client_launch_and_connect(const char *executable_path, const char *endpoint_name, const uint8_t token[32]);
+vw_worker_client_t *vw_worker_client_launch_and_connect(const char *executable_path, const char *endpoint_name,
+                                                        const uint8_t token[32]);
 void vw_worker_client_disconnect(vw_worker_client_t *client);
 
-#endif // VW_WORKER_CLIENT_H_
+#endif  // VW_WORKER_CLIENT_H_

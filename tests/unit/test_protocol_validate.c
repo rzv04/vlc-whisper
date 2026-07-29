@@ -2,7 +2,11 @@
 #include "vw_test.h"
 
 int main(void) {
-  vw_frame_header_t valid = {.magic = VW_PROTOCOL_MAGIC, .major = VW_PROTOCOL_VERSION_MAJOR, .type = VW_MSG_START_SESSION, .payload_length = 100, .sequence = 42};
+  vw_frame_header_t valid = {.magic = VW_PROTOCOL_MAGIC,
+                             .major = VW_PROTOCOL_VERSION_MAJOR,
+                             .type = VW_MSG_START_SESSION,
+                             .payload_length = 100,
+                             .sequence = 42};
   EXPECT(vw_protocol_validate_header(&valid));
 
   vw_frame_header_t invalid_magic = valid;
@@ -30,10 +34,10 @@ int main(void) {
   // Validate AUDIO
   vw_msg_audio_t audio = {.duration_us = 1000000, .pcm_bytes = 32000, .pcm_data = (const uint8_t*)"12"};
   EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
-  audio.duration_us = 0; // Invalid
+  audio.duration_us = 0;  // Invalid
   EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
   audio.duration_us = 1000000;
-  audio.pcm_bytes = 1000; // Mismatch with duration
+  audio.pcm_bytes = 1000;  // Mismatch with duration
   EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
 
   // Validate CONTROL
@@ -51,12 +55,12 @@ int main(void) {
   // Validate SEGMENT
   vw_caption_segment_t seg = {.start_pts_us = 10, .end_pts_us = 20, .text_bytes = 4, .text_utf8 = (char*)"test"};
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
-  
-  seg.end_pts_us = 5; // end < start
+
+  seg.end_pts_us = 5;  // end < start
   EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
   seg.end_pts_us = 20;
-  seg.text_utf8 = (char*)"    "; // whitespace only
+  seg.text_utf8 = (char*)"    ";  // whitespace only
   EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
   seg.text_utf8 = (char*)"valid";
@@ -111,15 +115,15 @@ int main(void) {
   EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
   // Valid multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte)
-  seg.text_utf8 = (char*)"\xC2\xA2"; // U+00A2
+  seg.text_utf8 = (char*)"\xC2\xA2";  // U+00A2
   seg.text_bytes = 2;
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
-  seg.text_utf8 = (char*)"\xE2\x82\xAC"; // U+20AC
+  seg.text_utf8 = (char*)"\xE2\x82\xAC";  // U+20AC
   seg.text_bytes = 3;
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
-  seg.text_utf8 = (char*)"\xF0\x9F\x98\x80"; // U+1F600
+  seg.text_utf8 = (char*)"\xF0\x9F\x98\x80";  // U+1F600
   seg.text_bytes = 4;
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 

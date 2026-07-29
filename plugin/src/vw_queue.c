@@ -2,8 +2,8 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-#include "vw_audio_capture.h"
 
+#include "vw_audio_capture.h"
 
 vw_spsc_queue_t* vw_spsc_queue_create(size_t capacity_bytes) {
   vw_spsc_queue_t* q = (vw_spsc_queue_t*)calloc(1, sizeof(vw_spsc_queue_t));
@@ -31,4 +31,6 @@ bool vw_spsc_queue_pop(vw_spsc_queue_t* queue, vw_audio_chunk_t* chunk) {
   return false;
 }
 
-uint64_t vw_spsc_queue_get_dropped_microseconds(const vw_spsc_queue_t* queue) { return queue ? queue->audio_dropped_us : 0; }
+uint64_t vw_spsc_queue_get_dropped_microseconds(const vw_spsc_queue_t* queue) {
+  return queue ? queue->audio_dropped_us : 0;
+}

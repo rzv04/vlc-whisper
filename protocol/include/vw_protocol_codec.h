@@ -17,7 +17,8 @@ bool vw_protocol_encode_header(const vw_frame_header_t* header, uint8_t* buffer,
 // invalid header).
 bool vw_protocol_decode_header(const uint8_t* buffer, size_t buffer_size, vw_frame_header_t* header);
 
-bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uint8_t* buffer, size_t buffer_size, size_t* out_written);
+bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uint8_t* buffer, size_t buffer_size,
+                                size_t* out_written);
 bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, size_t buffer_size, void* out_payload);
 bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload);
 

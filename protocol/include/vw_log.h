@@ -10,8 +10,8 @@
 
 typedef enum vw_log_level {
   VW_LOG_LEVEL_DEBUG = 0,
-  VW_LOG_LEVEL_INFO  = 1,
-  VW_LOG_LEVEL_WARN  = 2,
+  VW_LOG_LEVEL_INFO = 1,
+  VW_LOG_LEVEL_WARN = 2,
   VW_LOG_LEVEL_ERROR = 3
 } vw_log_level_t;
 
@@ -24,4 +24,4 @@ void vw_log_set_sink(vw_log_sink_fn sink, void *user_data);
 // Privacy-safe variadic log function: NEVER logs PCM samples, transcript text, or secret tokens.
 void vw_log_event(vw_log_level_t level, const char *event_id, const char *fmt, ...);
 
-#endif // VW_LOG_H_
+#endif  // VW_LOG_H_

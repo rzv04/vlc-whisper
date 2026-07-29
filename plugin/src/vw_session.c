@@ -2,8 +2,6 @@
 
 #include <stdlib.h>
 
-
-
 vw_session_t *vw_session_create(void) {
   vw_session_t *session = (vw_session_t *)calloc(1, sizeof(vw_session_t));
   if (session) {

@@ -7,6 +7,6 @@
 #include "vw_whisper_engine.h"
 #include "vw_worker_config.h"
 
-int vw_worker_run(const vw_worker_config_t *config);
+int vw_worker_run(const vw_worker_config_t* config);
 
-#endif // VW_WORKER_H_
+#endif  // VW_WORKER_H_
