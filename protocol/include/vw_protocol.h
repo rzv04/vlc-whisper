@@ -5,4 +5,4 @@
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
 
-#endif // VW_PROTOCOL_H_
+#endif  // VW_PROTOCOL_H_

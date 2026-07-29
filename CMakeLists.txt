@@ -11,6 +11,13 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Option to toggle building unit/integration tests
 option(BUILD_TESTING "Build unit and integration tests" ON)
 
+# Option to enable code coverage instrumentation
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+if(ENABLE_COVERAGE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(--coverage -O0 -g)
+    add_link_options(--coverage)
+endif()
+
 # Configure static runtime linking for MinGW cross-compilation
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -static")
@@ -30,6 +37,7 @@ add_subdirectory(plugin)
 
 # Automated unit & integration tests
 if(BUILD_TESTING)
+    include(CTest)
     enable_testing()
     add_subdirectory(tests)
 endif()

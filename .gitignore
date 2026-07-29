@@ -180,5 +180,5 @@ worker/third_party/vlc*/
 
 .cache/
 
-# Git Worktrees
-.worktrees/
+diff.md
+review.md

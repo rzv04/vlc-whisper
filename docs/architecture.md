@@ -59,6 +59,11 @@ MVP discontinuity policy: detect a non-monotonic PTS, seek event, rate change, s
 
 Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit capability token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
 
+### Transport Timeouts & Return Semantics
+- **Connection Accept Timeout**: 10 seconds. `vw_ipc_listen()` waits up to 10s (`poll()` on POSIX, `WaitForSingleObject` on Win32) for an incoming plugin connection before closing the socket/pipe and self-terminating (returns `NULL`).
+- **I/O Read/Write Timeout**: 3 seconds. `vw_ipc_receive()` and `vw_ipc_send()` enforce a 3-second timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO` on POSIX, overlapped `WaitForSingleObject(3000)` on Win32).
+- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` on 3s read timeout (allowing worker loop to continue waiting during long video pauses), and `-1` on fatal error or peer disconnect (EOF / broken pipe).
+
 Each frame is binary and little-endian:
 
 ```text
@@ -81,7 +86,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 | `SEGMENT` | worker -> plugin | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence |
 | `STATUS` | worker -> plugin | state, queue depth, inference latency, dropped audio |
 | `ERROR` | both | stable code, recoverability, safe diagnostic text |
-| `PING` / `PONG` | both | nonce |
+| `SHUTDOWN` | both | none |
 
 The worker emits only final segments in MVP. Partial/revision messages are reserved for protocol major 1 now so seek/live support does not force a new transport; the presenter may ignore them safely.
 

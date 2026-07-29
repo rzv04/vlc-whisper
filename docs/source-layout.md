@@ -81,6 +81,8 @@ vlc-whisper/
 │   └── manifest.json                          # Offline manifest (SHA-256 integrity, RAM bounds)
 ├── tests/                                     # Verification suites, fixtures, and E2E procedures
 │   ├── CMakeLists.txt                         # Builds unit and integration test executables
+│   ├── include/
+│   │   └── vw_test.h                          # Common test helper macros (e.g., EXPECT, EXPECT_EQ_STR)
 │   ├── unit/                                  # Isolated component tests
 │   │   ├── test_protocol_codec.c              # Serialization & frame encoding unit tests
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
@@ -163,7 +165,8 @@ typedef enum vw_message_type {
     VW_MSG_CAPTION_SEGMENT = 8,
     VW_MSG_STATUS = 9,
     VW_MSG_ERROR = 10,
-    VW_MSG_SHUTDOWN = 11
+    VW_MSG_SHUTDOWN = 11,
+    VW_MSG_STARTED = 12
 } vw_message_type_t;
 ```
 

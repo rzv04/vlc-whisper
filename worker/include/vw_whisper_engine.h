@@ -5,10 +5,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct vw_whisper_engine vw_whisper_engine_t;
+typedef struct vw_whisper_engine {
+  void* ctx;
+} vw_whisper_engine_t;
 
-vw_whisper_engine_t *vw_whisper_engine_init(const char *model_path);
-void vw_whisper_engine_free(vw_whisper_engine_t *engine);
-bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t *engine, const float *pcm32, size_t sample_count);
+vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path);
+void vw_whisper_engine_free(vw_whisper_engine_t* engine);
+bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm32, size_t sample_count);
 
-#endif // VW_WHISPER_ENGINE_H_
+#endif  // VW_WHISPER_ENGINE_H_
