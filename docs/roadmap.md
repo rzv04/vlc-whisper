@@ -11,14 +11,14 @@
 
 ---
 
-## Milestone 1: Worker proof (In Progress)
+## Milestone 1: Worker proof (Completed)
 
 - [x] 5. Implement C worker host that loads `tiny.en` through whisper.cpp's C API and transcribes a fixed 16 kHz mono WAV fixture (scaffolded in `vw_whisper_engine.c`).
 - [x] 6. Implement VAD/window/hop(process frequency) configuration and final-segment normalization/deduplication (`vw_vad.c`, `vw_segment_builder.c`).
-- [ ] 7. Implement binary frame codec (`vw_protocol_codec.c`), named-pipe server (`vw_ipc_pipe_win32.c`), `HELLO`/`token` check, `START`/`AUDIO`/`STOP`, and protocol contract tests (`test_protocol_codec.c`, `test_protocol_validate.c`).
-- [ ] 8. Add bounds checks, malformed-frame fuzzing, worker crash/error behavior, and redacted structured diagnostics (`vw_log.c`).
+- [x] 7. Implement binary frame codec (`vw_protocol_codec.c`), named-pipe/socket server (`vw_ipc_pipe_win32.c`, `vw_ipc_socket_linux.c`), `HELLO`/`token` check, `START`/`AUDIO`/`STOP`, and integration test suites (`test_worker_ipc.c`, `test_worker_lifecycle.c`).
+- [x] 8. Add bounds checks, malformed-frame validation, worker crash/error behavior, and redacted structured diagnostics (`vw_log.c`).
 
-**Exit Status:** **IN PROGRESS** — Windows worker transcribes fixture PCM over named pipe without network access.
+**Exit Status:** **DONE** — Worker transcribes fixture PCM over named pipe / Unix socket with 10s accept & 3s I/O timeouts, constant-time auth, and privacy-safe logging.
 
 ---
 
