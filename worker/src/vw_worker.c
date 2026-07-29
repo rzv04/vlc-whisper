@@ -34,12 +34,13 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
   while (running) {
     int32_t bytes_read = 0;
-    while (bytes_read < sizeof(vw_frame_header_t)) {
+    while (bytes_read < (int32_t)sizeof(vw_frame_header_t)) {
       int32_t res = vw_ipc_receive(handle, header_buf + bytes_read, sizeof(vw_frame_header_t) - bytes_read);
-      if (res <= 0) {
+      if (res < 0) {
         running = false;
         break;
       }
+      if (res == 0) continue;  // timeout, no data yet — keep waiting
       bytes_read += res;
     }
     if (!running) break;
@@ -61,10 +62,11 @@ int vw_worker_run(const vw_worker_config_t* config) {
       uint32_t payload_read = 0;
       while (payload_read < header.payload_length) {
         int32_t res = vw_ipc_receive(handle, payload_buf + payload_read, header.payload_length - payload_read);
-        if (res <= 0) {
+        if (res < 0) {
           running = false;
           break;
         }
+        if (res == 0) continue;  // timeout, no data yet — keep waiting
         payload_read += res;
       }
     }

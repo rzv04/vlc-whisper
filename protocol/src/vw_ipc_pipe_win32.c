@@ -71,8 +71,11 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
 
   OVERLAPPED ov = {0};
   ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
-  if (!ov.hEvent) return false;
-
+  if (!ov.hEvent) {
+    // Close handle before returning
+    CloseHandle(pipe);
+    return false;
+  }
   DWORD bytes_written = 0;
   BOOL res = WriteFile(pipe, data, (DWORD)size, &bytes_written, &ov);
   if (!res) {
@@ -101,6 +104,7 @@ int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size
 
   DWORD bytes_read = 0;
   BOOL res = ReadFile(pipe, buffer, (DWORD)buffer_size, &bytes_read, &ov);
+  bool timed_out = false;
   if (!res) {
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
@@ -109,15 +113,14 @@ int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size
         res = TRUE;
       } else {
         CancelIo(pipe);
-        res = FALSE;
+        timed_out = true;
       }
     }
   }
   CloseHandle(ov.hEvent);
 
-  if (!res || bytes_read == 0) {
-    return -1;
-  }
+  if (timed_out) return 0;                 // timeout, no data yet
+  if (!res || bytes_read == 0) return -1;  // real error or EOF
   return (int32_t)bytes_read;
 }
 

@@ -628,10 +628,10 @@
 
 ### Bugs (Sorted by Priority)
 
-| Priority | Component / Location | Description | Impact | Proposed Fix |
+| Priority | Component / Location | Description | Impact | Resolution |
 | --- | --- | --- | --- | --- |
-| **High** | `worker/src/vw_worker.c:39` | `vw_ipc_receive()` returning `-1` on a 3s read timeout causes `running = false` | Pausing video > 3 seconds kills worker process | Differentiate read timeout (`EAGAIN`/`EWOULDBLOCK`) from actual peer socket closure/EOF |
-| **Medium** | `protocol/src/vw_ipc_pipe_win32.c:72,98` | `CreateEventA()` called per frame without `CloseHandle` on synchronous completion | Win32 event handle leak per frame | Unconditionally call `CloseHandle(ov.hEvent)` before returning |
+| **High** | `worker/src/vw_worker.c:39,69`, `vw_ipc_socket_linux.c:108`, `vw_ipc_pipe_win32.c:122` | `vw_ipc_receive()` returns `0` on 3s read timeout, `vw_worker.c` checks `res == 0` and continues loop | Pausing video > 3 seconds no longer kills worker process | **RESOLVED**: `vw_ipc_receive()` returns `0` on timeout (connection open), `-1` on EOF/error. `vw_worker` continues loop on `0`. |
+| **Medium** | `protocol/src/vw_ipc_pipe_win32.c:120` | `CreateEventA()` event handle cleanup | Win32 event handle leak | **RESOLVED**: `CloseHandle(ov.hEvent)` called unconditionally before returning. |
 | **Low** | `tests/integration/test_worker_ipc.c:61`, `test_worker_lifecycle.c:59` | Compiler emits `-Wimplicit-function-declaration` for `usleep()` | Compiler warning during test build | Add `#define _DEFAULT_SOURCE` at top of test files before `<unistd.h>` |
 
 ### Architectural & Operational Risks

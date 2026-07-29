@@ -102,8 +102,11 @@ int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size
   if (!handle) return -1;
   int fd = (int)(intptr_t)handle->pipe_handle;
   ssize_t bytes = recv(fd, buffer, buffer_size, 0);
-  if (bytes <= 0) return -1;
-  return (int32_t)bytes;
+  if (bytes > 0) return (int32_t)bytes;
+  if (bytes == 0) return -1;  // EOF — peer closed connection
+  // bytes < 0: check for timeout vs real error
+  if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;  // timeout, no data yet
+  return -1;                                              // real error
 }
 
 void vw_ipc_close(vw_ipc_handle_t* handle) {
