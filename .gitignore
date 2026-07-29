@@ -182,3 +182,6 @@ worker/third_party/vlc*/
 
 diff.md
 review.md
+
+# MCP config w/ API keys
+.agents/mcp_config.json
