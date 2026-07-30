@@ -26,8 +26,8 @@
 
 - [x] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vlc_whisper_module.c`).
 - [x] 10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior (`vw_audio_capture.c`, `vw_queue.c`).
-- [ ] 11. Independently prove caption display: native timed subtitle route preferred, OSD overlay fallback documented (`vw_caption_presenter.c`).
-- [ ] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior.
+- [x] 11. Independently prove caption display: native timed subtitle route preferred, OSD overlay fallback documented (`vw_caption_presenter.c`).
+- [x] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior.
 
 **Exit Status:** **PLANNED** — A test module sees timestamped audio and displays a static/deterministic timed caption on the reference VLC.
 
