@@ -1,10 +1,13 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
+
+// clang-format off
 #include <vlc_common.h>
+#include <vlc_block.h>
+// clang-format on
 #include <vlc_filter.h>
 #include <vlc_plugin.h>
-#include <vlc_block.h>
 
 #include "vw_log.h"
 #include "vw_plugin.h"
@@ -95,6 +98,7 @@ static int vw_plugin_open(vlc_object_t* obj) {
 
   p_filter->p_sys = (filter_sys_t*)sys;
   p_filter->pf_audio_filter = vw_plugin_filter;
+  p_filter->fmt_out.audio = p_filter->fmt_in.audio;
 
   vw_log_set_sink(vw_plugin_log_sink, obj);
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_OPEN", "vlc-whisper audio filter module opened");
