@@ -58,8 +58,16 @@ cd build && ctest --output-on-failure
 To run the test suite through Valgrind to check for memory leaks and invalid accesses (requires `valgrind` installed):
 
 ```bash
-cd build
-ctest -T memcheck --output-on-failure
+cmake --build --preset linux-x64-debug -j$(nproc)
+ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure
+```
+
+For stricter leak detection (fail on any leak):
+
+```bash
+ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure \
+  --extra-memcheck-options=--leak-check=full \
+  --extra-memcheck-options=--error-exitcode=1
 ```
 
 ### Code Coverage Testing (Linux Native Only)
@@ -130,3 +138,26 @@ sample_whisper_pcm.exe C:\path\to\ggml-tiny.en.bin
 The MinGW cross-compilation setup automatically configures static linking (`-static`, `-static-libgcc`, `-static-libstdc++`, static `libgomp.a`, and static `libwinpthread.a`).
 
 This ensures that output binaries (`vlc-whisper-worker.exe`, `vlc_whisper_plugin.dll`, `sample_whisper_pcm.exe`) are completely self-contained and run natively on Windows without requiring external MinGW runtime DLLs (`libgomp-1.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`, etc.).
+
+---
+
+## Manual Plugin Installation (Windows)
+
+To install and verify the VLC plugin manually on Windows:
+
+1. **Install DLL**: Copy the compiled `libvlc_whisper_plugin.dll` to your VLC installation's plugin directory:
+   - Example path: `C:\Program Files\VideoLAN\VLC\plugins\misc\libvlc_whisper_plugin.dll`
+
+2. **Reset Plugin Cache & Verify Registration**:
+   Open Command Prompt or PowerShell and run:
+   ```cmd
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
+   ```
+   *Expected Output*: You should see the `VLC-Whisper` audio filter module listed.
+
+3. **Inspect Debug Logs**:
+   To verify that the module's `vw_plugin_open` and `vw_plugin_close` functions execute properly:
+   ```cmd
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" -vvv --reset-plugins-cache --color --module vlc_whisper
+   ```
+   *Expected Output*: Look for `[vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened` in the log output.

@@ -23,3 +23,8 @@ add_vw_test(test_caption_timing unit/test_caption_timing.c)
 
 add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c)
 add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c)
+
+add_executable(test_plugin_load integration/test_plugin_load.c)
+target_compile_options(test_plugin_load PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(test_plugin_load PRIVATE ${CMAKE_DL_LIBS})
+add_test(NAME test_plugin_load COMMAND test_plugin_load $<TARGET_FILE:vlc_whisper_plugin>)

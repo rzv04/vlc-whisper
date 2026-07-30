@@ -141,6 +141,7 @@ install_manifest.txt
 *.pdb
 *.ilk
 *.exp
+*.def
 
 # Logs and coverage
 *.log
@@ -183,5 +184,6 @@ worker/third_party/vlc*/
 diff.md
 review.md
 
-# MCP config w/ API keys
+# MCP configs w/ API keys (TODO: move to env vars)
 .agents/mcp_config.json
+opencode.jsonc

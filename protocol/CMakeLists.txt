@@ -15,3 +15,5 @@ target_compile_options(vw_protocol PRIVATE
     -Wextra
     -Wpedantic
 )
+
+set_target_properties(vw_protocol PROPERTIES POSITION_INDEPENDENT_CODE ON)

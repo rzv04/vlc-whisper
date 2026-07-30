@@ -17,6 +17,7 @@ Build the smallest standard C17 VLC audio filter plugin module (`vlc_whisper_mod
 ### 1. CMake Preprocessor Definitions (`__PLUGIN__` and `MODULE_STRING`)
 
 In `plugin/CMakeLists.txt`:
+
 ```cmake
 target_compile_definitions(vlc_whisper_plugin PRIVATE
     __PLUGIN__
@@ -73,6 +74,7 @@ VLC plugin discovery (and our automated unit test `test_plugin_load.c`) loads an
   - `plugin/CMakeLists.txt`: Ensure proper symbol export (`__PLUGIN__`, `MODULE_STRING`), header inclusion, and target output property rules for `.so` (Linux) and `.dll` (Windows MinGW).
   - `tests/integration/test_plugin_load.c`: Native CTest suite validating module entry point symbol `vlc_entry__3_0_0f` via `dlopen()` / `dlsym()`.
   - `README.md`: Document manual Windows plugin installation, plugin cache refresh (`--reset-plugins-cache`), and registration check commands.
+  - Documentation: Update `docs/source-layout.md` to reflect new files.
   - Documentation: Update `docs/roadmap.md` Exit Status for Step 9.
 - **Out of scope**:
   - Automated Windows installer package (`vlc-whisper-v1.0.0-win64.exe` installer - reserved for Milestone 4).
@@ -161,6 +163,7 @@ target_compile_definitions(vlc_whisper_plugin PRIVATE
 ## Test Plan
 
 ### Automated Tests
+
 1. `clang-format --dry-run --Werror plugin/src/vlc_whisper_module.c plugin/include/vw_plugin.h tests/integration/test_plugin_load.c`
 2. `cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug && ctest --preset linux-x64-debug`
 3. `ctest --test-dir build/linux-x64-debug -T memcheck`
@@ -179,12 +182,13 @@ target_compile_definitions(vlc_whisper_plugin PRIVATE
    ```cmd
    "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
    ```
-   *Expected Output*: Displays registered `VLC-Whisper` audio filter module.
+   _Expected Output_: Displays registered `VLC-Whisper` audio filter module.
 4. **Inspect Debug Log Output**:
+   Since `vlc_whisper` is an audio filter, its `vw_plugin_open` callback is *only* executed when an audio stream is actually playing and the filter is explicitly inserted into the audio chain. Just launching VLC will not open the filter.
    ```cmd
-   "C:\Program Files\VideoLAN\VLC\vlc.exe" -vvv --reset-plugins-cache --color --module vlc_whisper
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --audio-filter=vlc_whisper --extraintf=logger --file-logging --logfile=vlc-debug.log -vvv C:\Windows\Media\tada.wav vlc://quit
    ```
-   *Expected Output*: Contains `[vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened` debug log entry.
+   _Expected Output_: Open `vlc-debug.log` and verify it contains the `[vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened` debug log entry.
 
 ## Definition of Done
 
