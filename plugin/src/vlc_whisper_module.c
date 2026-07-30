@@ -4,6 +4,7 @@
 #include <vlc_common.h>
 #include <vlc_filter.h>
 #include <vlc_plugin.h>
+#include <vlc_block.h>
 
 #include "vw_log.h"
 #include "vw_plugin.h"
@@ -29,15 +30,70 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
   }
 }
 
+#include "vw_audio_capture.h"
+#include "vw_queue.h"
+
+// Plugin instance state
+typedef struct {
+  vw_spsc_queue_t* queue;
+  vw_audio_capture_t capture;
+} vw_plugin_sys_t;
+
 // Passthrough filter callback required by VLC filter pipeline
 static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
-  (void)p_filter;
+  vw_plugin_sys_t* sys = (vw_plugin_sys_t*)p_filter->p_sys;
+  if (!sys || !p_block) {
+    return p_block;  // Passthrough unchanged
+  }
+
+  // Determine format from VLC pipeline
+  vw_audio_format_t fmt;
+  if (p_filter->fmt_in.audio.i_format == VLC_CODEC_FL32) {
+    fmt = VW_AUDIO_FORMAT_FL32;
+  } else if (p_filter->fmt_in.audio.i_format == VLC_CODEC_S16N) {
+    fmt = VW_AUDIO_FORMAT_S16;
+  } else if (p_filter->fmt_in.audio.i_format == VLC_CODEC_S32N) {
+    fmt = VW_AUDIO_FORMAT_S32;
+  } else {
+    // Unsupported codec; skip tapping but allow passthrough
+    return p_block;
+  }
+
+  vw_audio_input_t input = {.pcm_data = p_block->p_buffer,
+                            .frame_count = p_block->i_nb_samples,
+                            .pts_us = p_block->i_pts,  // VLC PTS is in microseconds
+                            .format = fmt,
+                            .sample_rate = p_filter->fmt_in.audio.i_rate,
+                            .channels = p_filter->fmt_in.audio.i_channels};
+
+  vw_audio_capture_process_block(&sys->capture, &input);
+
+  // Return the original block untouched to preserve user playback quality
   return p_block;
 }
 
 // Internal plugin callbacks adhering to Rule 3 vw_ prefix
 static int vw_plugin_open(vlc_object_t* obj) {
   filter_t* p_filter = (filter_t*)obj;
+
+  vw_plugin_sys_t* sys = calloc(1, sizeof(vw_plugin_sys_t));
+  if (!sys) {
+    return VLC_ENOMEM;
+  }
+
+  // Create an 8-second buffer capacity assuming 16kHz Mono chunks (16384 bytes = 512ms per chunk)
+  // 8 seconds / 0.512 seconds = ~16 chunks
+  sys->queue = vw_spsc_queue_create(16);
+  if (!sys->queue) {
+    free(sys);
+    return VLC_ENOMEM;
+  }
+
+  sys->capture.target_sample_rate = VW_AUDIO_TARGET_RATE;
+  sys->capture.target_channels = 1;
+  sys->capture.queue = sys->queue;
+
+  p_filter->p_sys = (filter_sys_t*)sys;
   p_filter->pf_audio_filter = vw_plugin_filter;
 
   vw_log_set_sink(vw_plugin_log_sink, obj);
@@ -46,7 +102,18 @@ static int vw_plugin_open(vlc_object_t* obj) {
 }
 
 static void vw_plugin_close(vlc_object_t* obj) {
-  (void)obj;
+  filter_t* p_filter = (filter_t*)obj;
+  vw_plugin_sys_t* sys = (vw_plugin_sys_t*)p_filter->p_sys;
+
+  if (sys) {
+    if (sys->queue) {
+      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_CLOSE", "Dropped %llu us of audio during session",
+                   (unsigned long long)vw_spsc_queue_get_dropped_microseconds(sys->queue));
+      vw_spsc_queue_destroy(sys->queue);
+    }
+    free(sys);
+  }
+
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_CLOSE", "vlc-whisper audio filter module closed");
   vw_log_set_sink(NULL, NULL);
 }

@@ -57,7 +57,7 @@ Ship/support only local `tiny.en` CPU for MVP. Expose a model manifest abstracti
 
 **Status:** Accepted.
 
-When inference cannot keep up, drop old unprocessed audio and make this measurable. Never block VLC's audio path or slow playback. This produces caption gaps under load but preserves the media player's core responsibility.
+When inference cannot keep up, drop new unprocessed audio and make this measurable. Never block VLC's audio path or slow playback. This produces caption gaps under load but preserves the media player's core responsibility.
 
 ## ADR-009: No database
 

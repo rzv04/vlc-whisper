@@ -156,8 +156,11 @@ To install and verify the VLC plugin manually on Windows:
    *Expected Output*: You should see the `VLC-Whisper` audio filter module listed.
 
 3. **Inspect Debug Logs**:
-   To verify that the module's `vw_plugin_open` and `vw_plugin_close` functions execute properly:
+   Audio filters only instantiate when audio media is playing and the filter is explicitly selected in the audio chain. To trigger `vw_plugin_open` and write debug output to a file:
    ```cmd
-   "C:\Program Files\VideoLAN\VLC\vlc.exe" -vvv --reset-plugins-cache --color --module vlc_whisper
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --audio-filter=vlc_whisper --file-logging --logfile=vlc-debug.log -vvv C:\path\to\audio.mp3
    ```
-   *Expected Output*: Look for `[vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened` in the log output.
+   *(Note: For `.mp4` video files in Virtual Machines or dual-GPU laptops, add `--avcodec-hw=none` to avoid D3D11 hardware acceleration crashes).*
+   
+   *Expected Output*: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.
+

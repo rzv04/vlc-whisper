@@ -17,7 +17,8 @@ endmacro()
 
 add_vw_test(test_protocol_codec unit/test_protocol_codec.c)
 add_vw_test(test_protocol_validate unit/test_protocol_validate.c)
-add_vw_test(test_queue unit/test_queue.c)
+add_vw_test(test_queue unit/test_queue.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
+add_vw_test(test_audio_capture unit/test_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
 add_vw_test(test_segment_builder unit/test_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c)
 add_vw_test(test_caption_timing unit/test_caption_timing.c)
 

@@ -102,7 +102,7 @@ sequenceDiagram
 flowchart TD
     IN[PCM arrives with media PTS] --> SPACE{Queue has capacity?}
     SPACE -->|Yes| ENQ[Enqueue chunk]
-    SPACE -->|No| DROP[Drop oldest unprocessed audio]
+    SPACE -->|No| DROP[Drop newest unprocessed audio]
     DROP --> COUNT[Increase audio_dropped_us\nand rate-limited diagnostic counter]
     COUNT --> ENQ
     ENQ --> SEND[Sender forwards chunks to worker]

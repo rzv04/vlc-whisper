@@ -40,7 +40,19 @@ All protocol times are signed 64-bit microseconds in the media timeline (`pts_us
 
 Start with an 8-second analysis window, 2-second hop, and a hard 15-second audio backlog. These are configuration defaults, not compatibility guarantees. whisper.cpp offers a C-style API, VAD support, CPU-only operation, quantized models, and an example that repeatedly transcribes short real-time windows; its own stream example is described as naive, so overlap/deduplication and latency measurement are product work. [page:0]
 
-Backpressure rule: playback wins. If the audio queue is full, discard the oldest unprocessed audio, increment `audio_dropped_us`, emit a rate-limited warning, and continue. Never slow VLC. Captions after a gap may be missing; they must never be timestamped as if they were complete.
+### Audio chunk granularity
+
+The plugin splits incoming PCM into fixed-size chunks of `VW_AUDIO_CHUNK_MAX_PCM_BYTES` (16384 bytes), which holds 8192 `int16_t` samples — **512 ms at 16 kHz**. This is ~8x headroom over a typical VLC audio block (up to 4096 frames at 48 kHz, yielding ~1365 samples after downsampling to 16 kHz). Chunks are stack-allocated inside the realtime callback and carry PCM inline to guarantee zero heap allocation (Rule 4).
+
+The bounded SPSC queue defaults to **32 chunks** capacity. At 512 ms per chunk this provides a ~16-second buffer, matching the 15-second backlog target. The queue depth directly relates to the other timing parameters:
+
+| Parameter | Duration | In chunks (512 ms each) |
+|---|---|---|
+| Analysis window | 8 s | 16 chunks |
+| Hop | 2 s | 4 chunks |
+| Backlog (queue capacity) | ~16 s | 32 chunks |
+
+Backpressure rule: playback wins. If the audio queue is full, discard the newest unprocessed audio, increment `audio_dropped_us`, emit a rate-limited warning, and continue. Never slow VLC. Captions after a gap may be missing; they must never be timestamped as if they were complete.
 
 ## Session state
 
@@ -104,11 +116,17 @@ typedef struct {
 	char *utf8; 
 } vw_caption_segment;
 
-typedef struct { 
-	int64_t start_pts_us, duration_us; 
-	uint32_t sample_rate, channels; 
-	uint32_t bytes; 
-} vw_audio_chunk;
+// Plugin-side: inline int16_t PCM for zero-allocation realtime capture (Rule 4).
+// Worker-side (vw_audio_pcm32_t) uses heap float32 for whisper.cpp compatibility.
+#define VW_AUDIO_CHUNK_MAX_PCM_BYTES 16384  // 8192 int16_t samples = 512 ms at 16 kHz
+typedef struct {
+  int64_t start_pts_us;
+  int64_t duration_us;
+  uint32_t sample_rate;    // 16000 Hz
+  uint32_t channels;       // 1 (mono)
+  uint32_t bytes;          // actual PCM byte count
+  uint8_t pcm_data[VW_AUDIO_CHUNK_MAX_PCM_BYTES];  // fixed-size inline buffer
+} vw_audio_chunk_t;
 ```
 
 Text is UTF-8, normalized only as required for display, with a conservative maximum of 1,024 bytes per segment. Segment IDs are worker-monotonic within a session. The plugin keeps only a small time-ordered caption cache, e.g. 60 seconds, and never persists audio or transcript in MVP.
