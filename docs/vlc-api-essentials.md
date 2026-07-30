@@ -1,25 +1,27 @@
 # VLC 3.0 C API & Core Engine Reference
 
 > **Vendor dependency:** [`VLC 3.0.23`](file:///home/razvan/vlc-whisper/.worktrees/gemini/worker/third_party/vlc-3.0.23/) — linked via public VLC headers in `plugin/include` & `worker/third_party/vlc-3.0.23/include/`.  
-> **Header inclusion:** Always include `<vlc_common.h>` before any other VLC headers (`vlc_block.h`, `vlc_filter.h`, `vlc_input.h`, etc.). Protect header inclusion order using `// clang-format off` / `// clang-format on` to prevent alphabetical header reordering.  
+> **Header inclusion:** Always include `<vlc_common.h>` before any other VLC headers (`vlc_block.h`, `vlc_filter.h`, `vlc_input.h`, etc.). Protect header inclusion order using `// clang-format off` / `// clang-format on` to prevent alphabetical header reordering by `clang-format`.  
 > **Linked by:** `vlc_whisper_plugin` only (the worker executable *must not* link VLC headers or libraries).
 
-This document specifies the essential VLC 3.0 C API contracts, internal engine mechanics, object tree traversal algorithms, seeking/discontinuity signals, and livestream/VOD query interfaces required for the VLC-Whisper integration.
+This document provides a comprehensive, deep-dive specification of VLC 3.0 C API contracts, internal engine mechanics, object tree traversal algorithms, clock and timestamp synchronization, stream capability detection (seeking, IPTV, VOD), and rendering subsystem integration.
 
 ---
 
 ## Table of Contents
 
-1. [Core Types & Structures](#1-core-types--structures)
+1. [Core Structures & Types](#1-core-structures--types)
 2. [Audio Filter Pipeline & Realtime Contract](#2-audio-filter-pipeline--realtime-contract)
-3. [Seeking & Timeline Discontinuity Signals](#3-seeking--timeline-discontinuity-signals)
-4. [Livestream, IPTV, and Network VOD Detection](#4-livestream-iptv-and-network-vod-detection)
-5. [VLC Object Tree & Vout Retrieval Architecture](#5-vlc-object-tree--vout-retrieval-architecture)
-6. [Subtitle & OSD Rendering APIs](#6-subtitle--osd-rendering-apis)
+3. [VLC Clock & Timeline Synchronization Architecture](#3-vlc-clock--timeline-synchronization-architecture)
+4. [Seeking & Timeline Discontinuity Signals](#4-seeking--timeline-discontinuity-signals)
+5. [Livestream, IPTV, and Network VOD Detection](#5-livestream-iptv-and-network-vod-detection)
+6. [VLC Object Tree & Vout Retrieval Architecture](#6-vlc-object-tree--vout-retrieval-architecture)
+7. [Subtitle & OSD Rendering Subsystem](#7-subtitle--osd-rendering-subsystem)
+8. [Module Registration & ABI Invariants](#8-module-registration--abi-invariants)
 
 ---
 
-## 1. Core Types & Structures
+## 1. Core Structures & Types
 
 ### `struct filter_t` (`<vlc_filter.h>`)
 
@@ -31,6 +33,7 @@ Structure representing an audio, video, or subtitle filter plugin instance insid
 | `fmt_in` | `es_format_t` | Input elementary stream format (sample rate, channels, codec format). |
 | `fmt_out` | `es_format_t` | Output elementary stream format. **Must match `fmt_in.audio` for passthrough**. |
 | `pf_audio_filter` | `block_t* (*)(filter_t*, block_t*)` | Callback function executed per audio block on the audio output thread. |
+| `obj` | `vlc_object_t` | Base object header (contains `parent`, `libvlc`, `object_type`). |
 
 > **Critical Invariant:** Audio passthrough filters MUST explicitly set `p_filter->fmt_out.audio = p_filter->fmt_in.audio;` during module initialization (`vw_plugin_open`). Uninitialized `fmt_out` causes VLC to insert an unwanted automatic resampler, leading to severe PTS drift and audio distortion.
 
@@ -44,6 +47,8 @@ Structure representing a discrete unit of raw PCM or encoded media data moving t
 | `i_buffer` | `size_t` | Size of payload buffer in bytes. |
 | `i_nb_samples` | `unsigned` | Number of audio frames/samples contained in the block. |
 | `i_pts` | `vlc_tick_t` | Presentation TimeStamp in signed 64-bit microseconds (`pts_us`). |
+| `i_dts` | `vlc_tick_t` | Decoding TimeStamp in signed 64-bit microseconds. |
+| `i_length` | `vlc_tick_t` | Duration of the audio block in microseconds. |
 | `i_flags` | `unsigned` | Status bitfield (`BLOCK_FLAG_DISCONTINUITY`, `BLOCK_FLAG_HEADER`, etc.). |
 
 ### `struct input_thread_t` (`<vlc_input.h>`)
@@ -73,9 +78,44 @@ The audio filter callback `vw_plugin_filter` is executed synchronously on VLC's 
 | `VLC_CODEC_S16N` | `VW_AUDIO_FORMAT_S16` | 16-bit Signed Integer Native Endian |
 | `VLC_CODEC_S32N` | `VW_AUDIO_FORMAT_S32` | 32-bit Signed Integer Native Endian |
 
+### Internal Audio Pipeline Execution Flow (`src/audio_output/filters.c`)
+
+```text
+[Decoder] ──> aout_FiltersPipelinePlay()
+                    │
+                    ├── Filter 1: vlc_whisper (Passthrough)
+                    │     ├── Reads PCM & enqueues to SPSC queue
+                    │     └── Returns p_block untouched
+                    │
+                    ├── Filter 2: Volume / Equalizer
+                    │
+                    └── [Audio Output Device Drivers (ALSA / WASAPI / PulseAudio)]
+```
+
 ---
 
-## 3. Seeking & Timeline Discontinuity Signals
+## 3. VLC Clock & Timeline Synchronization Architecture
+
+### `vlc_tick_t` & Microsecond Resolution
+
+In VLC 3.0, all time measurements use **`vlc_tick_t`**, which is defined as a signed 64-bit integer (`int64_t`) representing time in **microseconds** ($1\text{ s} = 1,000,000\text{ ticks}$).
+
+```c
+#define VLC_TICK_INVALID INT64_MIN
+#define VLC_TICK_0 INT64_C(0)
+#define VLC_TICK_FROM_MS(ms) ((vlc_tick_t)(ms) * 1000)
+#define VLC_TICK_FROM_SEC(s) ((vlc_tick_t)(s) * 1000000)
+```
+
+### Media PTS vs Wall-Clock Time
+
+- **Media PTS (`i_pts`)**: The exact position on the media timeline. Must always be used for caption timing.
+- **Wall-Clock Time (`vlc_tick_now()`)**: System clock time. **Must NEVER be used for caption timing**.
+- **Reason**: Using wall-clock time causes severe caption desynchronization during video pause, playback rate changes (0.5x, 2.0x), and user seeking.
+
+---
+
+## 4. Seeking & Timeline Discontinuity Signals
 
 VLC signals user seeking, playback rate changes, or media item transitions through explicit block flags and PTS jumps.
 
@@ -102,7 +142,7 @@ vlc_whisper_module (pf_audio_filter)
 
 ---
 
-## 4. Livestream, IPTV, and Network VOD Detection
+## 5. Livestream, IPTV, and Network VOD Detection
 
 VLC categorizes media inputs into **Seekable VOD / Local Files** vs **Live IPTV / Network Streams** via `input_Control()` query flags.
 
@@ -137,7 +177,7 @@ input_Control((input_thread_t*)p_input, INPUT_CAN_PAUSE, &b_can_pause);
 
 ---
 
-## 5. VLC Object Tree & Vout Retrieval Architecture
+## 6. VLC Object Tree & Vout Retrieval Architecture
 
 ### Object Tree Structure
 
@@ -212,7 +252,7 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
 
 ---
 
-## 6. Subtitle & OSD Rendering APIs
+## 7. Subtitle & OSD Rendering Subsystem
 
 ### `vout_OSDText` (`<vlc_vout_osd.h>`)
 
@@ -231,3 +271,32 @@ void vout_OSDText(vout_thread_t *vout, int channel, int position, vlc_tick_t dur
 | `text` | `const char*` | UTF-8 string | Subtitle caption text to present on screen. |
 
 > **Memory Rule:** Always call `vlc_object_release(VLC_OBJECT(vout))` immediately after calling `vout_OSDText()` to decrement reference count and avoid memory leaks.
+
+---
+
+## 8. Module Registration & ABI Invariants
+
+### VLC Module Entry Macros
+
+Every VLC plugin module exports a entry point macro (`vlc_module_begin` ... `vlc_module_end`) that expands to the `vlc_entry__3_0_0f` ABI symbol required by VLC's plugin loader:
+
+```c
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+vlc_module_begin()
+    set_shortname("VLC-Whisper")
+    set_description("Offline Whisper AI Captions Filter")
+    set_capability("audio filter", 0)
+    add_shortcut("vlc_whisper", "whisper")
+    set_callbacks(vw_plugin_open, vw_plugin_close)
+vlc_module_end()
+#pragma GCC diagnostic pop
+```
+
+| Macro | Description |
+|---|---|
+| `set_shortname` | Short human-readable identifier for VLC settings UI. |
+| `set_description` | Full plugin description displayed in VLC module lists. |
+| `set_capability` | Category string (`"audio filter"`) and priority score (`0`). |
+| `add_shortcut` | Command line flags (`--audio-filter=vlc_whisper`). |
+| `set_callbacks` | Initialization (`open`) and cleanup (`close`) function pointers. |
