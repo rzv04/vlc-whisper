@@ -24,13 +24,13 @@ caption receiver thread -- timed segments --> caption presenter (C)
                                              VLC subtitle/OSD path
 ```
 
-| Component | Owns | Must not do |
-|---|---|---|
-| Capture module | Audio-format validation, PTS mapping, bounded PCM enqueue | Wait for worker, infer, write pipe, allocate per audio block |
-| IPC sender | Session handshake, PCM framing, queue drain, backpressure | Call VLC presentation API |
-| Worker | Model lifetime, VAD/windowing, inference, segment deduplication | Read arbitrary paths, expose network service, control VLC |
-| Caption receiver/presenter | Validate worker messages, schedule/show/clear captions | Trust malformed text/timestamps or block VLC playback |
-| Supervisor | Worker start/stop/restart policy and status | Restart endlessly or conceal a fatal compatibility error |
+| Component                  | Owns                                                            | Must not do                                                  |
+| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
+| Capture module             | Audio-format validation, PTS mapping, bounded PCM enqueue       | Wait for worker, infer, write pipe, allocate per audio block |
+| IPC sender                 | Session handshake, PCM framing, queue drain, backpressure       | Call VLC presentation API                                    |
+| Worker                     | Model lifetime, VAD/windowing, inference, segment deduplication | Read arbitrary paths, expose network service, control VLC    |
+| Caption receiver/presenter | Validate worker messages, schedule/show/clear captions          | Trust malformed text/timestamps or block VLC playback        |
+| Supervisor                 | Worker start/stop/restart policy and status                     | Restart endlessly or conceal a fatal compatibility error     |
 
 **Open technical spike:** prove the exact VLC module combination that can both observe decoded PCM and inject properly timed text on the pinned Windows VLC. Do this before committing to an out-of-tree distribution strategy. If native timed subtitle injection cannot be made reliable, the temporary MVP fallback is a video-overlay/OSD renderer; it is not equivalent to a selectable native subtitle track.
 
@@ -46,11 +46,11 @@ The plugin splits incoming PCM into fixed-size chunks of `VW_AUDIO_CHUNK_MAX_PCM
 
 The bounded SPSC queue defaults to **32 chunks** capacity. At 512 ms per chunk this provides a ~16-second buffer, matching the 15-second backlog target. The queue depth directly relates to the other timing parameters:
 
-| Parameter | Duration | In chunks (512 ms each) |
-|---|---|---|
-| Analysis window | 8 s | 16 chunks |
-| Hop | 2 s | 4 chunks |
-| Backlog (queue capacity) | ~16 s | 32 chunks |
+| Parameter                | Duration | In chunks (512 ms each) |
+| ------------------------ | -------- | ----------------------- |
+| Analysis window          | 8 s      | 16 chunks               |
+| Hop                      | 2 s      | 4 chunks                |
+| Backlog (queue capacity) | ~16 s    | 32 chunks               |
 
 Backpressure rule: playback wins. If the audio queue is full, discard the newest unprocessed audio, increment `audio_dropped_us`, emit a rate-limited warning, and continue. Never slow VLC. Captions after a gap may be missing; they must never be timestamped as if they were complete.
 
@@ -72,6 +72,7 @@ MVP discontinuity policy: detect a non-monotonic PTS, seek event, rate change, s
 Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit capability token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
 
 ### Transport Timeouts & Return Semantics
+
 - **Connection Accept Timeout**: 10 seconds. `vw_ipc_listen()` waits up to 10s (`poll()` on POSIX, `WaitForSingleObject` on Win32) for an incoming plugin connection before closing the socket/pipe and self-terminating (returns `NULL`).
 - **I/O Read/Write Timeout**: 3 seconds. `vw_ipc_receive()` and `vw_ipc_send()` enforce a 3-second timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO` on POSIX, overlapped `WaitForSingleObject(3000)` on Win32).
 - **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` on 3s read timeout (allowing worker loop to continue waiting during long video pauses), and `-1` on fatal error or peer disconnect (EOF / broken pipe).
@@ -89,31 +90,31 @@ u8[payload_length] payload
 
 Reject a wrong major version, unknown mandatory type, oversized payload, bad token, invalid UTF-8, impossible PTS range, non-monotonic sequence, or incorrect session ID. Close the connection and mark the session failed; do not retry unboundedly.
 
-| Type | Direction | Required payload |
-|---|---|---|
-| `HELLO` / `HELLO_ACK` | both | version range, session ID, 32-byte token, capabilities |
-| `START` / `STARTED` | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin |
-| `AUDIO` | plugin -> worker | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes |
-| `PAUSE`, `RESUME`, `STOP` | plugin -> worker | session ID, reason where applicable |
-| `SEGMENT` | worker -> plugin | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence |
-| `STATUS` | worker -> plugin | state, queue depth, inference latency, dropped audio |
-| `ERROR` | both | stable code, recoverability, safe diagnostic text |
-| `SHUTDOWN` | both | none |
+| Type                      | Direction                | Required payload                                                                       |
+| ------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
+| `HELLO` / `HELLO_ACK`     | both                     | version range, session ID, 32-byte token, capabilities                                 |
+| `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin |
+| `AUDIO`                   | plugin -> worker         | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes                   |
+| `PAUSE`, `RESUME`, `STOP` | plugin -> worker         | session ID, reason where applicable                                                    |
+| `SEGMENT`                 | worker -> plugin         | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence                    |
+| `STATUS`                  | worker -> plugin         | state, queue depth, inference latency, dropped audio                                   |
+| `ERROR`                   | both                     | stable code, recoverability, safe diagnostic text                                      |
+| `SHUTDOWN`                | both                     | none                                                                                   |
 
 The worker emits only final segments in MVP. Partial/revision messages are reserved for protocol major 1 now so seek/live support does not force a new transport; the presenter may ignore them safely.
 
 ## Data model
 
 ```c
-typedef struct { 
+typedef struct {
 	uint8_t bytes[16];
 } vw_session_id;
 
-typedef struct { 
-	int64_t start_pts_us, end_pts_us; 
-	uint64_t id; 
-	bool final; 
-	char *utf8; 
+typedef struct {
+	int64_t start_pts_us, end_pts_us;
+	uint64_t id;
+	bool final;
+	char *utf8;
 } vw_caption_segment;
 
 // Plugin-side: inline int16_t PCM for zero-allocation realtime capture (Rule 4).
@@ -141,13 +142,13 @@ Treat model files and worker binaries as trusted package inputs: verify manifest
 
 ### 1. Component Binary Artifacts
 
-| Binary Artifact | Type | Target Installation Location | Purpose |
-|---|---|---|---|
-| `libvlc_whisper_plugin.dll` | Native C VLC Module | `VLC/plugins/misc/` | VLC audio capture, SPSC queue, IPC client, subtitle renderer |
-| `vlc-whisper-worker.exe` | Standalone C Host | `%LOCALAPPDATA%\VLC-Whisper\bin\` | Isolated Whisper inference worker & named pipe IPC server |
-| `manifest.json` | JSON Registry | `%LOCALAPPDATA%\VLC-Whisper\models\` | Offline model manifest and SHA-256 integrity rules |
-| `ggml-tiny.en.bin` | GGML Weights | `%LOCALAPPDATA%\VLC-Whisper\models\` | Default MVP GGML model weights (~75 MB) |
-| `vlc-whisper-settings.exe` *(Post-MVP)* | Standalone GUI | `%LOCALAPPDATA%\VLC-Whisper\bin\` | Configuration GUI (Model downloader, GPU backends, diagnostics) |
+| Binary Artifact                         | Type                | Target Installation Location         | Purpose                                                         |
+| --------------------------------------- | ------------------- | ------------------------------------ | --------------------------------------------------------------- |
+| `libvlc_whisper_plugin.dll`             | Native C VLC Module | `VLC/plugins/misc/`                  | VLC audio capture, SPSC queue, IPC client, subtitle renderer    |
+| `vlc-whisper-worker.exe`                | Standalone C Host   | `%LOCALAPPDATA%\VLC-Whisper\bin\`    | Isolated Whisper inference worker & named pipe IPC server       |
+| `manifest.json`                         | JSON Registry       | `%LOCALAPPDATA%\VLC-Whisper\models\` | Offline model manifest and SHA-256 integrity rules              |
+| `ggml-tiny.en.bin`                      | GGML Weights        | `%LOCALAPPDATA%\VLC-Whisper\models\` | Default MVP GGML model weights (~75 MB)                         |
+| `vlc-whisper-settings.exe` _(Post-MVP)_ | Standalone GUI      | `%LOCALAPPDATA%\VLC-Whisper\bin\`    | Configuration GUI (Model downloader, GPU backends, diagnostics) |
 
 ### 2. MVP Distribution Package (Windows x64)
 
@@ -167,6 +168,7 @@ vlc-whisper-v1.0.0-win64/
 ```
 
 **Installation Flow**:
+
 1. Installer detects the local VLC installation directory (e.g. `C:\Program Files\VideoLAN\VLC`).
 2. Copies `libvlc_whisper_plugin.dll` to `VLC/plugins/misc/`.
 3. Copies `vlc-whisper-worker.exe`, `manifest.json`, and `ggml-tiny.en.bin` to `%LOCALAPPDATA%\VLC-Whisper\`.
@@ -177,7 +179,6 @@ vlc-whisper-v1.0.0-win64/
 - **Optional Model Downloader GUI**: `vlc-whisper-settings.exe` allows users to download larger models (`base`, `small`, `medium`) or language packs on-demand into `%LOCALAPPDATA%\VLC-Whisper\models\`.
 - **GPU Accelerator Variants**: Optional backend DLLs (`ggml-cuda.dll`, `ggml-vulkan.dll`) bundled with worker package for GPU acceleration.
 - **Linux Distribution**: Packaged as `.deb`, Flatpak extension, or tarball placing `libvlc_whisper_plugin.so` in `~/.local/lib/vlc/plugins/` and `vlc-whisper-worker` in `~/.local/bin/`.
-
 
 ## Observability
 

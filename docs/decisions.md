@@ -82,3 +82,14 @@ Consequences:
 1. **Crash & Thread Isolation**: Keeps UI event loop execution out of VLC's process space, preventing UI freezes or thread deadlocks with VLC's main Qt window thread.
 2. **Independent Execution**: Allows end-users to launch settings and pre-download models directly from the Start Menu without opening VLC or playing media first.
 3. **VLC Menu Invocation**: The VLC plugin DLL registers a lightweight menu item under `Tools -> VLC-Whisper Settings...` which invokes `vlc-whisper-settings.exe` out-of-process (`CreateProcess()` / `exec()`).
+
+## ADR-012: Out-of-tree packaging over custom VLC build
+
+**Status:** Accepted.
+
+The VLC-Whisper plugin will be shipped as an external out-of-tree plugin with a standalone installer, rather than distributing a custom build of VLC.
+
+Consequences:
+1. **Compatibility**: We must strictly target the ABI of a pinned VLC release (e.g. 3.x series) to ensure the DLL loads correctly in user installations.
+2. **Installation**: The installer will locate the user's existing VLC installation directory and copy `libvlc_whisper_plugin.dll` into the `plugins/` subdirectory.
+3. **No Engine Forks**: We cannot modify VLC core player behavior or patch VLC itself to accommodate our subtitle or audio timing needs. We must use public VLC APIs and handle synchronization carefully within the plugin boundaries.
