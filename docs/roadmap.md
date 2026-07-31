@@ -31,17 +31,32 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [x] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vlc_whisper_module.c`).
 - [x] 10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior (`vw_audio_capture.c`, `vw_queue.c`).
 - [x] 11. Independently prove caption display: OSD overlay route implemented and verified (`vw_caption_presenter.c`); native SPU deferred.
-- [x] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior.
+- [x] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior (ADR-012).
 
 **Exit Status:** **DONE** — A test module sees timestamped audio and displays a static/deterministic timed caption on the reference VLC.
 
 ---
 
-## Milestone 3: Integrated live captioning pipeline (Planned)
+## Milestone 3: Local & Live MVP with Seeking & Play/Pause (Planned)
 
 - [ ] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
 - [ ] 14. Feed captured PCM chunks from SPSC queue across IPC transport to worker process in real time.
 - [ ] 15. Receive incoming `SEGMENT` frames on plugin background thread and trigger `vw_caption_presenter_display()`.
-- [ ] 16. Implement seek/discontinuity handling: clear captions, send `STOP` (`SEEK_DISCONTINUITY`), and reset session on non-monotonic PTS.
+- [ ] 16. Implement Play/Pause lifecycle: send `PAUSE`/`RESUME` IPC control frames, suspend PCM queue forwarding on pause, and resume timeline PTS sync on resume.
+- [ ] 17. Implement Seeking & Discontinuity support: detect `BLOCK_FLAG_DISCONTINUITY` / non-monotonic PTS, clear active presenter captions, send `STOP` (`SEEK_DISCONTINUITY`), reset SPSC queue/VAD state, and start new session epoch without interrupting playback.
+- [ ] 18. Package local developer build and run end-to-end local video and stream acceptance tests.
 
-**Exit Status:** **PLANNED** — End-to-end real-time captioning working during media playback with zero audio stutter or memory leaks.
+**Exit Status:** **PLANNED** — Local and stream media show real-time captions with full play/pause timeline sync and seamless seeking support; zero audio stutter or memory leaks.
+
+---
+
+## Milestone 4: Release Discipline & Post-MVP (Planned)
+
+- [ ] 19. Add CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact hashes, and SBOM/licenses.
+- [ ] 20. Add Windows VM smoke test matrix for pinned VLC installation.
+- [ ] 21. Standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 for model selection, CPU thread count, and language policy.
+- [ ] 22. Multilingual models (`small`, `medium`, `large`) and automatic language detection.
+- [ ] 23. Native SPU subpicture channel integration (`subpicture_New`/`vout_PutSubpicture`).
+- [ ] 24. Release documentation: troubleshooting, privacy statement, uninstall guide, and bug report templates.
+
+**Exit Status:** **PLANNED** — Reproducible signed/hashed release package with documented compatibility matrix.

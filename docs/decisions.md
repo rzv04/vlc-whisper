@@ -34,11 +34,13 @@ Use authenticated, current-user-only named pipes on Windows and Unix-domain `SOC
 
 MVP renders final segments only. This reduces flicker and avoids requiring subtitle replacement semantics before the VLC presentation spike is proven. Keep segment IDs and reserved `replace` capability so later partial hypotheses can revise a rolling caption area.
 
-## ADR-006: Deliberate no-seek MVP
+## ADR-006: Seeking and Play/Pause lifecycle in MVP
 
-**Status:** Accepted, temporary.
+**Status:** Accepted (Updated).
 
-Seeking must be detected and handled as a session-ending discontinuity: clear captions, stop worker input, present a single local status, retain VLC playback. Do not try to block VLC's seek control and do not crash. The first post-MVP feature is `RESET(timeline_epoch)` plus queue/segment invalidation.
+Seeking and Play/Pause lifecycle are IN-SCOPE for the MVP (Milestone 3):
+1. **Play/Pause**: When VLC pauses playback, the plugin sends a `PAUSE` control frame over IPC and suspends audio forwarding. Resuming sends `RESUME` and resumes timeline PTS sync.
+2. **Seeking / Discontinuity**: When VLC seeks (`BLOCK_FLAG_DISCONTINUITY` or non-monotonic PTS jump), the plugin clears active presenter captions, sends a `STOP` (`SEEK_DISCONTINUITY`) control frame over IPC, flushes the SPSC queue & VAD state, and initializes a new session epoch (`timeline_origin_pts_us`) seamlessly without disabling captions or interrupting VLC media playback.
 
 ## ADR-007: Model policy
 
