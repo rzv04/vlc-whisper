@@ -41,10 +41,7 @@ int main(void) {
 
   // Check the downmixed value (0.5 float = ~16383 int16)
   int16_t* chunk1_pcm = (int16_t*)chunk1.pcm_data;
-  // Note: our boxcar filter averages 3 input frames (6 samples) for the first output frame.
-  // Since we only set the first frame, sum = 1.0, count = 6, avg = 1.0/6.0.
-  // int16 val = (1.0/6.0) * 32767 = 5461.
-  assert(chunk1_pcm[0] >= 5460 && chunk1_pcm[0] <= 5462);
+  assert(chunk1_pcm[0] >= 16382 && chunk1_pcm[0] <= 16384);
 
   vw_audio_chunk_t chunk2;
   assert(vw_spsc_queue_pop(q, &chunk2) != NULL);
@@ -53,6 +50,10 @@ int main(void) {
   assert(chunk2.duration_us == (1808 * 1000000LL) / 16000);
 
   assert(vw_spsc_queue_pop(q, &chunk2) == NULL);
+
+  (void)success;
+  (void)chunk1_pcm;
+  (void)chunk2;
 
   vw_spsc_queue_destroy(q);
   free(pcm);

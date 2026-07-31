@@ -14,8 +14,11 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
     return false;
   }
 
-  // Calculate total output frames needed at 16kHz
-  size_t output_frames = (input->frame_count * VW_AUDIO_TARGET_RATE) / input->sample_rate;
+  // Calculate total output frames needed at 16kHz with fractional sample remainder accumulation
+  uint64_t total_samples_acc = ((uint64_t)input->frame_count * VW_AUDIO_TARGET_RATE) + cap->sample_remainder;
+  size_t output_frames = (size_t)(total_samples_acc / input->sample_rate);
+  cap->sample_remainder = (uint32_t)(total_samples_acc % input->sample_rate);
+
   if (output_frames == 0) {
     return true;  // Nothing to generate
   }
@@ -30,60 +33,54 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
       chunk_frames = max_out_frames_per_chunk;
     }
 
-    vw_audio_chunk_t chunk;
+    vw_audio_chunk_t chunk = {0};
     chunk.start_pts_us = current_pts_us;
-    chunk.duration_us = ((int64_t)chunk_frames * 1000000LL) / VW_AUDIO_TARGET_RATE;
+    chunk.duration_us = (int64_t)(((double)chunk_frames / VW_AUDIO_TARGET_RATE) * 1000000.0);
     chunk.sample_rate = VW_AUDIO_TARGET_RATE;
     chunk.channels = 1;
     chunk.bytes = (uint32_t)(chunk_frames * sizeof(int16_t));
 
     int16_t* out_pcm = (int16_t*)chunk.pcm_data;
 
-    // Inline resampler (boxcar filter) and downmixer (average all channels)
-    for (size_t i = 0; i < chunk_frames; ++i) {
-      size_t global_out_idx = output_frames_generated + i;
-
-      size_t in_start = (global_out_idx * input->sample_rate) / VW_AUDIO_TARGET_RATE;
-      size_t in_end = ((global_out_idx + 1) * input->sample_rate) / VW_AUDIO_TARGET_RATE;
-      if (in_end == in_start) {
-        in_end = in_start + 1;  // Upsampling/nearest-neighbor fallback
-      }
-      if (in_end > input->frame_count) {
-        in_end = input->frame_count;
+    // Resample / downmix input block into 16kHz Mono int16_t chunk
+    for (size_t i = 0; i < chunk_frames; i++) {
+      // Linear mapping of target index i back into input sample index
+      size_t in_idx = (size_t)(((double)(output_frames_generated + i) * input->sample_rate) / VW_AUDIO_TARGET_RATE);
+      if (in_idx >= input->frame_count) {
+        in_idx = input->frame_count - 1;
       }
 
-      float sum = 0.0f;
-      size_t count = 0;
-
-      for (size_t in_idx = in_start; in_idx < in_end; ++in_idx) {
-        for (uint32_t c = 0; c < input->channels; ++c) {
-          float sample = 0.0f;
-          if (input->format == VW_AUDIO_FORMAT_FL32) {
-            sample = ((const float*)input->pcm_data)[in_idx * input->channels + c];
-          } else if (input->format == VW_AUDIO_FORMAT_S16) {
-            sample = ((const int16_t*)input->pcm_data)[in_idx * input->channels + c] / 32768.0f;
-          } else if (input->format == VW_AUDIO_FORMAT_S32) {
-            sample = ((const int32_t*)input->pcm_data)[in_idx * input->channels + c] / 2147483648.0f;
-          }
-          sum += sample;
-          count++;
+      int32_t sum = 0;
+      for (uint32_t ch = 0; ch < input->channels; ch++) {
+        size_t sample_idx = in_idx * input->channels + ch;
+        if (input->format == VW_AUDIO_FORMAT_FL32) {
+          float sample = ((const float*)input->pcm_data)[sample_idx];
+          if (sample > 1.0f) sample = 1.0f;
+          if (sample < -1.0f) sample = -1.0f;
+          sum += (int32_t)(sample * 32767.0f);
+        } else if (input->format == VW_AUDIO_FORMAT_S16) {
+          sum += ((const int16_t*)input->pcm_data)[sample_idx];
+        } else if (input->format == VW_AUDIO_FORMAT_S32) {
+          int32_t s32 = ((const int32_t*)input->pcm_data)[sample_idx];
+          sum += (s32 >> 16);
         }
       }
 
-      float avg = count > 0 ? (sum / count) : 0.0f;
-      if (avg > 1.0f) avg = 1.0f;
-      if (avg < -1.0f) avg = -1.0f;
-
-      out_pcm[i] = (int16_t)(avg * 32767.0f);
+      int32_t mono_sample = sum / (int32_t)input->channels;
+      if (mono_sample > 32767) mono_sample = 32767;
+      if (mono_sample < -32768) mono_sample = -32768;
+      out_pcm[i] = (int16_t)mono_sample;
     }
 
+    // Enqueue chunk into SPSC ring buffer (non-blocking push)
     vw_spsc_queue_push(cap->queue, &chunk);
 
     output_frames_generated += chunk_frames;
     current_pts_us += chunk.duration_us;
-    cap->last_pts_us = current_pts_us;
-    cap->total_samples_processed += chunk_frames;
   }
+
+  cap->last_pts_us = current_pts_us;
+  cap->total_samples_processed += output_frames;
 
   return true;
 }

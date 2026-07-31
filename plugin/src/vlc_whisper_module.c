@@ -41,10 +41,9 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 typedef struct {
   vw_spsc_queue_t* queue;
   vw_audio_capture_t capture;
-  uint64_t block_count;
 } vw_plugin_sys_t;
 
-// Passthrough filter callback required by VLC filter pipeline
+// Passthrough filter callback required by VLC filter pipeline (100% lock-free, Rule 4 compliant)
 static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
   vw_plugin_sys_t* sys = (vw_plugin_sys_t*)p_filter->p_sys;
   if (!sys || !p_block) {
@@ -72,11 +71,6 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
                             .channels = p_filter->fmt_in.audio.i_channels};
 
   vw_audio_capture_process_block(&sys->capture, &input);
-
-  sys->block_count++;
-  if (sys->block_count % 100 == 1) {
-    vw_caption_presenter_display(p_filter, "[VLC-Whisper] Live AI Captions Active", 2000000LL);
-  }
 
   // Return the original block untouched to preserve user playback quality
   return p_block;

@@ -39,19 +39,6 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
         return (vout_thread_t*)cur;
       }
 
-      // Check if current node (e.g. playlist or libvlc) has an "input" child
-      vlc_object_t* p_input_obj = vlc_object_find_name(cur, "input");
-      if (p_input_obj) {
-        vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_INPUT_CHILD_FOUND", "Found input child under node: %s",
-                     cur->obj.object_type);
-        vout_thread_t* vout = input_GetVout((input_thread_t*)p_input_obj);
-        vlc_object_release(p_input_obj);
-        if (vout) {
-          vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_VOUT_FOUND", "Retrieved active vout via input child");
-          return vout;
-        }
-      }
-
       // Search children list of current node for input or vout
       vlc_list_t* children = vlc_list_children(cur);
       if (children) {
@@ -122,8 +109,14 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
 }
 
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
-  if (!presenter) {
+  if (!presenter || !presenter->p_filter_ctx) {
     return;
+  }
+  filter_t* p_filter = (filter_t*)presenter->p_filter_ctx;
+  vout_thread_t* vout = vw_caption_presenter_find_vout(p_filter);
+  if (vout) {
+    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 0, "");
+    vlc_object_release(VLC_OBJECT(vout));
   }
   presenter->p_filter_ctx = NULL;
 }
