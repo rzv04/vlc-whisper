@@ -49,21 +49,22 @@ flowchart TB
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> STARTING: eligible local English media starts
+    IDLE --> STARTING: eligible local/stream media starts
     STARTING --> READY: worker handshake and STARTED
     STARTING --> FAILED: worker/model/protocol failure
     READY --> PLAYING: play
-    PLAYING --> PAUSED: pause
-    PAUSED --> PLAYING: resume
-    PLAYING --> STOPPING: stop or end
-    PAUSED --> STOPPING: stop or end
+    PLAYING --> PAUSED: pause (send PAUSE)
+    PAUSED --> PLAYING: resume (send RESUME)
+    PLAYING --> STOPPING: stop or media end
+    PAUSED --> STOPPING: stop or media end
     STOPPING --> IDLE: captions cleared, IPC closed
-    PLAYING --> FAILED: seek, rate/title/source discontinuity
-    PAUSED --> FAILED: seek, rate/title/source discontinuity
+    PLAYING --> RESYNCING: seek / PTS discontinuity
+    PAUSED --> RESYNCING: seek / PTS discontinuity
+    RESYNCING --> STARTING: send STOP(SEEK) + new START epoch
     FAILED --> IDLE: item stops or changes
 ```
 
-For the MVP, `FAILED` means **caption session disabled for this item**. It never means VLC playback itself has failed.
+Seeking and discontinuity handling are **IN-SCOPE for MVP (Milestone 3)**: on seek or non-monotonic PTS, the plugin clears active captions, sends `STOP` (`SEEK_DISCONTINUITY`), resets the SPSC queue & VAD state, and re-syncs with a new `START` timeline epoch seamlessly without disabling captions or interrupting VLC playback.
 
 ## Session startup sequence
 
@@ -89,11 +90,15 @@ sequenceDiagram
         W-->>IPC: SEGMENT(final, start/end PTS, UTF-8 text)
         IPC->>VLC: Schedule/display caption
     end
-    VLC->>CAP: Pause, stop, or end
-    CAP->>IPC: PAUSE / STOP
-    IPC->>W: PAUSE / STOP
-    W-->>IPC: status/connection close
-    IPC->>VLC: Clear generated captions
+    VLC->>CAP: Pause, resume, seek, or end
+    alt Pause / Resume
+        CAP->>IPC: PAUSE / RESUME
+        IPC->>W: PAUSE / RESUME
+    else Seek / Discontinuity
+        CAP->>IPC: STOP(SEEK_DISCONTINUITY) + START(new epoch)
+        IPC->>W: Re-sync epoch & reset audio queue
+    end
+    IPC->>VLC: Update/clear captions
 ```
 
 ## Backpressure behavior
@@ -116,7 +121,7 @@ flowchart TD
     class DROP,COUNT,DISABLE warn;
 ```
 
-The queue is capped at 8 seconds of unprocessed audio (16 × 512 ms chunks) in the initial design. Loss under overload is explicit and measurable; slowing playback is never an overload strategy.
+The queue is capped at 8 seconds of unprocessed audio (16 × 512 ms chunks). Loss under overload is explicit and measurable; slowing playback is never an overload strategy.
 
 ## Protocol frame
 
@@ -145,21 +150,21 @@ gantt
     title VLC-whisper delivery order
     dateFormat  YYYY-MM-DD
     axisFormat  %b
-    section Foundation
+    section Core scaffold
     Pin target and toolchain                 :done, m0a, 2026-07-23, 7d
-    Cross-build worker and validate metadata :m0b, after m0a, 7d
+    Cross-build worker and validate metadata :done, m0b, after m0a, 7d
     section Worker proof
-    Offline inference and IPC contract       :m1a, after m0b, 14d
-    Fuzzing and diagnostics                  :m1b, after m1a, 7d
+    Offline inference and IPC contract       :done, m1a, after m0b, 14d
+    Fuzzing and diagnostics                  :done, m1b, after m1a, 7d
     section VLC feasibility
-    PCM capture proof                        :m2a, after m1b, 7d
-    Timed caption presentation proof         :m2b, after m2a, 7d
-    section Local-file MVP
-    End-to-end lifecycle and failures        :m3a, after m2b, 14d
-    Windows acceptance and packaging         :m3b, after m3a, 7d
-    section Post-MVP
-    Seek reset and local-file seeking        :m4a, after m3b, 14d
-    Streams, settings UI, Linux port         :m4b, after m4a, 30d
+    PCM capture proof                        :done, m2a, after m1b, 7d
+    Timed caption presentation proof         :done, m2b, after m2a, 7d
+    section Local & Live MVP (Milestone 3)
+    Lifecycle, play/pause, seek re-sync      :m3a, after m2b, 14d
+    Local and stream media acceptance        :m3b, after m3a, 7d
+    section Release Discipline & Post-MVP (Milestone 4)
+    CI matrix, VM smoke tests, packaging     :m4a, after m3b, 14d
+    Settings GUI, multilingual, SPU native   :m4b, after m4a, 30d
 ```
 
 Dates are illustrative sequencing anchors, not delivery commitments. The required gates are feasibility proof, bounded behavior, and Windows VLC end-to-end validation—not calendar completion.
@@ -178,12 +183,12 @@ quadrantChart
     Local English captions: [0.90, 0.25]
     Pause and resume: [0.75, 0.25]
     Worker crash safety: [0.85, 0.45]
-    Seeking support: [0.85, 0.75]
-    Network VOD: [0.65, 0.75]
-    IPTV livestreams: [0.65, 0.90]
+    Seeking support: [0.85, 0.35]
+    Network VOD: [0.65, 0.60]
+    IPTV livestreams: [0.65, 0.85]
     Model and language GUI: [0.55, 0.55]
     Large models and GPU variants: [0.50, 0.75]
     Translation and speaker labels: [0.30, 0.70]
 ```
 
-This map is intentionally a prioritization aid, not a scientific measurement. It reinforces that the smallest useful MVP is local English captioning with reliable failure behavior, before source diversity or UI breadth.
+This map is intentionally a prioritization aid, not a scientific measurement. It reinforces that the smallest useful MVP is local English captioning with reliable failure behavior, play/pause sync, and seamless seek re-synchronization.
