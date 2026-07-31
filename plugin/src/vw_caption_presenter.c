@@ -7,7 +7,6 @@
 
 // clang-format off
 #include <vlc_common.h>
-#include <vlc_block.h>
 // clang-format on
 #include <vlc_filter.h>
 #include <vlc_input.h>
@@ -97,7 +96,7 @@ static bool vw_caption_presenter_render_text(filter_t* p_filter, const char* tex
   return true;
 }
 
-bool vw_caption_presenter_display(void* p_filter_ptr, const char* text, int64_t duration_us, vw_presenter_mode_t mode) {
+bool vw_caption_presenter_display(void* p_filter_ptr, const char* text, int64_t duration_us) {
   if (!text || duration_us <= 0) {
     return false;
   }
@@ -118,13 +117,13 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   if (duration_us <= 0) {
     duration_us = 2000000LL;  // 2 seconds default duration
   }
-  void* filter_obj = presenter ? presenter->vlc_subpicture : NULL;
-  return vw_caption_presenter_display(filter_obj, segment->text_utf8, duration_us, VW_PRESENTER_MODE_AUTO);
+  void* filter_obj = presenter ? presenter->p_filter_ctx : NULL;
+  return vw_caption_presenter_display(filter_obj, segment->text_utf8, duration_us);
 }
 
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
   if (!presenter) {
     return;
   }
-  presenter->vlc_subpicture = NULL;
+  presenter->p_filter_ctx = NULL;
 }

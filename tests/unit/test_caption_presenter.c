@@ -49,16 +49,14 @@ void vout_OSDText(vout_thread_t* vout, int channel, int position, vlc_tick_t dur
 
 int main(void) {
   // Test 1: NULL text handling
-  assert(!vw_caption_presenter_display(NULL, NULL, 1000000LL, VW_PRESENTER_MODE_AUTO));
+  assert(!vw_caption_presenter_display(NULL, NULL, 1000000LL));
 
   // Test 2: Invalid duration handling
-  assert(!vw_caption_presenter_display(NULL, "Test", 0, VW_PRESENTER_MODE_AUTO));
-  assert(!vw_caption_presenter_display(NULL, "Test", -500, VW_PRESENTER_MODE_AUTO));
+  assert(!vw_caption_presenter_display(NULL, "Test", 0));
+  assert(!vw_caption_presenter_display(NULL, "Test", -500));
 
-  // Test 3: Standalone display modes (without live VLC object hierarchy)
-  assert(vw_caption_presenter_display(NULL, "Auto Caption", 2000000LL, VW_PRESENTER_MODE_AUTO));
-  assert(vw_caption_presenter_display(NULL, "SPU Caption", 2000000LL, VW_PRESENTER_MODE_SPU));
-  assert(vw_caption_presenter_display(NULL, "OSD Caption", 2000000LL, VW_PRESENTER_MODE_OSD));
+  // Test 3: Standalone display mode (without live VLC object hierarchy)
+  assert(vw_caption_presenter_display(NULL, "OSD Caption", 2000000LL));
 
   // Test 4: Segment presenter functions
   vw_caption_presenter_t presenter = {0};
@@ -81,7 +79,7 @@ int main(void) {
 
   // Test 6: Clear presenter
   vw_caption_presenter_clear(&presenter);
-  assert(presenter.vlc_subpicture == NULL);
+  assert(presenter.p_filter_ctx == NULL);
 
   return 0;
 }

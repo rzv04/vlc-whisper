@@ -75,7 +75,7 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
 
   sys->block_count++;
   if (sys->block_count % 100 == 1) {
-    vw_caption_presenter_display(p_filter, "[VLC-Whisper] Live AI Captions Active", 2000000LL, VW_PRESENTER_MODE_AUTO);
+    vw_caption_presenter_display(p_filter, "[VLC-Whisper] Live AI Captions Active", 2000000LL);
   }
 
   // Return the original block untouched to preserve user playback quality

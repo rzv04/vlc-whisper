@@ -9,8 +9,4 @@ vlc_list_release
 vout_OSDText
 var_Inherit
 var_Get
-subpicture_New
-subpicture_region_New
-text_segment_New
-subpicture_Delete
 input_Control
