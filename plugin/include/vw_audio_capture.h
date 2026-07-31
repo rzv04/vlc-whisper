@@ -16,6 +16,7 @@ struct vw_spsc_queue;
 typedef struct vw_audio_capture {
   uint32_t target_sample_rate;  // 16000 Hz
   uint32_t target_channels;     // 1 (mono)
+  uint32_t sample_remainder;    // Fractional sample remainder for exact PTS drift prevention
   int64_t last_pts_us;
   uint64_t total_samples_processed;
   struct vw_spsc_queue* queue;
