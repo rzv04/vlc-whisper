@@ -15,6 +15,5 @@ This repository enforces strict C17 standards, architectural invariants, and pri
 9. **Task Planning Template Enforcement**: When creating implementation plans, task breakdowns, or planning artifacts (`/plan`), AI agents MUST follow the task structure in `ai/task-template.md` and save the plan file in `docs/plans/<name>_plan.md` so it can be referenced via `@docs/plans/...` across agent sessions.
 10. **Mandatory Verification Checklist**: NEVER declare a task complete without running code format verification (`clang-format --dry-run --Werror <files>`), native build & test suite (`cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug && ctest --preset linux-x64-debug`), and Valgrind memory leak verification (`ctest --test-dir build/linux-x64-debug -T memcheck`).
 11. **Header Function Documentation**: Every new/old non-third-party function inside `.h` header files must have a very brief (20-30 words) comment explaining what it does, including any quirks or special implementation details (e.g. strict realtime constraints or intentional discrepancies).
-
-
-
+12. **Conventional Commits Standard**: All git commit messages MUST follow the Conventional Commits specification (e.g., `feat(...)`, `fix(...)`, `refactor(...)`, `docs(...)`, `test(...)`, `chore(...)`).
+13. **GitHub Standards Compliance**: All PRs, issues, and code contributions MUST adhere to the standards defined in the repository's `.github/` folder (`CONTRIBUTING.md`, `PULL_REQUEST_TEMPLATE.md`, `ISSUE_TEMPLATE/`).

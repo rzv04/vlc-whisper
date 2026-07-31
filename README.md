@@ -4,6 +4,21 @@ Offline, real-time speech captions inside VLC for local media.
 
 ---
 
+## Cloning the Project
+
+```bash
+git clone <repository-url>
+cd vlc-whisper
+```
+
+### Optional: enable [conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) hook locally ([conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) will be enforced in CI)
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+---
+
 ## Building the Project
 
 The project uses CMake (minimum version 3.20) with Ninja and CMake Presets for cross-compiling Windows x64 binaries from Linux using MinGW GCC.
@@ -22,6 +37,7 @@ ctest --preset windows-x64-release
 ```
 
 Available presets in `CMakePresets.json`:
+
 - `windows-x64-release` (Windows x64 Release via MinGW cross-compiler)
 - `windows-x64-debug` (Windows x64 Debug via MinGW cross-compiler)
 - `linux-x64-debug` (Host native Linux debug build for local testing)
@@ -150,17 +166,20 @@ To install and verify the VLC plugin manually on Windows:
 
 2. **Reset Plugin Cache & Verify Registration**:
    Open Command Prompt or PowerShell and run:
+
    ```cmd
    "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
    ```
-   *Expected Output*: You should see the `VLC-Whisper` audio filter module listed.
+
+   _Expected Output_: You should see the `VLC-Whisper` audio filter module listed.
 
 3. **Inspect Debug Logs**:
    Audio filters only instantiate when audio media is playing and the filter is explicitly selected in the audio chain. To trigger `vw_plugin_open` and write debug output to a file:
+
    ```cmd
    "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --audio-filter=vlc_whisper --file-logging --logfile=vlc-debug.log -vvv C:\path\to\audio.mp3
    ```
-   *(Note: For `.mp4` video files in Virtual Machines or dual-GPU laptops, add `--avcodec-hw=none` to avoid D3D11 hardware acceleration crashes).*
-   
-   *Expected Output*: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.
 
+   _(Note: For `.mp4` video files in Virtual Machines or dual-GPU laptops, add `--avcodec-hw=none` to avoid D3D11 hardware acceleration crashes)._
+
+   _Expected Output_: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.
