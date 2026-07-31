@@ -141,7 +141,10 @@ install_manifest.txt
 *.pdb
 *.ilk
 *.exp
+
+# Don't exclude libvlccore.def, as it is needed for building the plugin. However, exclude other .def files.
 *.def
+!plugin/libvlccore.def
 
 # Logs and coverage
 *.log

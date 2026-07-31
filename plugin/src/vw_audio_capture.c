@@ -9,6 +9,11 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
     return false;
   }
 
+  // Guard against division by zero
+  if (input->sample_rate == 0) {
+    return false;
+  }
+
   // Calculate total output frames needed at 16kHz
   size_t output_frames = (input->frame_count * VW_AUDIO_TARGET_RATE) / input->sample_rate;
   if (output_frames == 0) {

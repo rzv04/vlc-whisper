@@ -1,361 +1,494 @@
-# Diff Analysis: Milestone 2 (Caption Presentation Spike)
+# Diff Analysis: Milestone 2 — Caption Presentation Spike (merge to main)
 
-**5 files changed, +327 / -5 lines**
-**Base**: `b31f6b1697f1a2b2fe81699245dab96464cc7917..98a9b5eee9a0439010c14031ba3aa0b87bd1a7b2`
+**28 files changed, +1546 / -807 lines** (branch `gemini/milestone-2` vs `main` @ `f859fc5`)
+**Base**: `git diff main...HEAD`, plus 1 unstaged change in `plugin/src/vw_caption_presenter.c` (-1)
+
+Scope: VLC module load/unload (roadmap step 9), PCM capture + SPSC queue (step 10), caption presentation spike with OSD path (step 11), out-of-tree packaging decision (step 12, ADR-012). Plan: `docs/plans/milestone_2_11_plan.md`.
 
 ---
 
 ## 1. File-by-File Analysis
 
-### 1.1 `docs/vout-search-fix.md` (new)
+### 1.1 `.agents/AGENTS.md` and `AGENTS.md`
 
-**Why change**: Document the root-cause analysis of why caption display was not appearing on VLC's video output despite the `vw_caption_presenter_find_vout` implementation being correct. Captures debugging findings, broken SPU path analysis, and recommended next steps.
+**Why change**: Enforce header-function documentation as rule 11, mirroring the root file into the agent environment.
 
-**Responsibility before**: N/A (new file). **After**: Investigative document covering four issues: (1) nobody calls the caption presenter from the filter callback, (2) broken SPU subpicture render path with leaked subpicture allocations and invalid PTS, (3) potential Windows-specific parent chain differences, and (4) risk of `input_Control` blocking from audio output thread.
+**Responsibility before**: 10 rules. **After**: 11 rules (every non-third-party function in `.h` files needs a 20-30 word comment, including realtime quirks).
 
-**Callers**: Developers debugging caption display issues. **Callees**: N/A (documentation).
+**Callers**: AI agents. **Callees**: none.
 
-**Happy path**: Reader follows Issue 1 analysis, implements a test caption caller in `vw_plugin_filter`, observes OSD text on video output.
+**Happy path**: Rule 11 drives the doc comments added across `vw_queue.h`, `vw_audio_capture.h`, `vw_audio_buffer.h`, `vw_caption_presenter.h`. **Failure path**: N/A (policy).
 
-**Failure path**: If the parent chain on Windows does not include `object_type == "input"`, the vout search fails silently and OSD captions never appear.
+**Boundaries**: N/A. **Acceptance map**: Rule 11 present — `.agents/AGENTS.md:17`, `AGENTS.md:17`. Status: done.
 
-**Boundaries**:
-
-- **Input validation**: N/A (documentation).
-- **Authorization**: N/A.
-- **Concurrency**: N/A.
-- **I/O**: N/A.
-- **Persistence**: N/A.
-
-**Acceptance map**:
-
-| #   | Criterion                           | Code                            | Test | Status  |
-| --- | ----------------------------------- | ------------------------------- | ---- | ------- |
-| 1   | Document why captions don't display | Full document                   | N/A  | ✅ done |
-| 2   | SPU subpicture path broken analysis | Issue 2 section                 | N/A  | ✅ done |
-| 3   | Options to add a caller             | Issue 1 section (Options A/B/C) | N/A  | ✅ done |
-
-**Assumptions/Tradeoffs**: Analysis assumes VLC 3.0.x object hierarchy (`filter -> aout -> decoder -> input`). Windows-specific chain may differ.
+**Assumptions/Tradeoffs**: Duplication between the two AGENTS.md files remains a sync risk (they already diverged in whitespace).
 
 ---
 
-### 1.2 `plugin/include/vw_caption_presenter.h`
+### 1.2 `.gitignore`
 
-**Why change**: Add public API surface for caption presentation: mode enum for SPU/OSD/AUTO selection, `vw_caption_presenter_display` as the primary entry point, and function documentation comments per AGENTS.md rule 11.
+**Why change**: Ignore `*.def`, MCP config JSON, and editor config (`opencode.json`).
 
-**Responsibility before**: Minimal header with only stub declarations for `vw_caption_presenter_show_segment` and `vw_caption_presenter_clear`. **After**: Full public API with typed mode enum, documented function contracts, and a `void*`-based interface that avoids VLC header dependencies in the header.
+**Responsibility before**: Ignored build artifacts, `diff.md`/`review.md`. **After**: Also `*.def`, `.agents/mcp_config.json` (comment: move to env vars), `opencode.json*`.
 
-**Callers**: `vlc_whisper_module.c` (via `vw_caption_presenter_display`), `test_caption_presenter.c` (via all three functions). **Callees**: None (pure declarations).
+**Callers**: git. **Callees**: none.
 
-**Happy path**:
+**Happy path**: Secret-bearing configs stay untracked. **Failure path**: **`*.def` swallows the hand-written `plugin/libvlccore.def`** — a build input, not a build artifact (see Finding H-1).
 
-1. `vlc_whisper_module.c` includes `vw_caption_presenter.h`.
-2. After 100 audio blocks, calls `vw_caption_presenter_display(p_filter, text, duration, VW_PRESENTER_MODE_AUTO)`.
-3. Function resolves to the implementation in `vw_caption_presenter.c`.
+**Boundaries**: Pattern specificity. **Acceptance map**: ignore secrets — `.gitignore:187-189`. Status: done; `*.def` rule: **broken by side effect**.
 
-**Failure path**: N/A (header only).
-
-**Boundaries**:
-
-- **Input validation**: Header declares `const char* text` — null-check required at implementation.
-- **Authorization**: N/A.
-- **Concurrency**: N/A.
-- **I/O**: N/A.
-- **Persistence**: N/A.
-
-**Acceptance map**:
-
-| #   | Criterion                                         | Code                               | Test                             | Status  |
-| --- | ------------------------------------------------- | ---------------------------------- | -------------------------------- | ------- |
-| 1   | Mode enum with AUTO/SPU/OSD                       | `vw_presenter_mode_t` at line 8-12 | `test_caption_presenter.c:63-65` | ✅ done |
-| 2   | Public `vw_caption_presenter_display` declaration | Line 18                            | `test_caption_presenter.c:59-65` | ✅ done |
-| 3   | Function documentation comments                   | Lines 17, 21, 24                   | N/A                              | ✅ done |
-
-**Assumptions/Tradeoffs**: Uses `void *p_filter` to avoid `#include <vlc_filter.h>` in the public header, trading type safety for reduced header coupling. Callers must cast correctly.
+**Assumptions/Tradeoffs**: `*.def` was likely intended for MinGW-generated `.def` files; no negation for `plugin/libvlccore.def` was added.
 
 ---
 
-### 1.3 `plugin/src/vlc_whisper_module.c`
+### 1.3 `README.md`
 
-**Why change**: Wire the caption presenter into the filter callback to prove the OSD display path works end-to-end during live playback. Every 100 audio blocks, display a test caption on VLC's video output.
+**Why change**: Update Valgrind instructions to preset-based workflow, add stricter leak-check flags, and document manual Windows plugin installation (folded in from deleted `milestone_2_9_plan.md`).
 
-**Responsibility before**: VLC filter module with audio capture only — PCM was captured to SPSC queue but no consumer read or displayed anything. **After**: Audio filter module that (a) captures PCM and (b) periodically invokes `vw_caption_presenter_display` to prove the presentation pipeline works.
+**Responsibility before**: Build/test/coverage docs. **After**: Also manual install, cache-reset, and log-inspection walkthrough for Windows.
 
-**Callers**: VLC filter pipeline (calls `vw_plugin_filter` per audio block). **Callees**: `vw_audio_capture_process_block`, `vw_caption_presenter_display`, `vw_spsc_queue_create`, `vw_log_set_sink`.
+**Callers**: Developers. **Callees**: none.
 
-**Happy path**:
+**Happy path**: `ctest --test-dir build/linux-x64-debug -T memcheck` per new docs. **Failure path**: N/A.
 
-1. VLC calls `vw_plugin_open(obj)` — allocates `vw_plugin_sys_t`, creates SPSC queue, sets `pf_audio_filter = vw_plugin_filter`.
-2. VLC calls `vw_plugin_filter(p_filter, p_block)` for each audio block.
-3. On block 1, 101, 201, ... (block_count % 100 == 1), calls `vw_caption_presenter_display` with `"[VLC-Whisper] Live AI Captions Active"` and 2-second duration.
-4. Returns original `p_block` unmodified.
+**Boundaries**: N/A. **Acceptance map**: memcheck commands `README.md:60-75`; install guide `README.md:141-164`. Status: done.
 
-**Failure path**: If `vw_caption_presenter_display` cannot find a vout (no video output, e.g. audio-only file), it returns false silently. The filter continues passthrough unaffected.
-
-**Boundaries**:
-
-- **Input validation**: `p_block` null-check returns early passthrough. `p_filter->p_sys` null-check returns early.
-- **Authorization**: N/A (in-process filter).
-- **Concurrency**: Called from VLC audio output thread. `sys->block_count` is a non-atomic `uint64_t` incremented without synchronization — safe only because VLC serializes audio filter calls per-instance.
-- **I/O**: Non-blocking (no IPC read/write in callback).
-- **Persistence**: N/A.
-
-**Acceptance map**:
-
-| #   | Criterion                                  | Code                                                  | Test                    | Status  |
-| --- | ------------------------------------------ | ----------------------------------------------------- | ----------------------- | ------- |
-| 1   | Non-blocking callback (no inference/IPC)   | `vw_plugin_filter` lines 55-83                        | Architectural invariant | ✅ done |
-| 2   | Periodic caption display every 100 blocks  | Line 79-81                                            | Visual verification     | ✅ done |
-| 3   | `fmt_out.audio = fmt_in.audio` passthrough | Line 107                                              | Pipeline compatibility  | ✅ done |
-| 4   | Block count tracking                       | `sys->block_count` at line 41, incremented at line 78 | N/A                     | ✅ done |
-
-**Assumptions/Tradeoffs**: The 100-block interval (~2 seconds at 48kHz/1024-frame blocks) is a proof-of-concept frequency, not a production caption cadence. The test caption text is hardcoded.
+**Assumptions/Tradeoffs**: Windows verification remains manual (VM note about `--avcodec-hw=none`).
 
 ---
 
-### 1.4 `plugin/src/vw_caption_presenter.c`
+### 1.4 `diff.md`
 
-**Why change**: Implement the full caption presenter with vout discovery and OSD text rendering. Replaces the no-op stubs with working code that walks the VLC object tree to find the video output thread.
+**Why change**: Superseded by this review. The previous review covered an earlier 5-file slice of the same milestone; this one covers the full branch.
 
-**Responsibility before**: Stub file with `vw_caption_presenter_show_segment` and `vw_caption_presenter_clear` both returning true/void with `(void)` casts. **After**: Full implementation with three-tier vout search strategy (parent walk, `vlc_object_find_name`, children list traversal), OSD text rendering via `vout_OSDText`, and input validation.
+**Responsibility before**: Milestone 2 partial review (base `b31f6b1..98a9b5e`). **After**: Full branch review vs `main`.
 
-**Callers**: `vlc_whisper_module.c` (via `vw_caption_presenter_display`), test code (via all three functions). **Callees**: `input_GetVout`, `vlc_object_find_name`, `vlc_object_hold`, `vlc_object_release`, `vlc_list_children`, `vlc_list_release`, `vout_OSDText`.
-
-**Happy path** (`vw_caption_presenter_display -> vw_caption_presenter_render_text -> vw_caption_presenter_find_vout -> vout_OSDText`):
-
-1. `vw_caption_presenter_display` validates text/duration, casts `p_filter_ptr`, delegates to `vw_caption_presenter_render_text`.
-2. `vw_caption_presenter_render_text` calls `vw_caption_presenter_find_vout(p_filter)`.
-3. `vw_caption_presenter_find_vout` walks `p_filter->obj.parent` chain.
-4. At some ancestor, finds `object_type == "input"`, calls `input_GetVout()`.
-5. Returns `vout_thread_t*`. `render_text` calls `vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, duration, text)`.
-6. Releases vout ref via `vlc_object_release`. Returns true.
-
-**Failure path**:
-
-1. `vw_caption_presenter_find_vout` walks entire parent chain to root.
-2. No ancestor has `object_type == "input"` or `"vout"`.
-3. `vlc_object_find_name("input")` returns NULL on every ancestor.
-4. `vlc_list_children` returns NULL or no child matches.
-5. Returns NULL. `render_text` returns false. `display` returns false.
-6. Logs `VW_LOG_LEVEL_WARN "PRESENTER_VOUT_NOT_FOUND"`.
-
-**Boundaries**:
-
-- **Input validation**: `p_filter` null check at line 14. `text` null check and `duration_us <= 0` check at line 106. Segment null/text_utf8 null check at line 118-119.
-- **Authorization**: In-process VLC object hierarchy — no auth boundary.
-- **Concurrency**: Called from VLC audio output thread. `input_GetVout` / `vlc_object_find_name` acquire internal VLC locks; these are short-held operations.
-- **I/O**: None (no disk/network).
-- **Persistence**: None.
-
-**Acceptance map**:
-
-| #   | Criterion                                              | Code          | Test                                            | Status         |
-| --- | ------------------------------------------------------ | ------------- | ----------------------------------------------- | -------------- |
-| 1   | Vout search via parent walk + children                 | Lines 17-97   | Not directly tested (requires live VLC)         | ✅ done (code) |
-| 2   | OSD text rendering via `vout_OSDText`                  | Lines 99-104  | `test_caption_presenter.c` stubs verify linkage | ✅ done        |
-| 3   | Input validation (null text, duration)                 | Lines 106-108 | `test_caption_presenter.c:59-62`                | ✅ done        |
-| 4   | NULL p_filter fallback (standalone mode)               | Lines 111-113 | `test_caption_presenter.c:63-65`                | ✅ done        |
-| 5   | `vw_caption_presenter_show_segment` with duration calc | Lines 117-127 | `test_caption_presenter.c:67-76`                | ✅ done        |
-| 6   | `vw_caption_presenter_clear`                           | Lines 129-133 | `test_caption_presenter.c:79-81`                | ✅ done        |
-| 7   | `(void)mode;` — mode selection deferred                | Line 107      | N/A                                             | ⚠️ partial     |
-
-**Assumptions/Tradeoffs**:
-
-- **SPU path deferred**: The plan called for native SPU subpicture channel, but only OSD is implemented. The `mode` parameter is accepted but unused (`(void)mode`). SPU path was identified as broken in `vout-search-fix.md` Issue 2.
-- **No subpicture leak risk**: Since SPU path was replaced with OSD-only, there is no subpicture leak — `vout_OSDText` manages its own subpicture lifecycle internally.
-- **`input_GetVout` blocking**: Called from audio output thread; blocking duration depends on VLC internal lock contention.
-- **Three-tier search**: Parent walk, `vlc_object_find_name`, children list — this is an exhaustive search that may be more aggressive than needed. Multiple calls per second (every 100 blocks) could add overhead.
+**Callers**: Humans. **Callees**: none. **Acceptance map**: replaced. Status: done.
 
 ---
 
-### 1.5 `tests/unit/test_caption_presenter.c` (new)
+### 1.5 `docs/architecture.md`
 
-**Why change**: Provide standalone unit test coverage for the caption presenter API functions without requiring a live VLC instance. Uses function stubs for all VLC API symbols.
+**Why change**: Reconcile buffering numbers with the implemented queue (16 chunks / 8 s), document chunk granularity, align ADR-005 wording ("drop new" not "drop old"), extend the data model with the fixed inline `pcm_data` chunk, add ADR-012.
 
-**Responsibility before**: N/A (new file). **After**: Unit test covering null/invalid input rejection, standalone display mode (NULL p_filter path), segment presentation, null segment handling, and presenter clear.
+**Responsibility before**: System architecture, timing, session/IPC specs. **After**: Same, plus exact chunk/queue parameters and the S16LE-inline chunk contract.
 
-**Callers**: CTest (via `test_caption_presenter` executable). **Callees**: `vw_caption_presenter_display`, `vw_caption_presenter_show_segment`, `vw_caption_presenter_clear`.
+**Callers**: All implementers. **Callees**: none.
 
-**Happy path**:
+**Happy path**: Reader derives 512 ms chunk, 16-chunk queue, 8 s window from one table (`architecture.md:43-55`). **Failure path**: N/A.
 
-1. Executable runs, `main()` enters.
-2. Tests 1-2: Asserts false for NULL text, zero/negative duration.
-3. Test 3: Asserts true for valid display calls with NULL p_filter (standalone mode).
-4. Test 4: Creates a `vw_caption_presenter_t` and `vw_caption_segment_t`, calls `vw_caption_presenter_show_segment`, asserts true.
-5. Test 5: Asserts false for NULL segment and segment with NULL text.
-6. Test 6: Calls `vw_caption_presenter_clear`, asserts presenter state is zeroed.
-7. Returns 0.
+**Boundaries**: N/A. **Acceptance map**: backlog 8 s (`:41`, `:53`), chunk struct (`:104-117`), drop-new policy (`:55`). Status: done — consistent with `vw_spsc_queue_create(16)` and `vw_queue.c` drop-incoming behavior.
 
-**Failure path**: Any assertion failure aborts the test with non-zero exit code.
+**Assumptions/Tradeoffs**: "Drop newest" is a deliberate ADR-005 amendment: captions may lag up to the backlog instead of dropping stale audio. Consistent across code, diagrams, and strategy docs.
 
-**Boundaries**:
+---
 
-- **Input validation**: NULL text (test 1), zero/negative duration (test 2), NULL segment (test 5), NULL text_utf8 in segment (test 5).
-- **Authorization**: N/A.
-- **Concurrency**: Single-threaded test.
-- **I/O**: None.
-- **Persistence**: None.
+### 1.6 `docs/decisions.md`
 
-**Acceptance map**:
+**Why change**: Amend ADR-008 (drop newest audio under overload) and add ADR-012 (out-of-tree packaging over custom VLC build).
 
-| #   | Criterion                            | Code        | Test                                              | Status  |
-| --- | ------------------------------------ | ----------- | ------------------------------------------------- | ------- |
-| 1   | NULL text rejection                  | Lines 59-60 | `vw_caption_presenter_display` null check         | ✅ done |
-| 2   | Zero/negative duration rejection     | Lines 62-63 | `vw_caption_presenter_display` duration check     | ✅ done |
-| 3   | Standalone display (NULL filter)     | Lines 65-67 | `vw_caption_presenter_display` NULL p_filter path | ✅ done |
-| 4   | Segment display with valid data      | Lines 69-75 | `vw_caption_presenter_show_segment`               | ✅ done |
-| 5   | NULL segment/empty segment           | Lines 75-77 | `vw_caption_presenter_show_segment` null checks   | ✅ done |
-| 6   | Presenter clear                      | Lines 79-81 | `vw_caption_presenter_clear`                      | ✅ done |
-| 7   | VLC API stubs for standalone linking | Lines 19-49 | Link-time symbol resolution                       | ✅ done |
+**Responsibility before**: ADRs 1-11. **After**: Amended ADR-008 + ADR-012.
 
-**Assumptions/Tradeoffs**: The test uses `#undef` on VLC macros before defining stubs — this is fragile if VLC headers change the macro definitions. The stubs return NULL/void, so the vout search path is never exercised; only the input validation and NULL-filter fallback paths are tested.
+**Callers**: Planning. **Callees**: none.
 
-**Responsibility before**: Unit and worker integration tests only. **After**: Includes automated dynamic load test for `vlc_whisper_plugin`.
+**Happy path**: ADR-012 anchors the Windows `libvlccore.def` import-library approach and the pinned-ABI constraint. **Failure path**: N/A.
 
-**Callers**: `ctest`. **Callees**: `test_plugin_load`, `vlc_whisper_plugin`.
+**Acceptance map**: ADR-008 amendment `decisions.md:60`; ADR-012 `:85-94`. Status: done.
 
-**Happy path**: `ctest` runs `test_plugin_load $<TARGET_FILE:vlc_whisper_plugin>` and passes.
+---
 
-**Failure path**: Non-zero exit code if shared library loading fails or symbol resolution fails.
+### 1.7 `docs/diagrams.md`
 
-**Acceptance map**:
+**Why change**: Queue-overload flow says "drop newest", cap corrected to 8 s.
 
-| #   | Criterion                        | Code                                                                                                         | Test              | Status  |
-| --- | -------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------- | ------- |
-| 1   | Register `test_plugin_load` test | [tests/CMakeLists.txt:27-30](file:///home/razvan/vlc-whisper/.worktrees/gemini/tests/CMakeLists.txt#L27-L30) | `ctest` execution | ✅ done |
+**Responsibility before**: Diagrams. **After**: Same, corrected.
 
+**Callers**: None. **Callees**: none. **Happy path**: Flowchart matches `vw_spsc_queue_push` drop behavior. **Acceptance map**: `diagrams.md:105,119`. Status: done.
 
-- **I/O**: Shared library loading.
-- **Persistence**: N/A.
+---
+
+### 1.8 `docs/plans/milestone_2_11_plan.md` (new)
+
+**Why change**: Plan for the caption-presenter spike: native SPU primary, OSD fallback, mode enum.
+
+**Responsibility before**: N/A. **After**: Acceptance criteria and DoD for the presenter work.
+
+**Callers**: Agents executing milestone 2 step 11. **Callees**: none.
+
+**Happy path**: Plan drives implementation. **Failure path**: Acceptance criteria remain **all unchecked** (`[]`) while the code is committed — the boxes were never updated post-implementation (see Finding M-4).
+
+**Boundaries**: N/A. **Acceptance map**: criteria at `milestone_2_11_plan.md:31-33`; DoD `:35-38`. Status: criteria unchecked.
+
+---
+
+### 1.9 `docs/plans/milestone_2_9_plan.md` (deleted)
+
+**Why change**: Superseded: its manual-install content moved to `README.md`; steps 9-12 are marked done in `roadmap.md`.
+
+**Responsibility before**: Step 9 module load/unload plan. **After**: Deleted.
+
+**Callers**: N/A. **Acceptance map**: content preserved in `README.md:141-164`. Status: done.
+
+---
+
+### 1.10 `docs/roadmap.md`
+
+**Why change**: Mark Milestone 2 steps 9-12 complete.
+
+**Responsibility before**: Open items. **After**: `[x]` on 9-12.
+
+**Callers**: Planning. **Callees**: none.
+
+**Happy path**: Roadmap reflects shipped work. **Failure path**: Step 11 wording says "native timed subtitle route preferred" — the native SPU route was **not implemented** (OSD only); marking the step done while the plan's primary route is missing overstates completion (see Finding M-5). Milestone exit status honestly remains **PLANNED** (`roadmap.md:32`).
+
+**Acceptance map**: `roadmap.md:27-30`. Status: partial (step 11 overstates).
+
+---
+
+### 1.11 `docs/test-strategy.md`
+
+**Why change**: Backlog hard limit 8 s to match code.
+
+**Responsibility before**: Test gates. **After**: Same, corrected number.
+
+**Callers**: Test planning. **Callees**: none. **Acceptance map**: `test-strategy.md:49`. Status: done.
+
+---
+
+### 1.12 `docs/vlc-api-essentials.md` (new, 366 lines)
+
+**Why change**: Authoritative VLC 3.0.23 C API reference for the plugin: structures, realtime contract, clock/timeline, discontinuity, capability detection, object tree + vout retrieval, OSD rendering, module ABI.
+
+**Responsibility before**: N/A. **After**: Vendor-verified reference; every claim cross-checked against the vendored headers (and the previously hallucinated `input_Control(INPUT_CAN_*)` section corrected to `var_GetBool` input variables + `demux_Control(DEMUX_CAN_*)` internals).
+
+**Callers**: Plugin maintainers. **Callees**: none.
+
+**Happy path**: Reader finds vout-retrieval algorithm matching `vw_caption_presenter_find_vout`, hold/release ownership table, and OSD no-op caveats. **Failure path**: N/A.
+
+**Boundaries**: N/A. **Acceptance map**: Section 5 corrected APIs, Section 6 object tree + refcounting, Section 7 OSD semantics, Section 8 ABI. Status: done (verified against `worker/third_party/vlc-3.0.23/include/`).
+
+**Assumptions/Tradeoffs**: `video_text.c` internals (osd var check, `strdup`) verified against VLC 3.0.x source, not vendored (src/ is not vendored).
+
+---
+
+### 1.13 `plugin/CMakeLists.txt`
+
+**Why change**: Define `__PLUGIN__` + `MODULE_STRING` (entry-point ABI symbol), `_GNU_SOURCE`; generate a Windows import library (`libvlccore.dll.a`) from a hand-written `.def` so the DLL resolves VLC core symbols without linking a real libvlccore.
+
+**Responsibility before**: Build the shared plugin. **After**: Same, plus ABI defines and Win32 import generation.
+
+**Callers**: CMake/CTest, `test_plugin_load`. **Callees**: `dlltool`, `libvlccore.def`.
+
+**Happy path**: Linux `.so` links; Windows `dlltool -d libvlccore.def -l libvlccore.dll.a` then links the plugin against the import lib. **Failure path**: **`libvlccore.def` is untracked (gitignored by `*.def`) — on any fresh checkout the custom command fails at `DEPENDS` and the Windows build breaks** (Finding H-1).
+
+**Boundaries**: WIN32-guarded. **Acceptance map**: definitions `:11-15`; import generation `:30-38`. Status: Linux done; Windows build input not reproducible.
+
+**Assumptions/Tradeoffs**: The `.def` exports `subpicture_New`/`subpicture_region_New`/`text_segment_New`/`subpicture_Delete` that no code uses (SPU path deferred); harmless but signals the gap. No `-Werror` on this target despite the plan's "warnings-as-errors" DoD (Finding M-2).
+
+---
+
+### 1.14 `plugin/include/vw_audio_capture.h`
+
+**Why change**: Replace the stub `vw_audio_capture_on_pcm_block` API with the real capture contract: chunk constants, format enum, input descriptor, chunk struct with inline PCM, `vw_audio_capture_process_block`.
+
+**Responsibility before**: Stub struct + stub function. **After**: Full zero-allocation capture interface (Rule 4).
+
+**Callers**: `vw_audio_capture.c`, `vw_queue.h`, `vlc_whisper_module.c`, `test_audio_capture.c`, `test_queue.c`. **Callees**: none (declarations).
+
+**Happy path**: `vw_plugin_filter` builds `vw_audio_input_t` from `fmt_in` + block and calls `process_block`. **Failure path**: N/A.
+
+**Boundaries**: `VW_AUDIO_CHUNK_MAX_PCM_BYTES` 16384 (`:8`); `VW_AUDIO_TARGET_RATE` 16000 (`:9-11`); inline buffer guarantees zero heap in callback. **Acceptance map**: chunk struct (`:28-37`), input struct (`:42-52`), process entry (`:57-59`). Status: done.
+
+---
+
+### 1.15 `plugin/include/vw_caption_presenter.h`
+
+**Why change**: Public presenter API: mode enum, `vw_caption_presenter_display`, doc comments per rule 11.
+
+**Responsibility before**: Stub declarations. **After**: Typed API surface.
+
+**Callers**: `vlc_whisper_module.c`, `test_caption_presenter.c`. **Callees**: none.
+
+**Happy path**: `display` called per 100 blocks. **Failure path**: N/A.
+
+**Boundaries**: `void* p_filter` trades type safety for zero VLC-header coupling in the header (Finding M-3). **Acceptance map**: enum (`:8-12`), display (`:18`), show_segment (`:22`), clear (`:25`). Status: done.
+
+**Assumptions/Tradeoffs**: Enum and doc comments promise a native SPU channel that is never used (Finding M-5).
+
+---
+
+### 1.16 `plugin/include/vw_queue.h`
+
+**Why change**: Real SPSC ring: chunk-slot capacity (capacity+1 sentinel), C11 atomics, documented push/pop/dropped semantics.
+
+**Responsibility before**: Byte-capacity stub fields. **After**: Lock-free chunk ring.
+
+**Callers**: `vlc_whisper_module.c`, `vw_audio_capture.c`, tests. **Callees**: none.
+
+**Happy path**: `push` publishes with release store; `pop` consumes with acquire load. **Failure path**: N/A.
+
+**Boundaries**: capacity 0 rejected at create; full → drop incoming chunk + accumulate `audio_dropped_us`. **Acceptance map**: struct (`:12-19`), push/pop semantics (`:29-38`). Status: done — memory ordering is the correct Vyukov pattern (release-store head, acquire-load head; acquire-load tail on push).
+
+---
+
+### 1.17 `plugin/src/vlc_whisper_module.c`
+
+**Why change**: Replace stubs with the real VLC module: log sink bridge, per-block filter callback capturing PCM, SPSC queue (16 chunks), PoC periodic caption display, module registration with `vlc_entry__3_0_0f`.
+
+**Responsibility before**: Stub entry points (`vlc_whisper_Open`/`Close` returning 0). **After**: Working audio filter module.
+
+**Callers**: VLC pipeline (`vw_plugin_filter`). **Callees**: `vw_audio_capture_process_block`, `vw_spsc_queue_*`, `vw_caption_presenter_display`, `vw_log_*`.
+
+**Happy path**: `vw_plugin_open` (`:91-113`) allocates sys, queue (16), sets `pf_audio_filter`, `fmt_out.audio = fmt_in.audio` (`:108`); `vw_plugin_filter` (`:48-83`) taps PCM, captures, and on block 1, 101, 201... calls `vw_caption_presenter_display` (`:77-78`), returns block untouched. **Failure path**: unsupported codec → passthrough (`:63-65`); no vout → display returns false, playback unaffected.
+
+**Boundaries**: null sys/block guards (`:50`); zero-allocation in callback (chunk is stack, queue preallocated); `block_count` non-atomic but single aout thread per instance. **Acceptance map**: ABI entry (`:129-136`), passthrough invariant (`:108`), non-blocking (`:48-83`). Status: done.
+
+**Assumptions/Tradeoffs**: PoC caption text is hardcoded; every-100-blocks cadence is a spike, not production. `msg_*` resolves against the Windows import lib via `vlc_Log` export.
+
+---
+
+### 1.18 `plugin/src/vw_audio_capture.c`
+
+**Why change**: Implement resample/downmix-to-16k-mono-S16 + chunking with zero allocation.
+
+**Responsibility before**: Stub returning false. **After**: Real capture converter.
+
+**Callers**: `vw_plugin_filter`. **Callees**: `vw_spsc_queue_push`.
+
+**Happy path**: 48 kHz stereo FL32 block → boxcar-averaged 16 kHz mono S16 chunks of ≤8192 frames with continuous `start_pts_us` (`chunk.duration_us` accumulated, `:74-77`). **Failure path**: invalid input → false (`:13-14`); `output_frames == 0` → early true (`:19-21`).
+
+**Boundaries**: chunk cap (`:27`); OOB clamp `in_end > frame_count` (`:45-47`); sample clamp [-1,1] (`:62-63`). **Gaps**: `input->sample_rate == 0` divides by zero (no guard — VLC always sets `i_rate`, but the API is public; Finding L-1); `VLC_TICK_INVALID` PTS (`INT64_MIN`) blocks are enqueued with invalid timestamps (Finding L-2); odd-sized chunks truncate 62.5 us/sample durations (<1 us drift per odd chunk, negligible).
+
+**Acceptance map**: chunking math (`:17-28`), downmix/resample (`:31-65`), PTS continuity (`:71-77`). Status: done; tested by `test_audio_capture` incl. exact chunk boundaries (8192/1808) and downmix value.
+
+---
+
+### 1.19 `plugin/src/vw_caption_presenter.c`
+
+**Why change**: Implement vout discovery (parent walk + name search + children scan) and OSD rendering.
+
+**Responsibility before**: Stubs. **After**: Real presenter; see this session's earlier deep dive — OSD (`vout_OSDText` at `:95`), not the SPU API; hold/release pairing correct per `vlc_input.h` (`input_GetVout` returns held).
+
+**Callers**: `vlc_whisper_module.c`, tests. **Callees**: `input_GetVout`, `vlc_object_find_name` (deprecated), `vlc_object_hold/release`, `vlc_list_children`, `vout_OSDText`.
+
+**Happy path**: `display` (`:100-112`) → `render_text` (`:89-98`) → `find_vout` (`:21-87`) finds `input` ancestor → `input_GetVout` → `vout_OSDText` → release. **Failure path**: no vout → WARN log, false, passthrough unaffected.
+
+**Boundaries**: null text / `duration_us <= 0` rejected (`:101-102`); NULL filter = standalone test mode returns true (`:105-108`); mode ignored (see below). **Acceptance map**: find (`:21-87`), OSD render (`:95-96`), validation (`:102-103`), segment fallback 2 s (`:118-120`), clear (`:126-131`). Status: done, with exceptions below.
+
+**Unstaged change in this file**: `(void)mode;` removed from `vw_caption_presenter_display` (HEAD had it at `:101`). The parameter is still unused → **`-Wunused-parameter` warning in the current tree** (confirmed in build output; Finding M-1). Nothing else in the working tree differs.
+
+**Assumptions/Tradeoffs**: SPU mode silently maps to OSD; `vlc_subpicture` field name is a misnomer (holds the filter pointer, `:122`); `vlc_object_find_name` is `VLC_DEPRECATED` (documented in `vlc-api-essentials.md` Section 6, warning in every build).
+
+---
+
+### 1.20 `plugin/src/vw_queue.c`
+
+**Why change**: Implement the lock-free ring.
+
+**Responsibility before**: Stub push/pop. **After**: SPSC chunk ring with capacity+1 sentinel.
+
+**Callers**: `vw_audio_capture.c`, module, tests. **Callees**: none.
+
+**Happy path**: push writes slot, release-publishes head; pop acquire-reads, release-publishes tail. **Failure path**: full → drop incoming, count `duration_us` (`:44-47`); empty → NULL (`:64-66`).
+
+**Boundaries**: `capacity_chunks == 0` → NULL (`:10-12`); ring allocation failure → NULL (`:18-21`). Memory ordering is correct (single-producer/single-consumer invariant). **Acceptance map**: create/destroy (`:9-33`), push (`:36-54`), pop (`:58-77`), dropped (`:80-82`). Status: done; covered by `test_queue` (creation, push/pop, overflow accounting, wraparound).
+
+---
+
+### 1.21 `protocol/CMakeLists.txt`
+
+**Why change**: `POSITION_INDEPENDENT_CODE ON` — the plugin `.so` links `vw_protocol` statically.
+
+**Responsibility before**: Static lib without PIC. **After**: PIC.
+
+**Callers**: CMake. **Callees**: none. **Happy path**: plugin links on Linux. **Acceptance map**: `:18-19`. Status: done.
+
+---
+
+### 1.22 `tests/CMakeLists.txt`
+
+**Why change**: Add VLC include path to unit-test macro; compile real plugin sources into tests (`vw_queue.c`, `vw_audio_capture.c`, `vw_caption_presenter.c`); register `test_plugin_load` with the built plugin as argument.
+
+**Responsibility before**: Protocol/worker tests only. **After**: Plugin unit tests + dynamic-load test.
+
+**Callers**: CTest. **Callees**: test executables.
+
+**Happy path**: `ctest` runs 10 suites (verified: 10/10 pass, Valgrind clean). **Failure path**: N/A.
+
+**Boundaries**: `test_caption_presenter` gets `__PLUGIN__`/`MODULE_STRING`/`_GNU_SOURCE` (`:24`). **Acceptance map**: `:21-25`, `:31-34`. Status: done.
+
+**Assumptions/Tradeoffs**: `test_plugin_load` passes on Linux with `RTLD_LAZY` because the entry symbol is only resolved, never called. On Windows the DLL imports `libvlccore.dll` — the test would fail to load without it; no Windows test preset exists yet.
+
+---
+
+### 1.23 `tests/integration/test_plugin_load.c` (new)
+
+**Why change**: Verify `vlc_entry__3_0_0f` resolves in the built plugin (roadmap step 9 acceptance).
+
+**Responsibility before**: N/A. **After**: dlopen/LoadLibrary + symbol resolution test.
+
+**Callers**: CTest. **Callees**: `dlopen`/`dlsym` or `LoadLibraryA`/`GetProcAddress`.
+
+**Happy path**: loads `.so`, resolves entry, prints success. **Failure path**: missing arg → usage + exit 1; load/symbol failure → exit 1.
+
+**Boundaries**: argc check (`:10-13`). **Acceptance map**: `:31-41` (POSIX branch). Status: done; passes under Valgrind (10/10).
+
+---
+
+### 1.24 `tests/unit/test_audio_capture.c` (new)
+
+**Why change**: Unit-test resample/downmix/chunking against exact numbers.
+
+**Responsibility before**: N/A. **After**: Deterministic capture tests.
+
+**Callers**: CTest. **Callees**: `vw_audio_capture_process_block`, queue pop.
+
+**Happy path**: 30000 frames 48k stereo FL32 → exactly 10000 output frames → chunks 8192 + 1808 with correct PTS chaining and 5461±1 downmix value. **Failure path**: assertion abort.
+
+**Boundaries**: chunk sizes (`:39-40`, `:51-53`), PTS continuity (`:52`), empty-pop (`:56`). **Acceptance map**: `:31-56`. Status: done.
+
+**Assumptions/Tradeoffs**: Test encodes the boxcar behavior (first output frame averages 6 input samples) — brittle if the resampler algorithm changes.
+
+---
+
+### 1.25 `tests/unit/test_caption_presenter.c` (new)
+
+**Why change**: Unit-test presenter validation and standalone mode without live VLC; VLC symbols stubbed.
+
+**Responsibility before**: N/A. **After**: Presenter edge-case coverage.
+
+**Callers**: CTest. **Callees**: `vw_caption_presenter_*` + stubs.
+
+**Happy path**: null text/duration rejected; NULL-filter display returns true in all three modes; segment display/clear. **Failure path**: assertion abort.
+
+**Boundaries**: null/negative-duration (`:59-62`), null segment/text (`:75-77`), stub linkage via `#undef` of VLC macros (`:19-49`). **Acceptance map**: `:59-85`. Status: done, with caveats.
+
+**Assumptions/Tradeoffs**: The `#undef`-then-redefine stub pattern is brittle if VLC headers change macros; the vout-search path is never exercised (stubs return NULL); test 3 asserts `VW_PRESENTER_MODE_SPU` succeeds — codifying the fiction that SPU mode works (Finding M-5); leftover `(void)segment; (void)empty_seg;` suppressions for variables that are used (`:77-78`, Finding L-3).
+
+---
+
+### 1.26 `tests/unit/test_queue.c`
+
+**Why change**: Full SPSC coverage: creation, push/pop, overflow accounting, wraparound.
+
+**Responsibility before**: Smoke test. **After**: Behavioral tests of the ring.
+
+**Callers**: CTest. **Callees**: queue API.
+
+**Happy path**: 10 push/pop cycles across capacity-3 ring verify wraparound. **Failure path**: assertion abort.
+
+**Boundaries**: capacity 0 (`:8-10`), overflow accounting 50000+50000 us (`:50-61`). **Acceptance map**: `:8-64`. Status: done.
+
+---
+
+### 1.27 `worker/include/vw_audio_buffer.h`
+
+**Why change**: Rule 11 doc comments; explain the intentional plugin/worker PCM representation split (inline S16LE vs heap float32).
+
+**Responsibility before**: Undocumented buffer API. **After**: Documented contract.
+
+**Callers**: Worker (future inference loop). **Callees**: none.
+
+**Happy path**: Reader understands the two representations. **Failure path**: N/A. **Acceptance map**: `:31-34`, `:72-82`. Status: done.
+
+**Assumptions/Tradeoffs**: Worker inference loop remains stubbed (`vw_whisper_engine.c` ignores input) — this milestone is plugin-side only.
 
 ---
 
 ## 2. Happy-Path Request Trace
 
-Full end-to-end trace from VLC loading the plugin to OSD caption appearing on video output:
+Plugin load → audio block → capture → queue → caption OSD:
 
-1. VLC loads `libvlc_whisper_plugin.so` → resolves `vlc_entry__3_0_0f` → calls `vw_plugin_open`  
-   `plugin/src/vlc_whisper_module.c:89-108`
-2. `vw_plugin_open` allocates `vw_plugin_sys_t`, creates SPSC queue (16 slots), sets `pf_audio_filter`  
-   `plugin/src/vlc_whisper_module.c:92-106`
-3. VLC processes media, sends audio blocks to `vw_plugin_filter`  
-   `plugin/src/vlc_whisper_module.c:55-83`
-4. Block 1, 101, 201... triggers `vw_caption_presenter_display(p_filter, text, 2000000, VW_PRESENTER_MODE_AUTO)`  
-   `plugin/src/vlc_whisper_module.c:79-81`
-5. `vw_caption_presenter_display` validates text and duration, casts to `filter_t*`  
-   `plugin/src/vw_caption_presenter.c:106-114`
-6. Delegates to `vw_caption_presenter_render_text`  
-   `plugin/src/vw_caption_presenter.c:99-104`
-7. `vw_caption_presenter_find_vout` walks parent chain:  
-   `plugin/src/vw_caption_presenter.c:17-97`
-   - Starts at `VLC_OBJECT(p_filter)` (object_type = "filter")
-   - Moves to parent (object_type = "audio output")
-   - Moves to parent (object_type = "decoder")
-   - Moves to parent (object_type = "input")
-   - Calls `input_GetVout((input_thread_t*)cur)` → returns `vout_thread_t*`
-8. `vw_caption_presenter_render_text` calls `vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, duration, text)`  
-   `plugin/src/vw_caption_presenter.c:103`
-9. VLC renders OSD text on video output
-10. `vlc_object_release` releases vout reference  
-    `plugin/src/vw_caption_presenter.c:104`
-11. `vw_plugin_filter` returns original `p_block` unmodified  
-    `plugin/src/vlc_whisper_module.c:83`
+1. VLC loads `libvlc_whisper_plugin.so` and calls `vlc_entry__3_0_0f` → `vw_plugin_open` — `plugin/src/vlc_whisper_module.c:91-113`
+2. `vw_plugin_open`: `calloc` sys; `vw_spsc_queue_create(16)` (8 s, 512 ms chunks) — `:96`; sets `pf_audio_filter = vw_plugin_filter`, `fmt_out.audio = fmt_in.audio` — `:107-108`
+3. VLC calls `vw_plugin_filter` per audio block — `:48-83`; codec mapped S16/S32/FL32 — `:53-62`; unsupported codec → passthrough — `:63-65`
+4. `vw_audio_capture_process_block(&sys->capture, &input)` — `:73` → `plugin/src/vw_audio_capture.c:12-80`: downmix/resample to 16 kHz mono S16, split into ≤8192-frame chunks, contiguous PTS
+5. Each chunk pushed to the ring — `vw_audio_capture.c:75` → `plugin/src/vw_queue.c:36-54` (release-store head)
+6. `block_count` hits 1, 101, ... — `vlc_whisper_module.c:76-78` → `vw_caption_presenter_display(..., 2000000, VW_PRESENTER_MODE_AUTO)` — `plugin/src/vw_caption_presenter.c:100-111`
+7. `find_vout` walks `obj.parent`: filter → audio output → decoder → input; `input_GetVout` returns held vout — `:21-87`
+8. `vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 2000000, text)` — `:95`; release — `:96`
+9. Filter returns the original block untouched — `vlc_whisper_module.c:83`
 
----
+Not yet wired: the worker/IPC consumer of the queue (sender + worker inference loop are outside this milestone; the queue is produced into but nothing drains it yet).
 
 ## 3. Most Important Failure Path
 
-**Scenario**: Audio-only media file (no video output) — vout search fails.
+**Merge blocker — Windows build cannot reproduce on a fresh checkout:**
 
-1. VLC loads plugin, calls `vw_plugin_open` (succeeds)  
-   `plugin/src/vlc_whisper_module.c:89-108`
-2. VLC sends audio blocks to `vw_plugin_filter`  
-   `plugin/src/vlc_whisper_module.c:55-83`
-3. Block 1 triggers `vw_caption_presenter_display`  
-   `plugin/src/vlc_whisper_module.c:79-81`
-4. `vw_caption_presenter_find_vout` walks parent chain:  
-   `plugin/src/vw_caption_presenter.c:17-97`
-   - Starts at `VLC_OBJECT(p_filter)` (object_type = "filter")
-   - Moves to parent (object_type = "audio output")
-   - Moves to parent (object_type = "decoder")
-   - Moves to parent (object_type = "input")
-   - `input_GetVout` returns NULL (no video output exists)
-   - `vlc_object_find_name(cur, "input")` returns NULL (already at input)
-   - `vlc_list_children` returns NULL or no vout child
-   - Continues to next parent (object_type = "playlist")
-   - `vlc_object_find_name(cur, "input")` returns NULL (no input child)
-   - `vlc_list_children` returns NULL
-   - Reaches root, `cur->obj.parent == NULL`, loop exits
-5. Logs `VW_LOG_LEVEL_WARN "PRESENTER_VOUT_NOT_FOUND"`  
-   `plugin/src/vw_caption_presenter.c:95`
-6. Returns NULL to `vw_caption_presenter_render_text`
-7. `render_text` returns false
-8. `vw_caption_presenter_display` returns false
-9. Caller in `vw_plugin_filter` ignores return value
-10. Returns `p_block` — audio passthrough unaffected, no crash
+1. Merge to main; fresh clone/CI checkout
+2. `.gitignore:144` (`*.def`) excludes `plugin/libvlccore.def` from the tree
+3. Windows preset configure: `add_custom_command` has `DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libvlccore.def` — `plugin/CMakeLists.txt:31-38`
+4. File missing → `dlltool` invocation fails (or Ninja errors on missing dependency) → `libvlccore.dll.a` never generated → `vlc_whisper_plugin.dll` link fails
+5. Only this machine's worktree (file present but untracked) builds; every other machine is broken. Fix: `git add -f plugin/libvlccore.def` or add `!plugin/libvlccore.def` negation before committing.
 
----
+**Runtime failure path (graceful by design):** audio-only media → `find_vout` finds no vout → WARN `PRESENTER_VOUT_NOT_FOUND` (`vw_caption_presenter.c:85-86`) → false → passthrough continues; OSD disabled by user settings or `duration <= 0` → `vout_OSDText` silent no-op (documented).
 
 ## 4. Boundary Summary
 
-| Boundary type        | Gaps found                                                                                                  | Affected files                               |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **Input validation** | `(void)mode` — mode parameter accepted but ignored; SPU mode silently falls back to OSD                     | `plugin/src/vw_caption_presenter.c:107`      |
-| **Input validation** | `p_filter` cast from `void*` with no runtime type check                                                     | `plugin/src/vw_caption_presenter.c:110`      |
-| **Input validation** | `block_count` is `uint64_t` — safe from overflow (would take billions of years at audio rates)              | `plugin/src/vlc_whisper_module.c:41`         |
-| **Authorization**    | In-process module, no auth boundary                                                                         | N/A                                          |
-| **Concurrency**      | `block_count` non-atomic increment — safe because VLC serializes per-instance filter calls, but non-obvious | `plugin/src/vlc_whisper_module.c:78`         |
-| **Concurrency**      | `input_GetVout` acquires VLC locks from audio output thread — potential (low-risk) blocking                 | `plugin/src/vw_caption_presenter.c:37,63,76` |
-| **I/O**              | None (no disk/network I/O)                                                                                  | N/A                                          |
-| **Persistence**      | None                                                                                                        | N/A                                          |
+| Boundary type | What to check | Code location | Status |
+| --- | --- | --- | --- |
+| **Input validation** | Null text / duration <= 0 | `vw_caption_presenter.c:101-102` | Validated |
+| **Input validation** | Null segment / text_utf8 | `vw_caption_presenter.c:115-116` | Validated |
+| **Input validation** | Queue capacity 0 / alloc failure | `vw_queue.c:10-21` | Validated |
+| **Input validation** | Null sys / block in callback | `vlc_whisper_module.c:50` | Validated |
+| **Input validation** | `sample_rate == 0` in capture | `vw_audio_capture.c:17-18` | **Gap — division by zero** |
+| **Input validation** | `VLC_TICK_INVALID` PTS blocks | `vw_audio_capture.c:22` | **Gap — enqueued with INT64_MIN** |
+| **Input validation** | `(void*)` → `filter_t*` cast | `vw_caption_presenter.c:104` | No runtime type check (documented) |
+| **Authorization** | In-process module; token auth is worker-side (prior milestone) | N/A | N/A here |
+| **Concurrency** | SPSC memory ordering | `vw_queue.c:41,43,49,61,63,75` | Correct (release/acquire pairs) |
+| **Concurrency** | `block_count` non-atomic | `vlc_whisper_module.c:76` | Safe — single aout thread per instance |
+| **Concurrency** | `input_GetVout`/`find_name` lock acquisition on audio thread | `vw_caption_presenter.c:33,44,57` | Accepted (short-held), low risk |
+| **I/O** | None in callback (no pipe writes this milestone) | `vlc_whisper_module.c:48-83` | Compliant (Rule 4) |
+| **Persistence** | `libvlccore.def` tracked | `.gitignore:144` | **Gap — build input untracked** |
 
----
+## 5. Acceptance Criterion → Code Mapping
 
-## 5. Acceptance Criterion to Code Mapping
+| # | Criterion | Plan Source | Code | Test | Status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Single DLL contains both SPU and OSD display logic | M2.11 plan `:31` | OSD only; SPU enum exists (`vw_caption_presenter.h:8-12`) | `test_caption_presenter.c:63-65` | **Missing** (SPU) |
+| 2 | Automatic fallback to OSD if SPU unavailable | M2.11 plan `:32` | Always OSD; "fallback" never exercised | N/A | Partial |
+| 3 | Tested against sample video without crashes | M2.11 plan `:33` | README manual Windows run | Not automated | Partial |
+| 4 | `vlc_entry__3_0_0f` ABI entry point | Roadmap step 9 | `vlc_whisper_module.c:129-136` | `test_plugin_load.c:31-41` | Done |
+| 5 | Capture PCM + PTS, non-blocking, canonical 16k S16 | Roadmap step 10 | `vw_audio_capture.c:12-80` | `test_audio_capture.c:31-56` | Done |
+| 6 | Bounded queue, playback wins, measurable drops | Roadmap step 10 / ADR-008 | `vw_queue.c:36-54` | `test_queue.c:44-61` | Done |
+| 7 | Out-of-tree packaging decision | Roadmap step 12 / ADR-012 | `docs/decisions.md:85-94` | N/A | Done |
+| 8 | C17, no project C++ | M2.11 DoD | All files | build | Done |
+| 9 | No blocking in audio callback | M2.11 DoD | `vlc_whisper_module.c:48-83` | invariant | Done |
+| 10 | Warnings-as-errors and formatting pass | M2.11 DoD | — | `clang-format --Werror` clean; build emits 2 warnings; no `-Werror` on plugin | Partial |
 
-| #   | Criterion                                   | Plan Source        | Code                                                               | Test                             | Status         |
-| --- | ------------------------------------------- | ------------------ | ------------------------------------------------------------------ | -------------------------------- | -------------- |
-| 1   | Mode enum with AUTO/SPU/OSD                 | Milestone 2 plan   | `vw_caption_presenter.h:8-12`                                      | `test_caption_presenter.c:63-65` | ✅ done        |
-| 2   | Primary `vw_caption_presenter_display` API  | Milestone 2 plan   | `vw_caption_presenter.h:18`, `vw_caption_presenter.c:106-115`      | `test_caption_presenter.c:59-67` | ✅ done        |
-| 3   | `vw_caption_presenter_show_segment` API     | Milestone 2 plan   | `vw_caption_presenter.h:22`, `vw_caption_presenter.c:117-127`      | `test_caption_presenter.c:69-76` | ✅ done        |
-| 4   | OSD fallback path (vout_OSDText)            | Milestone 2 plan   | `vw_caption_presenter.c:103`                                       | Visual verification              | ✅ done        |
-| 5   | Native SPU subpicture channel               | Milestone 2 plan   | `(void)mode` at `vw_caption_presenter.c:107` — **not implemented** | N/A                              | ❌ missing     |
-| 6   | Automatic OSD fallback if SPU unavailable   | Milestone 2 plan   | Always uses OSD; no SPU path exists                                | Same as #4                       | ⚠️ partial     |
-| 7   | Vout discovery from filter hierarchy        | Milestone 2 plan   | `vw_caption_presenter.c:17-97`                                     | No live-VLC test                 | ✅ done (code) |
-| 8   | Tested against sample video without crashes | Milestone 2 plan   | N/A (visual test)                                                  | Not in committed tests           | ⚠️ partial     |
-| 9   | Non-blocking, callback-safe execution       | Definition of done | `vw_plugin_filter` at `vlc_whisper_module.c:55-83`                 | Architectural invariant          | ✅ done        |
-| 10  | C17 code; no C++                            | Definition of done | All files                                                          | Compiler check                   | ✅ done        |
-| 11  | Warnings-as-errors and formatting pass      | Definition of done | N/A                                                                | `cmake --build` with `-Werror`   | ✅ done        |
-
----
-
-## 6. Code Review Findings
+## 7. Code Review Findings
 
 ### Bugs (Sorted by Priority)
 
-| Priority   | Component / Location                        | Description                                                                                                                                                                                                                          | Impact                                                                                                                                     | Proposed Fix                                                                                                                                           |
-| ---------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Medium** | `vw_caption_presenter.c:107`                | `(void)mode` discards the caller's mode selection. `VW_PRESENTER_MODE_SPU` silently falls back to OSD — the enum promises SPU but only OSD is implemented.                                                                           | Caller expects SPU subpicture channel for native subtitle region rendering but gets OSD overlay instead. No crash, but incorrect behavior. | Implement SPU path via `subpicture_New` + `vout_PutSubpicture` with correct PTS, or document that SPU is not yet supported and remove the enum values. |
-| **Medium** | `vw_caption_presenter.c:110`                | `void* p_filter_ptr` cast to `filter_t*` with no compile-time or runtime type check. If called with an incorrect pointer type (e.g., from `vw_caption_presenter_show_segment` which stores `void*`), the cast is undefined behavior. | Potential UB if caller misuses the API. Currently all callers pass the correct type.                                                       | Use `filter_t*` directly in the API signature instead of `void*`, or add an explicit tag/type field.                                                   |
-| **Low**    | `vw_caption_presenter.c:118-119`            | `vw_caption_presenter_show_segment` uses `presenter->vlc_subpicture` as `filter_t*` — this field is named `vlc_subpicture` (suggesting it holds a subpicture pointer) but is used as a filter pointer. Semantic mismatch.            | Confusing to future readers; no runtime impact since it's cast to void\* anyway.                                                           | Rename `vlc_subpicture` to `p_filter_context` or add a union.                                                                                          |
-| **Low**    | `vw_caption_presenter.c:123-124`            | Default 2-second duration is applied when segment duration is zero or negative — but negative duration indicates invalid data that should arguably be rejected.                                                                      | 2-second caption appears on screen for negative-duration segments. Minor.                                                                  | Log a warning when duration is negative before applying default.                                                                                       |
-| **Low**    | `tests/unit/test_caption_presenter.c:77-78` | `(void)segment;` and `(void)empty_seg;` are used to suppress unused-variable warnings, but `segment` is used at line 73 (`&segment` passed to function). This suggests the test was refactored and these suppressions are leftover.  | Dead code (no-op suppression). No functional impact.                                                                                       | Remove the two `(void)` casts.                                                                                                                         |
+| Priority | Component / Location | Description | Impact | Proposed Fix |
+| --- | --- | --- | --- | --- |
+| **High** | `.gitignore:144` + `plugin/CMakeLists.txt:31-38` | `*.def` rule ignores the hand-written `plugin/libvlccore.def`, which is a `DEPENDS` of the Windows import-library generation. File exists only in this worktree, untracked. | Windows cross-build fails on any fresh clone/CI; milestone 2 Windows deliverables unbuildable | `git add -f plugin/libvlccore.def` (or add `!plugin/libvlccore.def` negation) before merge |
+| **Medium** | `plugin/src/vw_caption_presenter.c:100` (unstaged) | `(void)mode;` deleted; parameter still unused (warning at declaration line 100) | `-Wunused-parameter` warning in current tree; build no longer warning-clean | Restore `(void)mode;` or implement mode dispatch (AUTO/OSD → OSD; SPU → OSD + WARN) |
+| **Medium** | `plugin/src/vw_audio_capture.c:17-18` | `output_frames = (frame_count * 16000) / input->sample_rate` with no `sample_rate == 0` guard | Division by zero (crash) if any caller passes rate 0; API is public and testable | Early-reject `input->sample_rate == 0` |
 
 ### Architectural & Operational Risks
 
-| Category                          | Risk Description                                                                                                                                                                                                                                                       | Affected Files                              | Mitigation Strategy                                                                                                      |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Blocking on audio thread**      | `input_GetVout` acquires VLC internal locks from the audio output thread. If the input thread is blocked (seeking, EOF, stopping), this blocks the audio callback.                                                                                                     | `vw_caption_presenter.c:37,63,76`           | Move vout lookup to a deferred/polled path or cache the vout reference at open time with a release on vout destruction.  |
-| **SPU path permanently deferred** | The SPU subpicture channel (native subtitle area) was the primary route in the plan but was removed due to buggy implementation. If OSD has different behavior across VLC versions (position, styling, coexistence with native subtitles), this is a portability risk. | `vw_caption_presenter.c` (entire file)      | Revisit SPU implementation in Milestone 3 with proper PTS-based subpicture lifecycle.                                    |
-| **Caption visibility**            | `vout_OSDText` renders as an OSD overlay, not in the native subtitle area. OSD may be disabled by user settings, have different font/styling, or be obscured by UI elements.                                                                                           | `vw_caption_presenter.c:103`                | Document this limitation; plan SPU path for Milestone 3.                                                                 |
-| **Test coverage gap**             | The vout search function (`vw_caption_presenter_find_vout`) has zero test coverage — the unit test stubs return NULL, so only the NULL-p_filter fallback path is exercised.                                                                                            | `tests/unit/test_caption_presenter.c:19-49` | Add an integration test with a mock VLC object hierarchy, or a controlled test that verifies stubs are called correctly. |
+| Category | Risk Description | Affected Files | Mitigation Strategy |
+| --- | --- | --- | --- |
+| **Build reproducibility** | Windows import lib depends on an untracked file (see H-1) | `plugin/CMakeLists.txt`, `plugin/libvlccore.def` | Track the .def; add a CI job for the windows-x64 preset to catch this class of issue |
+| **SPU promise vs OSD reality** | Enum, header comments, unit test, roadmap all assert a native SPU channel that does not exist; the `.def` even exports unused SPU symbols | `vw_caption_presenter.h`, `test_caption_presenter.c`, `roadmap.md:29`, `libvlccore.def` | Either implement `subpicture_New`/`vout_PutSubpicture` path in M3 and keep the enum, or strip SPU from enum/docs/tests now |
+| **Unenforced warning gate** | Plan DoD claims warnings-as-errors, but plugin target has no `-Werror`; two live warnings (deprecated `vlc_object_find_name`, unused `mode`) | `plugin/CMakeLists.txt:41-45`, `vw_caption_presenter.c` | Add `-Werror`; address or document both warnings |
+| **Consumer gap** | Queue is produced into but nothing drains it; worker inference loop stubbed — milestone is plugin-side only | `vw_audio_capture.c`, `worker/src/vw_whisper_engine.c` | Explicitly out of scope for M2; first M3 task is the sender |
+| **Windows test gap** | `test_plugin_load` would fail on Windows (DLL imports libvlccore.dll, not present in test env); no windows test preset | `tests/CMakeLists.txt:31-34` | Ship real libvlccore.dll in CI or skip test on Windows with a documented reason |
+| **OSD-only captions** | `vout_OSDText` overlays may be disabled by user `osd` setting, styled differently, or coexisting poorly with native subtitles | `vw_caption_presenter.c:95` | Documented in `vlc-api-essentials.md` Section 7; revisit SPU in M3 |
 
 ### Code Style & Quality Nitpicks
 
-| Issue Type         | File & Line                                 | Description                                                                                                           | Recommendation                               |
-| ------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **Dead Code**      | `tests/unit/test_caption_presenter.c:77-78` | Leftover `(void)segment; (void)empty_seg;` suppressions for variables that are actually used                          | Remove both lines                            |
-| **Naming**         | `vw_caption_presenter.h:16`                 | Field named `vlc_subpicture` but used as a generic `filter_t*` context pointer                                        | Rename to `p_filter_ctx` or `filter_handle`  |
-| **Documentation**  | `vw_caption_presenter.h:18`                 | Comment says "native SPU subpicture channel or OSD fallback depending on mode and availability" but SPU is never used | Update comment to reflect reality (OSD-only) |
-| **Documentation**  | `vw_caption_presenter.h:21`                 | Comment says "default AUTO mode for native SPU or OSD fallback" — AUTO always uses OSD                                | Update comment to match implementation       |
-| **Unused Include** | `vw_caption_presenter.c`                    | `#include <vlc_block.h>` is included but `vlc_block_t` is never used                                                  | Remove unused include                        |
+| Issue Type | File & Line | Description | Recommendation |
+| --- | --- | --- | --- |
+| **Dead Code** | `tests/unit/test_caption_presenter.c:77-78` | `(void)segment; (void)empty_seg;` suppressions for variables that are used | Remove both lines (previously flagged, still open) |
+| **Naming** | `vw_caption_presenter.h:16` / `.c:122` | Field `vlc_subpicture` stores a filter pointer, never a subpicture | Rename to `p_filter_ctx` |
+| **Misleading Test** | `test_caption_presenter.c:63-65` | Asserts SPU mode succeeds when SPU is unimplemented (NULL-filter early-return masks it) | Drop the SPU assertion or gate on mode semantics |
+| **Unused Include** | `vw_caption_presenter.c:10` | `<vlc_block.h>` included, no `block_t` used | Remove (keep `vlc_common.h` ordering rule) |
+| **Docs/Plan Drift** | `milestone_2_11_plan.md:31-33` | Acceptance criteria unchecked while code is committed | Check off or annotate each box |
+| **Roadmap Overstatement** | `roadmap.md:29` | Step 11 marked done though native subtitle route unimplemented | Reword to "OSD overlay proven; native SPU deferred to M3" |
+| **Negative duration** | `vw_caption_presenter.c:118-120` | Negative segment duration silently becomes 2 s default; invalid data should be rejected or warned | WARN on negative; reject instead of defaulting |
+
+---
+
+**Bottom line**: The Linux-side milestone is in good shape — 10/10 tests pass, Valgrind clean, memory ordering and hold/release ownership are correct, and the docs are now consistent (8 s backlog everywhere). The merge is **blocked by H-1** (untracked `libvlccore.def` breaks the Windows build on any other machine); fix that, then decide on the `(void)mode` warning and the SPU-vs-OSD promise before merging.

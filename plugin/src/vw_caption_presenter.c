@@ -98,7 +98,6 @@ static bool vw_caption_presenter_render_text(filter_t* p_filter, const char* tex
 }
 
 bool vw_caption_presenter_display(void* p_filter_ptr, const char* text, int64_t duration_us, vw_presenter_mode_t mode) {
-  (void)mode;
   if (!text || duration_us <= 0) {
     return false;
   }
