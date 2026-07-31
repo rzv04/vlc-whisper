@@ -116,7 +116,7 @@ flowchart TD
     class DROP,COUNT,DISABLE warn;
 ```
 
-The queue is capped at 15 seconds of unprocessed audio in the initial design. Loss under overload is explicit and measurable; slowing playback is never an overload strategy.
+The queue is capped at 8 seconds of unprocessed audio (16 × 512 ms chunks) in the initial design. Loss under overload is explicit and measurable; slowing playback is never an overload strategy.
 
 ## Protocol frame
 

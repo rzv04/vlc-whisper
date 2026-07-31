@@ -2,7 +2,8 @@
 
 > **Vendor dependency:** [`VLC 3.0.23`](file:///home/razvan/vlc-whisper/.worktrees/gemini/worker/third_party/vlc-3.0.23/) — linked via public VLC headers in `plugin/include` & `worker/third_party/vlc-3.0.23/include/`.  
 > **Header inclusion:** Always include `<vlc_common.h>` before any other VLC headers (`vlc_block.h`, `vlc_filter.h`, `vlc_input.h`, etc.). Protect header inclusion order using `// clang-format off` / `// clang-format on` to prevent alphabetical header reordering by `clang-format`.  
-> **Linked by:** `vlc_whisper_plugin` only (the worker executable *must not* link VLC headers or libraries).
+> **Linked by:** `vlc_whisper_plugin` only (the worker executable *must not* link VLC headers or libraries).  
+> **Verified against:** the vendored VLC 3.0.23 headers (`worker/third_party/vlc-3.0.23/include/`) and VideoLAN docs via Context7 (`/videolan/vlc`). Where this document differs from common VLC references, the vendored headers win.
 
 This document provides a comprehensive, deep-dive specification of VLC 3.0 C API contracts, internal engine mechanics, object tree traversal algorithms, clock and timestamp synchronization, stream capability detection (seeking, IPTV, VOD), and rendering subsystem integration.
 
@@ -144,36 +145,60 @@ vlc_whisper_module (pf_audio_filter)
 
 ## 5. Livestream, IPTV, and Network VOD Detection
 
-VLC categorizes media inputs into **Seekable VOD / Local Files** vs **Live IPTV / Network Streams** via `input_Control()` query flags.
+VLC categorizes media inputs into **Seekable VOD / Local Files** vs **Live IPTV / Network Streams**. Stream capabilities are exposed through **two** mechanisms — and `INPUT_CAN_SEEK` / `INPUT_CAN_PAUSE` / `INPUT_CAN_CONTROL_PACE` do **not** exist anywhere in `enum input_query_e` (`vlc_input.h`); code using them will not compile:
 
-### Querying Stream Capabilities (`input_Control`)
+1. **Input object variables** (plugin-safe): read-only bools on the `input_thread_t` — `can-seek`, `can-pause`, `can-rate`, `can-rewind`, `can-record` (documented in `vlc_input.h`). **There is no public pace variable**, so pace control can only be tested through the demux query below.
+2. **Demux queries** (internal to VLC core): `DEMUX_CAN_SEEK`, `DEMUX_CAN_PAUSE`, `DEMUX_CAN_CONTROL_PACE` in `enum query_e` (`vlc_demux.h`), issued via `demux_Control()`.
+
+### Querying Stream Capabilities (plugin-safe: input variables)
+
+`p_input` is the `input_thread_t` found by walking the parent chain (Section 6). `var_GetBool` is declared in `vlc_variables.h`:
 
 ```c
 #include <vlc_input.h>
+#include <vlc_variables.h>
 
 // 1. Query seeking capability
-bool b_seekable = false;
-input_Control((input_thread_t*)p_input, INPUT_CAN_SEEK, &b_seekable);
+bool b_seekable = var_GetBool(p_input, "can-seek");
 
-// 2. Query pace control (live vs file/buffered stream)
-bool b_can_pace = false;
-input_Control((input_thread_t*)p_input, INPUT_CAN_CONTROL_PACE, &b_can_pace);
+// 2. Query pause capability
+bool b_can_pause = var_GetBool(p_input, "can-pause");
 
-// 3. Query pause capability
-bool b_can_pause = false;
-input_Control((input_thread_t*)p_input, INPUT_CAN_PAUSE, &b_can_pause);
+// 3. Query rate control (0.5x / 2.0x playback)
+bool b_can_rate = var_GetBool(p_input, "can-rate");
 ```
+
+### Querying Stream Capabilities (internal: demux controls)
+
+`input_GetDemux()` is an **internal** API (`src/input/input_internal.h`) — it is *not* exported by any public VLC 3.0 header, so a plugin cannot link against it. Use `demux_Control` only inside VLC core:
+
+```c
+#include <vlc_demux.h>
+
+input_thread_t *p_input = /* find input ancestor */;
+demux_t *p_demux = input_GetDemux(p_input);   // internal API — NOT available to plugins
+bool b_seekable = false;
+demux_Control(p_demux, DEMUX_CAN_SEEK, &b_seekable);
+
+bool b_can_pace = false;
+demux_Control(p_demux, DEMUX_CAN_CONTROL_PACE, &b_can_pace);
+
+bool b_can_pause = false;
+demux_Control(p_demux, DEMUX_CAN_PAUSE, &b_can_pause);
+```
+
+> **Plugin takeaway:** from a filter plugin, query the input variables for seek/pause/rate. For pace control (the strongest live-vs-VOD signal) there is no public variable — infer liveness from `can-seek == false` combined with `can-pause == false`, or add a demux probe inside the core.
 
 ### Capability Matrix
 
-| Stream Type | `INPUT_CAN_SEEK` | `INPUT_CAN_CONTROL_PACE` | `INPUT_CAN_PAUSE` | Plugin Behavior |
+| Stream Type | `can-seek` (`DEMUX_CAN_SEEK`) | `DEMUX_CAN_CONTROL_PACE` | `can-pause` (`DEMUX_CAN_PAUSE`) | Plugin Behavior |
 |---|---|---|---|---|
 | **Local File** | `true` | `true` | `true` | Full seeking support, pause/resume timeline sync. |
 | **Network VOD (HTTP/MP4)** | `true` | `true` | `true` | Seeking supported; handle buffer stalls via PTS gaps. |
 | **HLS / DASH Live Stream** | `false` / bounded | `true` | `true` / bounded | Sliding window timeline; drop stale backlog audio. |
 | **IPTV / RTSP Broadcast** | `false` | `false` | `false` | Realtime network pace; no seeking; continuous VAD. |
 
-> **Livestream Rule:** For live IPTV streams (`INPUT_CAN_CONTROL_PACE == false`), the plugin must never buffer audio beyond the maximum backlog threshold (~15s). Stale PCM chunks are dropped, and captions are presented strictly aligned with incoming media PTS.
+> **Livestream Rule:** For live IPTV streams (`DEMUX_CAN_CONTROL_PACE == false`; from a plugin, approximated by `can-seek == false` && `can-pause == false`), the plugin must never buffer audio beyond the maximum backlog threshold (8 s; 16 × 512 ms chunks). Stale PCM chunks are dropped, and captions are presented strictly aligned with incoming media PTS.
 
 ---
 
@@ -194,7 +219,11 @@ libvlc (object_type="libvlc", root instance)
 
 ### `vout` Retrieval Algorithm
 
-Because `audio filter` and `vout_thread_t` reside on separate branches under `playlist`, `vlc_object_find_name(p_filter, "vout")` returns `NULL`. The plugin uses tree traversal and the official `input_GetVout()` API:
+Because `audio filter` and `vout_thread_t` reside on separate branches under `playlist`, `vlc_object_find_name(p_filter, "vout")` returns `NULL`. The plugin uses tree traversal and the official `input_GetVout()` API (`static inline` in `vlc_input.h`):
+
+> **Deprecation warning:** `vlc_object_find_name()` is declared `VLC_DEPRECATED` in `vlc_objects.h` (3.0.23). Using it emits `-Wdeprecated-declarations` warnings. The real code keeps it as a fast-path (step 3 below) — suppress with `-Wno-deprecated-declarations` or drop step 3; step 4 (type-based child scan) is the reliable fallback.
+>
+> **Name vs type:** `vlc_object_t` / `struct vlc_common_members` has **no `psz_object_name` field** in 3.0. Names are internal, read via `vlc_object_get_name()`, and `vlc_object_find_name(cur, "input")` matches by *name*, not by type — it only finds objects explicitly named `"input"` (VLC does name input threads this way, which is why step 3 works at all). The type check in step 4 (`child->obj.object_type`) is what actually does the heavy lifting.
 
 ```c
 static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
@@ -250,6 +279,32 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
 }
 ```
 
+> **Type-safety caveat:** `VLC_OBJECT(x)` in 3.0 is a `_Generic`-based type-safe cast (`vlc_common.h`) — it verifies the argument embeds `struct vlc_common_members`. The raw `(input_thread_t*)cur` / `(vout_thread_t*)cur` casts after a `strcmp` bypass that safety: they compile and work, but the *only* guard is the string comparison on `object_type`, which is fragile if internal type names ever change.
+
+### Object Reference Counting (`vlc_object_hold` / `vlc_object_release`)
+
+VLC objects (`filter_t`, `vout_thread_t`, `input_thread_t`, …) are lifetime-managed by an **atomic reference count** — the C equivalent of a shared pointer. The counter lives in the private `vlc_object_internals_t`, not in the public struct (`vlc_object_t` is only `VLC_COMMON_MEMBERS`). Declared in `vlc_objects.h`, implemented in `src/misc/objects.c`.
+
+- **`vlc_object_hold(obj)`** — atomically increments the refcount, returns the same object. While held, the object is guaranteed not to be destroyed.
+- **`vlc_object_release(obj)`** — atomically decrements the refcount. At zero the object is marked killed, and actual destruction is **deferred to the object's own thread** (VLC objects *are* threads; `vlc_object_delete` runs when that thread exits). This makes release safe from any other thread — e.g. the audio filter callback — because it never frees memory under the caller.
+
+Both are macros wrapping `VLC_OBJECT()` (the type-safe cast), so any object type can be passed directly. The refcount operations are atomic — callable from any thread without external locking.
+
+> **What hold/release do NOT do:** they are not a mutex. They provide **no mutual exclusion** for concurrent access to an object's internals — thread safety of vout calls comes from the vout's own internal locks (e.g. `vout->p->osd.lock`). Hold/release answer one question only: *can this object still be destroyed right now?*
+
+**The ownership convention that matters:** APIs that *hand you* an object return it **already held** — the caller must release it when done. Raw pointers from tree walks are **not** held:
+
+| Source of object | Held for you? | Caller must… |
+|---|---|---|
+| `input_GetVout(p_input)` (`vlc_input.h`: “needs to be released with `vlc_object_release()`”) | yes | `vlc_object_release(VLC_OBJECT(vout))` when done |
+| `vlc_object_find_name(...)` | yes | `vlc_object_release(p_input_obj)` after use |
+| `child` pointers from `vlc_list_children(...)` (`children->p_values[i].p_address`) | **no** | `vlc_object_hold(child)` *before* returning it |
+| Ancestor walk (`cur = cur->obj.parent`) | **no** | hold before use, release after |
+
+That is exactly why the algorithm above calls `vlc_object_hold(cur)` / `vlc_object_hold(child)` before returning a vout found via the parent chain or children list, and `vlc_object_release(p_input_obj)` after step 3's `vlc_object_find_name`.
+
+> **Why the plugin needs this:** the vout can be stopped and destroyed at any moment — user closes the window, switches media, or VLC exits. Without the hold around `vout_OSDText()`, the audio filter thread would dereference a vout thread object that may have been killed mid-call (use-after-free).
+
 ---
 
 ## 7. Subtitle & OSD Rendering Subsystem
@@ -270,7 +325,16 @@ void vout_OSDText(vout_thread_t *vout, int channel, int position, vlc_tick_t dur
 | `duration` | `vlc_tick_t` | `duration_us` | Display lifetime in microsecond ticks ($1\text{ s} = 1,000,000\text{ ticks}$). |
 | `text` | `const char*` | UTF-8 string | Subtitle caption text to present on screen. |
 
-> **Memory Rule:** Always call `vlc_object_release(VLC_OBJECT(vout))` immediately after calling `vout_OSDText()` to decrement reference count and avoid memory leaks.
+> **Memory Rule:** `input_GetVout()` returns an *already-held* reference, so always call `vlc_object_release(VLC_OBJECT(vout))` immediately after calling `vout_OSDText()` to drop it (see “Object Reference Counting” in Section 6). This is safe from the audio filter thread — destruction of the vout is deferred to the vout's own thread, so the memory is never freed under the caller.
+
+**Silent no-ops** — `vout_OSDText()` returns `void` and fails silently in two cases, so a missing overlay is not a bug in the caller:
+
+- The user's `osd` setting is disabled (checked via `var_InheritBool(vout, "osd")` in `video_text.c`).
+- `duration <= 0` (no display lifetime).
+
+**No buffer lifetime requirement:** the implementation copies the text (`strdup`) into the subpicture text region, so the caller's `const char*` may be freed or reused immediately after the call returns.
+
+For persistent, styled, or refresh-driven overlays (e.g. a live caption track), the more capable pattern is a subpicture **filter** source: `filter_NewSubpicture()` + `subpicture_region_NewText()` + `text_segment_New()`, with `b_ephemer` and `i_start`/`i_stop` timing — see the canonical `marq.c` (`modules/spu/marq.c`) implementation, which context7 surfaced as the reference pattern.
 
 ---
 

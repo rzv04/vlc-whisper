@@ -187,3 +187,4 @@ review.md
 # MCP configs w/ API keys (TODO: move to env vars)
 .agents/mcp_config.json
 opencode.jsonc
+opencode.json

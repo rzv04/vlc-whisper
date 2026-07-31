@@ -46,7 +46,7 @@ Define the reference machine before claiming “real time”: CPU model/core cou
 
 - Real-time factor = inference processing time divided by audio duration; target steady-state below 1.0 for tiny.en on reference hardware.
 - End-to-caption latency: target p95 below 5 seconds under the selected 8-second/2-second default windowing, measured from segment end PTS to display scheduling.
-- No unbounded queue; backlog hard limit 15 seconds; zero intentional playback stalls.
+- No unbounded queue; backlog hard limit 8 seconds (16 × 512 ms chunks); zero intentional playback stalls.
 
 These targets are engineering gates, not a guarantee for every PC or noisy source.
 
