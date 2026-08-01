@@ -1,7 +1,9 @@
 #if defined(_WIN32) || defined(__MINGW32__)
+// clang-format off
+#include <windows.h>
 #include <bcrypt.h>
 #include <string.h>
-#include <windows.h>
+// clang-format on
 
 #ifndef BCRYPT_RNG_ALG_HANDLE
 #define BCRYPT_RNG_ALG_HANDLE ((BCRYPT_ALG_HANDLE)0x00000081)
