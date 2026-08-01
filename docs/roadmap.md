@@ -1,65 +1,62 @@
-# Roadmap
+# Implementation Roadmap
 
-## Milestone 0: Lock assumptions (Completed)
-
-- [x] 1. Select and record exact Windows x64 VLC release/build, installer layout, compiler, MinGW target triplet, and pinned `whisper.cpp` commit.
-- [x] 2. Create repository, root `CMakeLists.txt`, `CMakePresets.json`, C17 warning policy, `.clang-format`, `.gitignore`, `AGENTS.md`, and reproducible toolchain notes.
-- [x] 3. Build and verify Windows x64 `vlc-whisper-worker.exe` cross-compilation from Ubuntu host.
-- [x] 4. Add model manifest abstraction (`models/manifest.json`) and provision checked `ggml-tiny.en.bin` model.
-
-**Exit Status:** **DONE** — Clean checkout builds worker for Windows and produces version/build metadata.
+This document outlines the ordered sequence of deliverables for building `vlc-whisper`. Each milestone must pass its specified exit status before proceeding to the next.
 
 ---
 
-## Milestone 1: Worker proof (Completed)
+## Milestone 0: Core protocol & worker scaffold (Complete)
 
-- [x] 5. Implement C worker host that loads `tiny.en` through whisper.cpp's C API and transcribes a fixed 16 kHz mono WAV fixture (scaffolded in `vw_whisper_engine.c`).
-- [x] 6. Implement VAD/window/hop(process frequency) configuration and final-segment normalization/deduplication (`vw_vad.c`, `vw_segment_builder.c`).
-- [x] 7. Implement binary frame codec (`vw_protocol_codec.c`), named-pipe/socket server (`vw_ipc_pipe_win32.c`, `vw_ipc_socket_linux.c`), `HELLO`/`token` check, `START`/`AUDIO`/`STOP`, and integration test suites (`test_worker_ipc.c`, `test_worker_lifecycle.c`).
-- [x] 8. Add bounds checks, malformed-frame validation, worker crash/error behavior, and redacted structured diagnostics (`vw_log.c`).
+- [x] 1. Pin external dependencies: `whisper.cpp` (C API), VLC 3.0 headers (`vlc_common.h`, `vlc_filter.h`), and C test runner.
+- [x] 2. Establish C17 build system (`CMakeLists.txt`), strict warning flags, clang-format rules, and memory leak checks (Valgrind/ASan).
+- [x] 3. Define binary IPC protocol frames: `HELLO`, `HELLO_ACK`, `START`, `STARTED`, `AUDIO`, `SEGMENT`, `STOP`, `PAUSE`, `RESUME`, `SHUTDOWN`, `STATUS`, `ERROR`.
+- [x] 4. Implement protocol codec & validation: endianness, magic bytes (`VLCW`), payload size bounds, UTF-8 checks.
+- [x] 5. Implement thread-safe SPSC ring buffer for 16 kHz Mono S16LE PCM chunks in C.
+- [x] 6. Implement local IPC server (`vlc-whisper-worker` binary) using named pipes (Windows) and Unix domain sockets (Linux) with 32-byte token auth.
+
+**Exit Status:** **DONE** — Protocol test suite passes 100% on Linux and Windows. Clean memory leak check under Valgrind.
+
+---
+
+## Milestone 1: IPC worker & transcription loop (Complete)
+
+- [x] 7. Integrate `whisper.cpp` into worker process: load model (`ggml-tiny.en.bin`), run inference on 16 kHz PCM stream.
+- [x] 8. Implement segment builder: split transcription outputs into timed `SEGMENT` frames with monotonically increasing segment IDs and valid media PTS.
 
 **Exit Status:** **DONE** — Worker transcribes fixture PCM over named pipe / Unix socket with 10s accept & 3s I/O timeouts, constant-time auth, and privacy-safe logging.
 
 ---
 
-## Milestone 2: VLC feasibility spike (Scaffolded)
+## Milestone 2: VLC feasibility spike (Complete)
 
-- [ ] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vlc_whisper_module.c`).
-- [ ] 10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior (`vw_audio_capture.c`, `vw_queue.c`).
-- [ ] 11. Independently prove caption display: native timed subtitle route preferred, OSD overlay fallback documented (`vw_caption_presenter.c`).
-- [ ] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior.
+- [x] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vlc_whisper_module.c`).
+- [x] 10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior (`vw_audio_capture.c`, `vw_queue.c`).
+- [x] 11. Independently prove caption display: OSD overlay route implemented and verified (`vw_caption_presenter.c`); native SPU deferred.
+- [x] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior (ADR-012).
 
-**Exit Status:** **PLANNED** — A test module sees timestamped audio and displays a static/deterministic timed caption on the reference VLC.
-
----
-
-## Milestone 3: Local-file MVP
-
-- [ ] 13. Integrate bounded SPSC audio queue, sender thread, worker supervisor, and authenticated pipe.
-- [ ] 14. Receive/validate final segments; schedule/clear them through the proven VLC presenter.
-- [ ] 15. Implement lifecycle: start, play, pause, resume, stop/end, worker missing/crash, and unsupported source rejection.
-- [ ] 16. Implement discontinuity detection; seeking/rate/title changes must clear captions and fail only the caption session gracefully.
-- [ ] 17. Implement benchmark suite and performance output metrics (inference latency, queue high-water mark, audio processing speed).
-- [ ] 18. Package a developer install, write a local-video quickstart, and run end-to-end Windows acceptance fixtures.
-
-**Exit Status:** **PLANNED** — Local English files show captions during normal play/pause; VLC remains stable if captions fail.
+**Exit Status:** **DONE** — A test module sees timestamped audio and displays a static/deterministic timed caption on the reference VLC.
 
 ---
 
-## Milestone 4: Release discipline
+## Milestone 3: Local & Live MVP with Seeking & Play/Pause (Planned)
 
-- [ ] 19. Add GitHub/GitLab CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact signing/hashes, SBOM/third-party notices, and release manifests.
-- [ ] 20. Add Windows VM smoke tests for the pinned VLC installation and manual performance/compatibility matrix.
-- [ ] 21. Publish troubleshooting, supported hardware baseline, privacy statement, uninstall/rollback, known limitations, and bug report template.
+- [ ] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
+- [ ] 14. Feed captured PCM chunks from SPSC queue across IPC transport to worker process in real time.
+- [ ] 15. Receive incoming `SEGMENT` frames on plugin background thread and trigger `vw_caption_presenter_display()`.
+- [ ] 16. Implement Play/Pause lifecycle: send `PAUSE`/`RESUME` IPC control frames, suspend PCM queue forwarding on pause, and resume timeline PTS sync on resume.
+- [ ] 17. Implement Seeking & Discontinuity support: detect `BLOCK_FLAG_DISCONTINUITY` / non-monotonic PTS, clear active presenter captions, send `STOP` (`SEEK_DISCONTINUITY`), reset SPSC queue/VAD state, and start new session epoch without interrupting playback.
+- [ ] 18. Package local developer build and run end-to-end local video and stream acceptance tests.
 
-**Exit Status:** **PLANNED** — Reproducible signed/hashed development release with documented limits.
+**Exit Status:** **PLANNED** — Local and stream media show real-time captions with full play/pause timeline sync and seamless seeking support; zero audio stutter or memory leaks.
 
 ---
 
-## Post-MVP
+## Milestone 4: Release Discipline & Post-MVP (Planned)
 
-- [ ] 22. Add `RESET`/timeline epoch and segment-cache invalidation; implement local-file seeking and regression suite.
-- [ ] 23. Add source profiles for VOD and live streams separately, then test IPTV protocols/providers only as legal, accessible fixtures permit.
-- [ ] 24. Add standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 with validated installed-model list, language choice/auto-detect policy, CPU threads, diagnostics consent, and restart semantics.
-- [ ] 25. Add multilingual models and performance profiles; make `base`, `small`, `medium`, and `large` availability capability- and benchmark-based, not unconditional.
-- [ ] 26. Port platform layer to Linux: Unix socket, process supervision, installation paths, and Linux VLC test matrix.
+- [ ] 19. Add CI build matrix (Ubuntu host -> Windows x64 worker/plugin), static analysis, unit/contract tests, artifact hashes, and SBOM/licenses.
+- [ ] 20. Add Windows VM smoke test matrix for pinned VLC installation.
+- [ ] 21. Standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 for model selection, CPU thread count, and language policy.
+- [ ] 22. Multilingual models (`small`, `medium`, `large`) and automatic language detection.
+- [ ] 23. Native SPU subpicture channel integration (`subpicture_New`/`vout_PutSubpicture`).
+- [ ] 24. Release documentation: troubleshooting, privacy statement, uninstall guide, and bug report templates.
+
+**Exit Status:** **PLANNED** — Reproducible signed/hashed release package with documented compatibility matrix.

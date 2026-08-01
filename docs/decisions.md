@@ -34,11 +34,13 @@ Use authenticated, current-user-only named pipes on Windows and Unix-domain `SOC
 
 MVP renders final segments only. This reduces flicker and avoids requiring subtitle replacement semantics before the VLC presentation spike is proven. Keep segment IDs and reserved `replace` capability so later partial hypotheses can revise a rolling caption area.
 
-## ADR-006: Deliberate no-seek MVP
+## ADR-006: Seeking and Play/Pause lifecycle in MVP
 
-**Status:** Accepted, temporary.
+**Status:** Accepted (Updated).
 
-Seeking must be detected and handled as a session-ending discontinuity: clear captions, stop worker input, present a single local status, retain VLC playback. Do not try to block VLC's seek control and do not crash. The first post-MVP feature is `RESET(timeline_epoch)` plus queue/segment invalidation.
+Seeking and Play/Pause lifecycle are IN-SCOPE for the MVP (Milestone 3):
+1. **Play/Pause**: When VLC pauses playback, the plugin sends a `PAUSE` control frame over IPC and suspends audio forwarding. Resuming sends `RESUME` and resumes timeline PTS sync.
+2. **Seeking / Discontinuity**: When VLC seeks (`BLOCK_FLAG_DISCONTINUITY` or non-monotonic PTS jump), the plugin clears active presenter captions, sends a `STOP` (`SEEK_DISCONTINUITY`) control frame over IPC, flushes the SPSC queue & VAD state, and initializes a new session epoch (`timeline_origin_pts_us`) seamlessly without disabling captions or interrupting VLC media playback.
 
 ## ADR-007: Model policy
 
@@ -57,7 +59,7 @@ Ship/support only local `tiny.en` CPU for MVP. Expose a model manifest abstracti
 
 **Status:** Accepted.
 
-When inference cannot keep up, drop old unprocessed audio and make this measurable. Never block VLC's audio path or slow playback. This produces caption gaps under load but preserves the media player's core responsibility.
+When inference cannot keep up, drop new unprocessed audio and make this measurable. Never block VLC's audio path or slow playback. This produces caption gaps under load but preserves the media player's core responsibility.
 
 ## ADR-009: No database
 
@@ -82,3 +84,14 @@ Consequences:
 1. **Crash & Thread Isolation**: Keeps UI event loop execution out of VLC's process space, preventing UI freezes or thread deadlocks with VLC's main Qt window thread.
 2. **Independent Execution**: Allows end-users to launch settings and pre-download models directly from the Start Menu without opening VLC or playing media first.
 3. **VLC Menu Invocation**: The VLC plugin DLL registers a lightweight menu item under `Tools -> VLC-Whisper Settings...` which invokes `vlc-whisper-settings.exe` out-of-process (`CreateProcess()` / `exec()`).
+
+## ADR-012: Out-of-tree packaging over custom VLC build
+
+**Status:** Accepted.
+
+The VLC-Whisper plugin will be shipped as an external out-of-tree plugin with a standalone installer, rather than distributing a custom build of VLC.
+
+Consequences:
+1. **Compatibility**: We must strictly target the ABI of a pinned VLC release (e.g. 3.x series) to ensure the DLL loads correctly in user installations.
+2. **Installation**: The installer will locate the user's existing VLC installation directory and copy `libvlc_whisper_plugin.dll` into the `plugins/` subdirectory.
+3. **No Engine Forks**: We cannot modify VLC core player behavior or patch VLC itself to accommodate our subtitle or audio timing needs. We must use public VLC APIs and handle synchronization carefully within the plugin boundaries.

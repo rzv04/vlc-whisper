@@ -29,6 +29,10 @@
 /////////////////////////////////////////////////////
 
 // Structure holding normalized 32-bit floating point PCM audio samples
+// NOTE: Unlike the plugin's vw_audio_chunk_t which uses fixed inline int16_t (S16LE) arrays to obey VLC's realtime
+// constraints, the worker process uses heap-allocated float32 arrays here. This discrepancy is intentional:
+// the IPC transport uses compact 16-bit integers, while whisper.cpp strictly requires 32-bit normalized floats
+// [-1.0, 1.0].
 typedef struct {
   float* samples;        // Heap-allocated array of normalized float [-1.0f, +1.0f] samples
   size_t count;          // Total number of audio frames/samples
@@ -65,8 +69,16 @@ typedef struct vw_audio_buffer {
   size_t max_samples;
 } vw_audio_buffer_t;
 
+// Allocates a new audio buffer capable of holding the specified maximum number of PCM samples.
+// Heap allocates dynamically because the worker process has no realtime constraints, unlike the plugin.
 vw_audio_buffer_t* vw_audio_buffer_create(size_t max_samples);
+
+// Safely destroys the audio buffer and frees all internal dynamically allocated memory.
+// Safe to call with a NULL pointer; internally checks before freeing.
 void vw_audio_buffer_free(vw_audio_buffer_t* buf);
+
+// Appends 16-bit integer PCM samples (S16LE) received from IPC to the worker's internal buffer.
+// Implicitly converts the compact 16-bit IPC integer format into 32-bit floats required by whisper.cpp.
 bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, size_t sample_count, int64_t pts_us);
 
 #endif  // VW_AUDIO_BUFFER_H_

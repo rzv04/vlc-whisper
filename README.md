@@ -4,6 +4,21 @@ Offline, real-time speech captions inside VLC for local media.
 
 ---
 
+## Cloning the Project
+
+```bash
+git clone <repository-url>
+cd vlc-whisper
+```
+
+### Optional: enable [conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) hook locally ([conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) will be enforced in CI)
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+---
+
 ## Building the Project
 
 The project uses CMake (minimum version 3.20) with Ninja and CMake Presets for cross-compiling Windows x64 binaries from Linux using MinGW GCC.
@@ -22,6 +37,7 @@ ctest --preset windows-x64-release
 ```
 
 Available presets in `CMakePresets.json`:
+
 - `windows-x64-release` (Windows x64 Release via MinGW cross-compiler)
 - `windows-x64-debug` (Windows x64 Debug via MinGW cross-compiler)
 - `linux-x64-debug` (Host native Linux debug build for local testing)
@@ -58,8 +74,16 @@ cd build && ctest --output-on-failure
 To run the test suite through Valgrind to check for memory leaks and invalid accesses (requires `valgrind` installed):
 
 ```bash
-cd build
-ctest -T memcheck --output-on-failure
+cmake --build --preset linux-x64-debug -j$(nproc)
+ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure
+```
+
+For stricter leak detection (fail on any leak):
+
+```bash
+ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure \
+  --extra-memcheck-options=--leak-check=full \
+  --extra-memcheck-options=--error-exitcode=1
 ```
 
 ### Code Coverage Testing (Linux Native Only)
@@ -130,3 +154,32 @@ sample_whisper_pcm.exe C:\path\to\ggml-tiny.en.bin
 The MinGW cross-compilation setup automatically configures static linking (`-static`, `-static-libgcc`, `-static-libstdc++`, static `libgomp.a`, and static `libwinpthread.a`).
 
 This ensures that output binaries (`vlc-whisper-worker.exe`, `vlc_whisper_plugin.dll`, `sample_whisper_pcm.exe`) are completely self-contained and run natively on Windows without requiring external MinGW runtime DLLs (`libgomp-1.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`, etc.).
+
+---
+
+## Manual Plugin Installation (Windows)
+
+To install and verify the VLC plugin manually on Windows:
+
+1. **Install DLL**: Copy the compiled `libvlc_whisper_plugin.dll` to your VLC installation's plugin directory:
+   - Example path: `C:\Program Files\VideoLAN\VLC\plugins\misc\libvlc_whisper_plugin.dll`
+
+2. **Reset Plugin Cache & Verify Registration**:
+   Open Command Prompt or PowerShell and run:
+
+   ```cmd
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
+   ```
+
+   _Expected Output_: You should see the `VLC-Whisper` audio filter module listed.
+
+3. **Inspect Debug Logs**:
+   Audio filters only instantiate when audio media is playing and the filter is explicitly selected in the audio chain. To trigger `vw_plugin_open` and write debug output to a file:
+
+   ```cmd
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --audio-filter=vlc_whisper --file-logging --logfile=vlc-debug.log -vvv C:\path\to\audio.mp3
+   ```
+
+   _(Note: For `.mp4` video files in Virtual Machines or dual-GPU laptops, add `--avcodec-hw=none` to avoid D3D11 hardware acceleration crashes)._
+
+   _Expected Output_: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.

@@ -1,0 +1,12 @@
+LIBRARY libvlccore.dll
+EXPORTS
+vlc_Log
+vlc_object_find_name
+vlc_object_release
+vlc_object_hold
+vlc_list_children
+vlc_list_release
+vout_OSDText
+var_Inherit
+var_Get
+input_Control

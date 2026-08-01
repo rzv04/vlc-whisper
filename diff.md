@@ -1,649 +1,494 @@
-# Diff Analysis: Milestone 1.7 & IPC Timeouts
+# Diff Analysis: Milestone 2 — Caption Presentation Spike (merge to main)
 
-**21 files changed, +711 / -105 lines**
-**Base**: `HEAD` (vs Milestone 1 baseline)
+**28 files changed, +1546 / -807 lines** (branch `gemini/milestone-2` vs `main` @ `f859fc5`)
+**Base**: `git diff main...HEAD`, plus 1 unstaged change in `plugin/src/vw_caption_presenter.c` (-1)
+
+Scope: VLC module load/unload (roadmap step 9), PCM capture + SPSC queue (step 10), caption presentation spike with OSD path (step 11), out-of-tree packaging decision (step 12, ADR-012). Plan: `docs/plans/milestone_2_11_plan.md`.
 
 ---
 
 ## 1. File-by-File Analysis
 
-### 1.1 `AGENTS.md`
+### 1.1 `.agents/AGENTS.md` and `AGENTS.md`
 
-**Why change**: Enforce strict mandatory verification checklist for all AI agents and contributors, adding Valgrind memory leak verification.
+**Why change**: Enforce header-function documentation as rule 11, mirroring the root file into the agent environment.
 
-**Responsibility before**: Stated rule 10 requiring clang-format and cmake build/ctest. **After**: Rule 10 mandates clang-format, cmake build/ctest, and Valgrind memory check (`ctest --test-dir build/linux-x64-debug -T memcheck`).
+**Responsibility before**: 10 rules. **After**: 11 rules (every non-third-party function in `.h` files needs a 20-30 word comment, including realtime quirks).
 
-**Callers**: AI agents, human contributors. **Callees**: None.
+**Callers**: AI agents. **Callees**: none.
 
-**Happy path**: Agent runs `clang-format --dry-run --Werror`, `cmake --preset linux-x64-debug`, `cmake --build --preset linux-x64-debug`, `ctest --preset linux-x64-debug`, and `ctest --test-dir build/linux-x64-debug -T memcheck` before completing tasks.
+**Happy path**: Rule 11 drives the doc comments added across `vw_queue.h`, `vw_audio_capture.h`, `vw_audio_buffer.h`, `vw_caption_presenter.h`. **Failure path**: N/A (policy).
 
-**Failure path**: Task completion declared without running Valgrind memcheck fails rule compliance check.
+**Boundaries**: N/A. **Acceptance map**: Rule 11 present — `.agents/AGENTS.md:17`, `AGENTS.md:17`. Status: done.
 
-**Boundaries**:
-- **Input validation**: Exact command line matching in Rule 10.
-- **Authorization**: Mandatory compliance policy.
-- **Concurrency**: N/A.
-- **I/O**: N/A.
-- **Persistence**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Require Valgrind memory check in Rule 10 | `AGENTS.md:16` | N/A | ✅ |
-
-**Assumptions/Tradeoffs**: Assumes `valgrind` is installed on Linux developer system.
+**Assumptions/Tradeoffs**: Duplication between the two AGENTS.md files remains a sync risk (they already diverged in whitespace).
 
 ---
 
-### 1.2 `.agents/AGENTS.md`
+### 1.2 `.gitignore`
 
-**Why change**: Mirror root `AGENTS.md` rules for agent execution environment.
+**Why change**: Ignore `*.def`, MCP config JSON, and editor config (`opencode.json`).
 
-**Responsibility before**: Stated rule 10 requiring build and test suite. **After**: Rule 10 mandates build, test suite, and Valgrind memcheck.
+**Responsibility before**: Ignored build artifacts, `diff.md`/`review.md`. **After**: Also `*.def`, `.agents/mcp_config.json` (comment: move to env vars), `opencode.json*`.
 
-**Callers**: AI subagents. **Callees**: None.
+**Callers**: git. **Callees**: none.
 
-**Happy path**: Subagents follow Rule 10 verification checklist.
+**Happy path**: Secret-bearing configs stay untracked. **Failure path**: **`*.def` swallows the hand-written `plugin/libvlccore.def`** — a build input, not a build artifact (see Finding H-1).
 
-**Failure path**: Subagent fails validation if Valgrind step omitted.
+**Boundaries**: Pattern specificity. **Acceptance map**: ignore secrets — `.gitignore:187-189`. Status: done; `*.def` rule: **broken by side effect**.
 
-**Boundaries**:
-- **Input validation**: Exact string matching.
-- **Authorization**: Compliance policy.
-- **Concurrency**: N/A.
-- **I/O**: N/A.
-- **Persistence**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Mirror Rule 10 Valgrind check | `.agents/AGENTS.md:16` | N/A | ✅ |
-
-**Assumptions/Tradeoffs**: Keeps subagent rules in sync with root `AGENTS.md`.
+**Assumptions/Tradeoffs**: `*.def` was likely intended for MinGW-generated `.def` files; no negation for `plugin/libvlccore.def` was added.
 
 ---
 
-### 1.3 `CMakeLists.txt`
+### 1.3 `README.md`
 
-**Why change**: Enable CMake CTest framework so `ctest -T memcheck` can execute tests under Valgrind.
+**Why change**: Update Valgrind instructions to preset-based workflow, add stricter leak-check flags, and document manual Windows plugin installation (folded in from deleted `milestone_2_9_plan.md`).
 
-**Responsibility before**: Configured subdirectories and build options. **After**: Includes `include(CTest)` inside `if(BUILD_TESTING)` block.
+**Responsibility before**: Build/test/coverage docs. **After**: Also manual install, cache-reset, and log-inspection walkthrough for Windows.
 
-**Callers**: CTest CLI (`ctest -T memcheck`). **Callees**: CMake CTest module.
+**Callers**: Developers. **Callees**: none.
 
-**Happy path**: Running `ctest -T memcheck` in build directory executes Valgrind memory checks on all test targets.
+**Happy path**: `ctest --test-dir build/linux-x64-debug -T memcheck` per new docs. **Failure path**: N/A.
 
-**Failure path**: If `BUILD_TESTING` is OFF, CTest module is omitted.
+**Boundaries**: N/A. **Acceptance map**: memcheck commands `README.md:60-75`; install guide `README.md:141-164`. Status: done.
 
-**Boundaries**:
-- **Input validation**: `if(BUILD_TESTING)` guard.
-- **Authorization**: CMake build system.
-- **Concurrency**: N/A.
-- **I/O**: N/A.
-- **Persistence**: CMake build configuration.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Enable CTest memcheck support | `CMakeLists.txt:38` | `ctest -T memcheck` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: Windows verification remains manual (VM note about `--avcodec-hw=none`).
 
 ---
 
-### 1.4 `README.md`
+### 1.4 `diff.md`
 
-**Why change**: Document the exact Valgrind memory leak test command for developers.
+**Why change**: Superseded by this review. The previous review covered an earlier 5-file slice of the same milestone; this one covers the full branch.
 
-**Responsibility before**: Documented basic CMake configure and test commands. **After**: Documents `ctest -T memcheck --output-on-failure` for memory leak checks.
+**Responsibility before**: Milestone 2 partial review (base `b31f6b1..98a9b5e`). **After**: Full branch review vs `main`.
 
-**Callers**: Developers. **Callees**: None.
-
-**Happy path**: Developer follows README instructions to run memory leak checks.
-
-**Failure path**: N/A.
-
-**Boundaries**: Documentation only.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Document Valgrind usage | `README.md:58-63` | N/A | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Callers**: Humans. **Callees**: none. **Acceptance map**: replaced. Status: done.
 
 ---
 
-### 1.5 `docs/api-contracts.md`
+### 1.5 `docs/architecture.md`
 
-**Why change**: Document local IPC protocol timeouts and transport guarantees.
+**Why change**: Reconcile buffering numbers with the implemented queue (16 chunks / 8 s), document chunk granularity, align ADR-005 wording ("drop new" not "drop old"), extend the data model with the fixed inline `pcm_data` chunk, add ADR-012.
 
-**Responsibility before**: Documented frame envelope and message types. **After**: Documents 10s connection accept timeout and 3s read/write frame timeout under `Transport Timeouts & Guarantees`.
+**Responsibility before**: System architecture, timing, session/IPC specs. **After**: Same, plus exact chunk/queue parameters and the S16LE-inline chunk contract.
 
-**Callers**: Protocol implementers and tests. **Callees**: None.
+**Callers**: All implementers. **Callees**: none.
 
-**Happy path**: Peer implementations respect 10s accept timeout and 3s I/O limits.
+**Happy path**: Reader derives 512 ms chunk, 16-chunk queue, 8 s window from one table (`architecture.md:43-55`). **Failure path**: N/A.
 
-**Failure path**: Unresponsive peer triggers 3s read/write timeout or 10s accept timeout.
+**Boundaries**: N/A. **Acceptance map**: backlog 8 s (`:41`, `:53`), chunk struct (`:104-117`), drop-new policy (`:55`). Status: done — consistent with `vw_spsc_queue_create(16)` and `vw_queue.c` drop-incoming behavior.
 
-**Boundaries**: Specification document.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Document 10s accept & 3s I/O timeouts | `docs/api-contracts.md:9-12` | N/A | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: "Drop newest" is a deliberate ADR-005 amendment: captions may lag up to the backlog instead of dropping stale audio. Consistent across code, diagrams, and strategy docs.
 
 ---
 
-### 1.6 `docs/architecture.md`
+### 1.6 `docs/decisions.md`
 
-**Why change**: Align system architecture docs with IPC transport timeouts.
+**Why change**: Amend ADR-008 (drop newest audio under overload) and add ADR-012 (out-of-tree packaging over custom VLC build).
 
-**Responsibility before**: Documented IPC named pipe / socket framing. **After**: Includes explicit `Transport Timeouts` section detailing 10s accept and 3s I/O timeouts.
+**Responsibility before**: ADRs 1-11. **After**: Amended ADR-008 + ADR-012.
 
-**Callers**: System architects and developers. **Callees**: None.
+**Callers**: Planning. **Callees**: none.
 
-**Happy path**: IPC transport design adheres to 10s accept / 3s I/O timeouts.
+**Happy path**: ADR-012 anchors the Windows `libvlccore.def` import-library approach and the pinned-ABI constraint. **Failure path**: N/A.
 
-**Failure path**: N/A.
-
-**Boundaries**: Specification document.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Document IPC transport timeouts | `docs/architecture.md:62-65` | N/A | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Acceptance map**: ADR-008 amendment `decisions.md:60`; ADR-012 `:85-94`. Status: done.
 
 ---
 
-### 1.7 `docs/plans/milestone_1_7_plan.md`
+### 1.7 `docs/diagrams.md`
 
-**Why change**: Track implementation steps, transport design, and test criteria for Milestone 1.7.
+**Why change**: Queue-overload flow says "drop newest", cap corrected to 8 s.
 
-**Responsibility before**: Draft plan. **After**: Full task execution plan detailing IPC transport server, secret token auth, state machine, and test suite.
+**Responsibility before**: Diagrams. **After**: Same, corrected.
 
-**Callers**: AI agents, developers. **Callees**: None.
-
-**Happy path**: Milestone 1.7 execution follows plan stages to completion.
-
-**Failure path**: Plan tracks risk mitigations for MinGW cross-compilation and transport timeouts.
-
-**Boundaries**: Planning document.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Detailed plan for Milestone 1.7 | `docs/plans/milestone_1_7_plan.md:1-200` | N/A | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Callers**: None. **Callees**: none. **Happy path**: Flowchart matches `vw_spsc_queue_push` drop behavior. **Acceptance map**: `diagrams.md:105,119`. Status: done.
 
 ---
 
-### 1.8 `plugin/CMakeLists.txt`
+### 1.8 `docs/plans/milestone_2_11_plan.md` (new)
 
-**Why change**: Switch plugin build target to use cross-platform `vw_worker_client.c` instead of Win32 stub `vw_worker_client_win32.c`.
+**Why change**: Plan for the caption-presenter spike: native SPU primary, OSD fallback, mode enum.
 
-**Responsibility before**: Compiled `src/vw_worker_client_win32.c`. **After**: Compiles `src/vw_worker_client.c`.
+**Responsibility before**: N/A. **After**: Acceptance criteria and DoD for the presenter work.
 
-**Callers**: CMake build. **Callees**: `vlc_whisper_plugin` target.
+**Callers**: Agents executing milestone 2 step 11. **Callees**: none.
 
-**Happy path**: Plugin library compiles cleanly across Linux and Windows.
+**Happy path**: Plan drives implementation. **Failure path**: Acceptance criteria remain **all unchecked** (`[]`) while the code is committed — the boxes were never updated post-implementation (see Finding M-4).
 
-**Failure path**: N/A.
-
-**Boundaries**: Build configuration.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Cross-platform plugin client source | `plugin/CMakeLists.txt:7` | `cmake --build` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Boundaries**: N/A. **Acceptance map**: criteria at `milestone_2_11_plan.md:31-33`; DoD `:35-38`. Status: criteria unchecked.
 
 ---
 
-### 1.9 `plugin/include/vw_worker_client.h`
+### 1.9 `docs/plans/milestone_2_9_plan.md` (deleted)
 
-**Why change**: Update client launcher function signature to accept `endpoint_name` and 32-byte secret `token`.
+**Why change**: Superseded: its manual-install content moved to `README.md`; steps 9-12 are marked done in `roadmap.md`.
 
-**Responsibility before**: `vw_worker_client_launch_and_connect(executable_path)`. **After**: `vw_worker_client_launch_and_connect(executable_path, endpoint_name, token[32])`.
+**Responsibility before**: Step 9 module load/unload plan. **After**: Deleted.
 
-**Callers**: Plugin session module, integration tests. **Callees**: `vw_worker_client.c`.
-
-**Happy path**: Caller passes endpoint name and token to launch client.
-
-**Failure path**: N/A.
-
-**Boundaries**: Public header interface.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Update launcher signature | `plugin/include/vw_worker_client.h:12` | `test_worker_ipc.c` | ✅ |
-
-**Assumptions/Tradeoffs**: Token parameter reserved for client-side HELLO handshake.
+**Callers**: N/A. **Acceptance map**: content preserved in `README.md:141-164`. Status: done.
 
 ---
 
-### 1.10 `plugin/src/vw_worker_client.c` [NEW]
+### 1.10 `docs/roadmap.md`
 
-**Why change**: Provide cross-platform worker client launcher.
+**Why change**: Mark Milestone 2 steps 9-12 complete.
 
-**Responsibility before**: None (new file replacing platform stub). **After**: Launches worker and connects via `vw_ipc_connect(endpoint_name)`.
+**Responsibility before**: Open items. **After**: `[x]` on 9-12.
 
-**Callers**: `vw_worker_client_launch_and_connect()`, `vw_worker_client_disconnect()`. **Callees**: `vw_ipc_connect()`, `vw_ipc_close()`.
+**Callers**: Planning. **Callees**: none.
 
-**Happy path**: `vw_ipc_connect()` succeeds and returns populated `vw_worker_client_t*`.
+**Happy path**: Roadmap reflects shipped work. **Failure path**: Step 11 wording says "native timed subtitle route preferred" — the native SPU route was **not implemented** (OSD only); marking the step done while the plan's primary route is missing overstates completion (see Finding M-5). Milestone exit status honestly remains **PLANNED** (`roadmap.md:32`).
 
-**Failure path**: `vw_ipc_connect()` returns NULL -> returns NULL.
-
-**Boundaries**:
-- **Input validation**: Checks `ipc` handle and `client` allocation.
-- **Authorization**: Connects to endpoint.
-- **Concurrency**: Caller thread.
-- **I/O**: Calls `vw_ipc_connect`.
-- **Persistence**: Memory allocation cleaned up in `vw_worker_client_disconnect`.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Implement worker client launch & disconnect | `plugin/src/vw_worker_client.c:5-31` | `test_worker_ipc.c` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Acceptance map**: `roadmap.md:27-30`. Status: partial (step 11 overstates).
 
 ---
 
-### 1.11 `plugin/src/vw_worker_client_win32.c` [DELETE]
+### 1.11 `docs/test-strategy.md`
 
-**Why change**: Removed obsolete Win32 stub file in favor of cross-platform `vw_worker_client.c`.
+**Why change**: Backlog hard limit 8 s to match code.
 
-**Responsibility before**: Win32 stub returning NULL. **After**: Deleted.
+**Responsibility before**: Test gates. **After**: Same, corrected number.
 
----
-
-### 1.12 `protocol/include/vw_ipc_transport.h`
-
-**Why change**: Remove `token` parameter from `vw_ipc_listen` and `vw_ipc_connect` signatures to isolate transport layer from protocol auth.
-
-**Responsibility before**: `vw_ipc_listen(endpoint_name, token)` / `vw_ipc_connect(endpoint_name, token)`. **After**: `vw_ipc_listen(endpoint_name)` / `vw_ipc_connect(endpoint_name)`.
-
-**Callers**: `vw_worker.c`, `vw_worker_client.c`, tests. **Callees**: OS transport implementations.
-
-**Happy path**: Transport functions take endpoint name only.
-
-**Failure path**: N/A.
-
-**Boundaries**: Pure byte transport API.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Decouple token from transport layer | `protocol/include/vw_ipc_transport.h:17-18` | All IPC tests | ✅ |
-
-**Assumptions/Tradeoffs**: Authentication handled at protocol level (`VW_MSG_HELLO`).
+**Callers**: Test planning. **Callees**: none. **Acceptance map**: `test-strategy.md:49`. Status: done.
 
 ---
 
-### 1.13 `protocol/include/vw_protocol_types.h`
+### 1.12 `docs/vlc-api-essentials.md` (new, 366 lines)
 
-**Why change**: Define `VW_AUTH_TOKEN_BYTES` (32) constant for authentication token array size.
+**Why change**: Authoritative VLC 3.0.23 C API reference for the plugin: structures, realtime contract, clock/timeline, discontinuity, capability detection, object tree + vout retrieval, OSD rendering, module ABI.
 
-**Responsibility before**: Defined message types and structures. **After**: Defines `VW_AUTH_TOKEN_BYTES` (32).
+**Responsibility before**: N/A. **After**: Vendor-verified reference; every claim cross-checked against the vendored headers (and the previously hallucinated `input_Control(INPUT_CAN_*)` section corrected to `var_GetBool` input variables + `demux_Control(DEMUX_CAN_*)` internals).
 
-**Callers**: `vw_protocol_codec.c`, `vw_worker.c`, tests. **Callees**: None.
+**Callers**: Plugin maintainers. **Callees**: none.
 
-**Happy path**: Provides canonical 32-byte size constant.
+**Happy path**: Reader finds vout-retrieval algorithm matching `vw_caption_presenter_find_vout`, hold/release ownership table, and OSD no-op caveats. **Failure path**: N/A.
 
-**Failure path**: N/A.
+**Boundaries**: N/A. **Acceptance map**: Section 5 corrected APIs, Section 6 object tree + refcounting, Section 7 OSD semantics, Section 8 ABI. Status: done (verified against `worker/third_party/vlc-3.0.23/include/`).
 
-**Boundaries**: Header constants.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Auth token byte constant | `protocol/include/vw_protocol_types.h:12` | `test_worker_ipc.c` | ✅ |
-
-**Assumptions/Tradeoffs**: Fixed 32-byte secret token.
+**Assumptions/Tradeoffs**: `video_text.c` internals (osd var check, `strdup`) verified against VLC 3.0.x source, not vendored (src/ is not vendored).
 
 ---
 
-### 1.14 `protocol/src/vw_ipc_pipe_win32.c`
+### 1.13 `plugin/CMakeLists.txt`
 
-**Why change**: Full Win32 named pipe transport server (`vw_ipc_listen`) and client (`vw_ipc_connect`) with 10s accept timeout and 3s read/write timeouts.
+**Why change**: Define `__PLUGIN__` + `MODULE_STRING` (entry-point ABI symbol), `_GNU_SOURCE`; generate a Windows import library (`libvlccore.dll.a`) from a hand-written `.def` so the DLL resolves VLC core symbols without linking a real libvlccore.
 
-**Responsibility before**: Win32 stub returning false/NULL. **After**: Production Win32 named pipe transport implementation.
+**Responsibility before**: Build the shared plugin. **After**: Same, plus ABI defines and Win32 import generation.
 
-**Callers**: `vw_worker.c`, `vw_worker_client.c`, tests. **Callees**: Win32 API (`CreateNamedPipeA`, `ConnectNamedPipe`, `CreateFileA`, `ReadFile`, `WriteFile`, `CancelIo`, `WaitForSingleObject`).
+**Callers**: CMake/CTest, `test_plugin_load`. **Callees**: `dlltool`, `libvlccore.def`.
 
-**Happy path**:
-- `vw_ipc_listen()` creates pipe with `FILE_FLAG_OVERLAPPED`, waits up to 10s for client connection via `WaitForSingleObject(ov.hEvent, 10000)`.
-- `vw_ipc_receive()` reads frame payload using overlapped `ReadFile` with 3s timeout (`WaitForSingleObject(ov.hEvent, 3000)`).
-- `vw_ipc_send()` writes frame using overlapped `WriteFile` with 3s timeout.
+**Happy path**: Linux `.so` links; Windows `dlltool -d libvlccore.def -l libvlccore.dll.a` then links the plugin against the import lib. **Failure path**: **`libvlccore.def` is untracked (gitignored by `*.def`) — on any fresh checkout the custom command fails at `DEPENDS` and the Windows build breaks** (Finding H-1).
 
-**Failure path**:
-- No client connects within 10s -> `CancelIo()`, `CloseHandle()`, returns `NULL`.
-- Read/Write times out after 3s -> `CancelIo()`, returns `-1` / `false`.
+**Boundaries**: WIN32-guarded. **Acceptance map**: definitions `:11-15`; import generation `:30-38`. Status: Linux done; Windows build input not reproducible.
 
-**Boundaries**:
-- **Input validation**: Handle validity checks (`INVALID_HANDLE_VALUE`).
-- **Authorization**: Win32 Named Pipe local current-user ACLs.
-- **Concurrency**: Single-threaded handle wrapper.
-- **I/O**: Overlapped I/O with 10s accept and 3s read/write timeouts.
-- **Persistence**: Clean handle closure in `vw_ipc_close()`.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Win32 named pipe listen & connect | `vw_ipc_pipe_win32.c:10-66` | `test_worker_ipc.c` | ✅ |
-| 2 | Overlapped 10s accept timeout | `vw_ipc_pipe_win32.c:22-27` | `test_worker_lifecycle.c` | ✅ |
-| 3 | Overlapped 3s receive/send timeout | `vw_ipc_pipe_win32.c:79-85,100-106` | `test_worker_ipc.c` | ✅ |
-
-**Assumptions/Tradeoffs**: Windows Win32 API named pipe semantics.
+**Assumptions/Tradeoffs**: The `.def` exports `subpicture_New`/`subpicture_region_New`/`text_segment_New`/`subpicture_Delete` that no code uses (SPU path deferred); harmless but signals the gap. No `-Werror` on this target despite the plan's "warnings-as-errors" DoD (Finding M-2).
 
 ---
 
-### 1.15 `protocol/src/vw_ipc_socket_linux.c`
+### 1.14 `plugin/include/vw_audio_capture.h`
 
-**Why change**: Full POSIX Unix domain socket transport server (`vw_ipc_listen`) and client (`vw_ipc_connect`) with 10s accept timeout and 3s `SO_RCVTIMEO`/`SO_SNDTIMEO`.
+**Why change**: Replace the stub `vw_audio_capture_on_pcm_block` API with the real capture contract: chunk constants, format enum, input descriptor, chunk struct with inline PCM, `vw_audio_capture_process_block`.
 
-**Responsibility before**: POSIX stub returning false/NULL. **After**: Production `AF_UNIX` `SOCK_SEQPACKET` socket transport implementation.
+**Responsibility before**: Stub struct + stub function. **After**: Full zero-allocation capture interface (Rule 4).
 
-**Callers**: `vw_worker.c`, `vw_worker_client.c`, tests. **Callees**: POSIX socket APIs (`socket`, `bind`, `listen`, `poll`, `accept`, `connect`, `recv`, `send`, `setsockopt`, `unlink`).
+**Callers**: `vw_audio_capture.c`, `vw_queue.h`, `vlc_whisper_module.c`, `test_audio_capture.c`, `test_queue.c`. **Callees**: none (declarations).
 
-**Happy path**:
-- `vw_ipc_listen()` unlinks stale socket file, binds `AF_UNIX`, calls `poll()` waiting up to 10000ms for connection, accepts client, closes server socket, sets 3s `SO_RCVTIMEO`/`SO_SNDTIMEO`.
-- `vw_ipc_receive()` calls `recv()` to receive message-oriented frame payload.
+**Happy path**: `vw_plugin_filter` builds `vw_audio_input_t` from `fmt_in` + block and calls `process_block`. **Failure path**: N/A.
 
-**Failure path**:
-- `poll()` times out after 10s (0 returned) -> closes server socket, returns `NULL`.
-- `recv()` times out after 3s (returns -1 with `EAGAIN`/`EWOULDBLOCK`) -> returns `-1`.
-
-**Boundaries**:
-- **Input validation**: `server_fd` / `client_fd` bounds checks.
-- **Authorization**: Local socket permissions.
-- **Concurrency**: Single connection model per worker instance.
-- **I/O**: 10s `poll()` accept timeout, 3s `SO_RCVTIMEO`/`SO_SNDTIMEO`.
-- **Persistence**: `unlink(endpoint_name)` removes stale socket file before bind.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | POSIX Unix domain socket transport | `vw_ipc_socket_linux.c:14-108` | `test_worker_ipc.c` | ✅ |
-| 2 | 10s accept timeout via poll() | `vw_ipc_socket_linux.c:35-39` | `test_worker_lifecycle.c` | ✅ |
-| 3 | 3s socket read/write timeouts | `vw_ipc_socket_linux.c:45-47,75-76` | `test_worker_ipc.c` | ✅ |
-
-**Assumptions/Tradeoffs**: Linux/UNIX `SOCK_SEQPACKET` support preserving message boundaries.
+**Boundaries**: `VW_AUDIO_CHUNK_MAX_PCM_BYTES` 16384 (`:8`); `VW_AUDIO_TARGET_RATE` 16000 (`:9-11`); inline buffer guarantees zero heap in callback. **Acceptance map**: chunk struct (`:28-37`), input struct (`:42-52`), process entry (`:57-59`). Status: done.
 
 ---
 
-### 1.16 `protocol/src/vw_protocol_validate.c`
+### 1.15 `plugin/include/vw_caption_presenter.h`
 
-**Why change**: Validate header payload length against `VW_PROTOCOL_MAX_PAYLOAD_SIZE` (1,048,576 bytes).
+**Why change**: Public presenter API: mode enum, `vw_caption_presenter_display`, doc comments per rule 11.
 
-**Responsibility before**: Header magic and type validation. **After**: Validates payload length limit `payload_length <= 1,048,576`.
+**Responsibility before**: Stub declarations. **After**: Typed API surface.
 
-**Callers**: `vw_worker.c`, protocol decoders. **Callees**: None.
+**Callers**: `vlc_whisper_module.c`, `test_caption_presenter.c`. **Callees**: none.
 
-**Happy path**: Payload length within bounds returns true.
+**Happy path**: `display` called per 100 blocks. **Failure path**: N/A.
 
-**Failure path**: Payload length > 1,048,576 returns false.
+**Boundaries**: `void* p_filter` trades type safety for zero VLC-header coupling in the header (Finding M-3). **Acceptance map**: enum (`:8-12`), display (`:18`), show_segment (`:22`), clear (`:25`). Status: done.
 
-**Boundaries**:
-- **Input validation**: Explicit upper limit check (`payload_length <= 1048576`).
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Upper bound payload size validation | `vw_protocol_validate.c:16` | `test_protocol_validate.c` | ✅ |
-
-**Assumptions/Tradeoffs**: Prevents memory exhaustion attacks via corrupt frame headers.
+**Assumptions/Tradeoffs**: Enum and doc comments promise a native SPU channel that is never used (Finding M-5).
 
 ---
 
-### 1.17 `tests/CMakeLists.txt`
+### 1.16 `plugin/include/vw_queue.h`
 
-**Why change**: Register `test_worker_ipc` and `test_worker_lifecycle` integration test executables with CTest.
+**Why change**: Real SPSC ring: chunk-slot capacity (capacity+1 sentinel), C11 atomics, documented push/pop/dropped semantics.
 
-**Responsibility before**: Built unit test targets. **After**: Builds and registers integration test targets `test_worker_ipc` and `test_worker_lifecycle`.
+**Responsibility before**: Byte-capacity stub fields. **After**: Lock-free chunk ring.
 
-**Callers**: CMake build / CTest. **Callees**: Integration test source files.
+**Callers**: `vlc_whisper_module.c`, `vw_audio_capture.c`, tests. **Callees**: none.
 
-**Happy path**: `ctest` runs `test_worker_ipc` and `test_worker_lifecycle` successfully.
+**Happy path**: `push` publishes with release store; `pop` consumes with acquire load. **Failure path**: N/A.
 
-**Failure path**: N/A.
-
-**Boundaries**: Test build configuration.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Register worker integration tests | `tests/CMakeLists.txt:20-25` | `ctest` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Boundaries**: capacity 0 rejected at create; full → drop incoming chunk + accumulate `audio_dropped_us`. **Acceptance map**: struct (`:12-19`), push/pop semantics (`:29-38`). Status: done — memory ordering is the correct Vyukov pattern (release-store head, acquire-load head; acquire-load tail on push).
 
 ---
 
-### 1.18 `tests/integration/test_worker_ipc.c`
+### 1.17 `plugin/src/vlc_whisper_module.c`
 
-**Why change**: Integration test for worker process IPC connection, authentication handshake, frame transfer, and shutdown.
+**Why change**: Replace stubs with the real VLC module: log sink bridge, per-block filter callback capturing PCM, SPSC queue (16 chunks), PoC periodic caption display, module registration with `vlc_entry__3_0_0f`.
 
-**Responsibility before**: None (new test file). **After**: Verifies end-to-end IPC socket/pipe communication between client launcher and worker thread.
+**Responsibility before**: Stub entry points (`vlc_whisper_Open`/`Close` returning 0). **After**: Working audio filter module.
 
-**Callers**: CTest runner. **Callees**: `vw_worker_run()`, `vw_worker_client_launch_and_connect()`, `vw_ipc_send()`.
+**Callers**: VLC pipeline (`vw_plugin_filter`). **Callees**: `vw_audio_capture_process_block`, `vw_spsc_queue_*`, `vw_caption_presenter_display`, `vw_log_*`.
 
-**Happy path**: Worker starts, client connects, sends valid `VW_MSG_HELLO` with matching token, sends `VW_MSG_SHUTDOWN`, worker exits with code 0.
+**Happy path**: `vw_plugin_open` (`:91-113`) allocates sys, queue (16), sets `pf_audio_filter`, `fmt_out.audio = fmt_in.audio` (`:108`); `vw_plugin_filter` (`:48-83`) taps PCM, captures, and on block 1, 101, 201... calls `vw_caption_presenter_display` (`:77-78`), returns block untouched. **Failure path**: unsupported codec → passthrough (`:63-65`); no vout → display returns false, playback unaffected.
 
-**Failure path**: Mismatched token or transport error triggers test assertion failure.
+**Boundaries**: null sys/block guards (`:50`); zero-allocation in callback (chunk is stack, queue preallocated); `block_count` non-atomic but single aout thread per instance. **Acceptance map**: ABI entry (`:129-136`), passthrough invariant (`:108`), non-blocking (`:48-83`). Status: done.
 
-**Boundaries**: Test boundary exercising full IPC transport layer.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | End-to-end IPC test | `test_worker_ipc.c:49-91` | `ctest -R test_worker_ipc` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: PoC caption text is hardcoded; every-100-blocks cadence is a spike, not production. `msg_*` resolves against the Windows import lib via `vlc_Log` export.
 
 ---
 
-### 1.19 `tests/integration/test_worker_lifecycle.c`
+### 1.18 `plugin/src/vw_audio_capture.c`
 
-**Why change**: Integration test for full worker session lifecycle and security token authentication failures.
+**Why change**: Implement resample/downmix-to-16k-mono-S16 + chunking with zero allocation.
 
-**Responsibility before**: None (new test file). **After**: Tests invalid token rejection (exit code 1) and full session flow (`HELLO` -> `START_SESSION` -> `AUDIO_PCM` -> `PAUSE` -> `RESUME` -> `STOP_SESSION` -> `SHUTDOWN`).
+**Responsibility before**: Stub returning false. **After**: Real capture converter.
 
-**Callers**: CTest runner. **Callees**: `vw_worker_run()`, `vw_worker_client_launch_and_connect()`, protocol codecs.
+**Callers**: `vw_plugin_filter`. **Callees**: `vw_spsc_queue_push`.
 
-**Happy path**:
-- Bad auth test: Sends wrong token, worker terminates with exit code 1.
-- Full lifecycle test: Sends valid token, session messages, and shutdown, worker exits cleanly with exit code 0.
+**Happy path**: 48 kHz stereo FL32 block → boxcar-averaged 16 kHz mono S16 chunks of ≤8192 frames with continuous `start_pts_us` (`chunk.duration_us` accumulated, `:74-77`). **Failure path**: invalid input → false (`:13-14`); `output_frames == 0` → early true (`:19-21`).
 
-**Failure path**: Protocol state violation or invalid token causes worker to reject session and exit with code 1.
+**Boundaries**: chunk cap (`:27`); OOB clamp `in_end > frame_count` (`:45-47`); sample clamp [-1,1] (`:62-63`). **Gaps**: `input->sample_rate == 0` divides by zero (no guard — VLC always sets `i_rate`, but the API is public; Finding L-1); `VLC_TICK_INVALID` PTS (`INT64_MIN`) blocks are enqueued with invalid timestamps (Finding L-2); odd-sized chunks truncate 62.5 us/sample durations (<1 us drift per odd chunk, negligible).
 
-**Boundaries**: Full lifecycle state machine integration test.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Auth failure test (exit code 1) | `test_worker_lifecycle.c:49-72` | `ctest -R test_worker_lifecycle` | ✅ |
-| 2 | Full session lifecycle test | `test_worker_lifecycle.c:74-126` | `ctest -R test_worker_lifecycle` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Acceptance map**: chunking math (`:17-28`), downmix/resample (`:31-65`), PTS continuity (`:71-77`). Status: done; tested by `test_audio_capture` incl. exact chunk boundaries (8192/1808) and downmix value.
 
 ---
 
-### 1.20 `worker/include/vw_worker_config.h`
+### 1.19 `plugin/src/vw_caption_presenter.c`
 
-**Why change**: Add `pipe_name` and `token[32]` to `vw_worker_config_t`.
+**Why change**: Implement vout discovery (parent walk + name search + children scan) and OSD rendering.
 
-**Responsibility before**: Contained stub config struct. **After**: Defines `pipe_name[256]` and `token[32]` for worker execution.
+**Responsibility before**: Stubs. **After**: Real presenter; see this session's earlier deep dive — OSD (`vout_OSDText` at `:95`), not the SPU API; hold/release pairing correct per `vlc_input.h` (`input_GetVout` returns held).
 
-**Callers**: `vw_worker.c`, `test_worker_ipc.c`, `test_worker_lifecycle.c`. **Callees**: None.
+**Callers**: `vlc_whisper_module.c`, tests. **Callees**: `input_GetVout`, `vlc_object_find_name` (deprecated), `vlc_object_hold/release`, `vlc_list_children`, `vout_OSDText`.
 
-**Happy path**: Provides IPC endpoint name and secret token to worker host.
+**Happy path**: `display` (`:100-112`) → `render_text` (`:89-98`) → `find_vout` (`:21-87`) finds `input` ancestor → `input_GetVout` → `vout_OSDText` → release. **Failure path**: no vout → WARN log, false, passthrough unaffected.
 
-**Failure path**: N/A.
+**Boundaries**: null text / `duration_us <= 0` rejected (`:101-102`); NULL filter = standalone test mode returns true (`:105-108`); mode ignored (see below). **Acceptance map**: find (`:21-87`), OSD render (`:95-96`), validation (`:102-103`), segment fallback 2 s (`:118-120`), clear (`:126-131`). Status: done, with exceptions below.
 
-**Boundaries**: Config struct declaration.
+**Unstaged change in this file**: `(void)mode;` removed from `vw_caption_presenter_display` (HEAD had it at `:101`). The parameter is still unused → **`-Wunused-parameter` warning in the current tree** (confirmed in build output; Finding M-1). Nothing else in the working tree differs.
 
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Config pipe name & token fields | `vw_worker_config.h:11-12` | `test_worker_ipc.c` | ✅ |
-
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: SPU mode silently maps to OSD; `vlc_subpicture` field name is a misnomer (holds the filter pointer, `:122`); `vlc_object_find_name` is `VLC_DEPRECATED` (documented in `vlc-api-essentials.md` Section 6, warning in every build).
 
 ---
 
-### 1.21 `worker/src/vw_worker.c`
+### 1.20 `plugin/src/vw_queue.c`
 
-**Why change**: Implement `vw_worker_run()` server loop, constant-time token authentication, header/payload frame processing, and session message handling.
+**Why change**: Implement the lock-free ring.
 
-**Responsibility before**: Stub function returning 0. **After**: Complete worker server execution loop.
+**Responsibility before**: Stub push/pop. **After**: SPSC chunk ring with capacity+1 sentinel.
 
-**Callers**: Worker main entry point, integration tests. **Callees**: `vw_ipc_listen()`, `vw_ipc_receive()`, `vw_protocol_decode_header()`, `vw_protocol_validate_header()`, `vw_protocol_decode_payload()`, `vw_protocol_validate_payload()`, `vw_ipc_close()`.
+**Callers**: `vw_audio_capture.c`, module, tests. **Callees**: none.
 
-**Happy path**:
-1. Listens on `config->pipe_name` via `vw_ipc_listen()`.
-2. Reads 20-byte frame header, decodes & validates header.
-3. Allocates payload memory if `payload_length > 0`, reads payload, decodes & validates.
-4. Checks authentication: first message MUST be `VW_MSG_HELLO`. Compares token with `verify_token_constant_time()`.
-5. Dispatches session control messages (`START_SESSION`, `AUDIO_PCM`, `STOP_SESSION`, `SHUTDOWN`).
-6. On `SHUTDOWN`, exits loop, closes transport handle, returns `0`.
+**Happy path**: push writes slot, release-publishes head; pop acquire-reads, release-publishes tail. **Failure path**: full → drop incoming, count `duration_us` (`:44-47`); empty → NULL (`:64-66`).
 
-**Failure path**:
-- Null config or listen failure -> returns `1`.
-- Invalid header / payload or token mismatch -> frees payload, breaks loop, closes handle, returns `1`.
+**Boundaries**: `capacity_chunks == 0` → NULL (`:10-12`); ring allocation failure → NULL (`:18-21`). Memory ordering is correct (single-producer/single-consumer invariant). **Acceptance map**: create/destroy (`:9-33`), push (`:36-54`), pop (`:58-77`), dropped (`:80-82`). Status: done; covered by `test_queue` (creation, push/pop, overflow accounting, wraparound).
 
-**Boundaries**:
-- **Input validation**: Header decoding, magic verification, payload size validation.
-- **Authorization**: Constant-time token verification (`verify_token_constant_time`). First-message `HELLO` requirement.
-- **Concurrency**: Worker thread event loop.
-- **I/O**: Framed binary reads over `vw_ipc_receive()`.
-- **Persistence**: Memory freed per iteration; handle closed on exit.
+---
 
-**Acceptance map**:
+### 1.21 `protocol/CMakeLists.txt`
 
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | Worker server loop | `vw_worker.c:20-137` | `test_worker_ipc.c` | ✅ |
-| 2 | Constant-time token auth | `vw_worker.c:12-18,102` | `test_worker_lifecycle.c` | ✅ |
-| 3 | Clean exit on SHUTDOWN | `vw_worker.c:124-126` | `test_worker_lifecycle.c` | ✅ |
+**Why change**: `POSITION_INDEPENDENT_CODE ON` — the plugin `.so` links `vw_protocol` statically.
 
-**Assumptions/Tradeoffs**: None.
+**Responsibility before**: Static lib without PIC. **After**: PIC.
+
+**Callers**: CMake. **Callees**: none. **Happy path**: plugin links on Linux. **Acceptance map**: `:18-19`. Status: done.
+
+---
+
+### 1.22 `tests/CMakeLists.txt`
+
+**Why change**: Add VLC include path to unit-test macro; compile real plugin sources into tests (`vw_queue.c`, `vw_audio_capture.c`, `vw_caption_presenter.c`); register `test_plugin_load` with the built plugin as argument.
+
+**Responsibility before**: Protocol/worker tests only. **After**: Plugin unit tests + dynamic-load test.
+
+**Callers**: CTest. **Callees**: test executables.
+
+**Happy path**: `ctest` runs 10 suites (verified: 10/10 pass, Valgrind clean). **Failure path**: N/A.
+
+**Boundaries**: `test_caption_presenter` gets `__PLUGIN__`/`MODULE_STRING`/`_GNU_SOURCE` (`:24`). **Acceptance map**: `:21-25`, `:31-34`. Status: done.
+
+**Assumptions/Tradeoffs**: `test_plugin_load` passes on Linux with `RTLD_LAZY` because the entry symbol is only resolved, never called. On Windows the DLL imports `libvlccore.dll` — the test would fail to load without it; no Windows test preset exists yet.
+
+---
+
+### 1.23 `tests/integration/test_plugin_load.c` (new)
+
+**Why change**: Verify `vlc_entry__3_0_0f` resolves in the built plugin (roadmap step 9 acceptance).
+
+**Responsibility before**: N/A. **After**: dlopen/LoadLibrary + symbol resolution test.
+
+**Callers**: CTest. **Callees**: `dlopen`/`dlsym` or `LoadLibraryA`/`GetProcAddress`.
+
+**Happy path**: loads `.so`, resolves entry, prints success. **Failure path**: missing arg → usage + exit 1; load/symbol failure → exit 1.
+
+**Boundaries**: argc check (`:10-13`). **Acceptance map**: `:31-41` (POSIX branch). Status: done; passes under Valgrind (10/10).
+
+---
+
+### 1.24 `tests/unit/test_audio_capture.c` (new)
+
+**Why change**: Unit-test resample/downmix/chunking against exact numbers.
+
+**Responsibility before**: N/A. **After**: Deterministic capture tests.
+
+**Callers**: CTest. **Callees**: `vw_audio_capture_process_block`, queue pop.
+
+**Happy path**: 30000 frames 48k stereo FL32 → exactly 10000 output frames → chunks 8192 + 1808 with correct PTS chaining and 5461±1 downmix value. **Failure path**: assertion abort.
+
+**Boundaries**: chunk sizes (`:39-40`, `:51-53`), PTS continuity (`:52`), empty-pop (`:56`). **Acceptance map**: `:31-56`. Status: done.
+
+**Assumptions/Tradeoffs**: Test encodes the boxcar behavior (first output frame averages 6 input samples) — brittle if the resampler algorithm changes.
+
+---
+
+### 1.25 `tests/unit/test_caption_presenter.c` (new)
+
+**Why change**: Unit-test presenter validation and standalone mode without live VLC; VLC symbols stubbed.
+
+**Responsibility before**: N/A. **After**: Presenter edge-case coverage.
+
+**Callers**: CTest. **Callees**: `vw_caption_presenter_*` + stubs.
+
+**Happy path**: null text/duration rejected; NULL-filter display returns true in all three modes; segment display/clear. **Failure path**: assertion abort.
+
+**Boundaries**: null/negative-duration (`:59-62`), null segment/text (`:75-77`), stub linkage via `#undef` of VLC macros (`:19-49`). **Acceptance map**: `:59-85`. Status: done, with caveats.
+
+**Assumptions/Tradeoffs**: The `#undef`-then-redefine stub pattern is brittle if VLC headers change macros; the vout-search path is never exercised (stubs return NULL); test 3 asserts `VW_PRESENTER_MODE_SPU` succeeds — codifying the fiction that SPU mode works (Finding M-5); leftover `(void)segment; (void)empty_seg;` suppressions for variables that are used (`:77-78`, Finding L-3).
+
+---
+
+### 1.26 `tests/unit/test_queue.c`
+
+**Why change**: Full SPSC coverage: creation, push/pop, overflow accounting, wraparound.
+
+**Responsibility before**: Smoke test. **After**: Behavioral tests of the ring.
+
+**Callers**: CTest. **Callees**: queue API.
+
+**Happy path**: 10 push/pop cycles across capacity-3 ring verify wraparound. **Failure path**: assertion abort.
+
+**Boundaries**: capacity 0 (`:8-10`), overflow accounting 50000+50000 us (`:50-61`). **Acceptance map**: `:8-64`. Status: done.
+
+---
+
+### 1.27 `worker/include/vw_audio_buffer.h`
+
+**Why change**: Rule 11 doc comments; explain the intentional plugin/worker PCM representation split (inline S16LE vs heap float32).
+
+**Responsibility before**: Undocumented buffer API. **After**: Documented contract.
+
+**Callers**: Worker (future inference loop). **Callees**: none.
+
+**Happy path**: Reader understands the two representations. **Failure path**: N/A. **Acceptance map**: `:31-34`, `:72-82`. Status: done.
+
+**Assumptions/Tradeoffs**: Worker inference loop remains stubbed (`vw_whisper_engine.c` ignores input) — this milestone is plugin-side only.
 
 ---
 
 ## 2. Happy-Path Request Trace
 
-1. **Client Launch & Connect**: `vw_worker_client_launch_and_connect(NULL, "test_pipe", token)` calls `vw_ipc_connect("test_pipe")` ([plugin/src/vw_worker_client.c:9](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/plugin/src/vw_worker_client.c#L9)).
-2. **Server Accept**: Worker thread calling `vw_worker_run(&config)` listens via `vw_ipc_listen("test_pipe")` ([worker/src/vw_worker.c:25](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L25)), polls for up to 10s, and accepts connection ([protocol/src/vw_ipc_socket_linux.c:36](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/protocol/src/vw_ipc_socket_linux.c#L36)).
-3. **Hello Auth Handshake**: Client encodes `VW_MSG_HELLO` payload with 32-byte token and 20-byte header, sends via `vw_ipc_send()`.
-4. **Worker Frame Processing**: Worker receives header ([worker/src/vw_worker.c:37](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L37)), decodes & validates header ([worker/src/vw_worker.c:47](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L47)), allocates payload buffer ([worker/src/vw_worker.c:57](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L57)), receives payload ([worker/src/vw_worker.c:62](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L62)), verifies token in constant time ([worker/src/vw_worker.c:102](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L102)), sets `authenticated = true`.
-5. **Session Control**: Client sends `VW_MSG_START_SESSION`, `VW_MSG_AUDIO_PCM`, `VW_MSG_SHUTDOWN`.
-6. **Clean Shutdown**: Worker receives `VW_MSG_SHUTDOWN` ([worker/src/vw_worker.c:124](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L124)), breaks loop, closes IPC handle via `vw_ipc_close()` ([worker/src/vw_worker.c:135](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L135)), and exits cleanly with return code `0`.
+Plugin load → audio block → capture → queue → caption OSD:
 
----
+1. VLC loads `libvlc_whisper_plugin.so` and calls `vlc_entry__3_0_0f` → `vw_plugin_open` — `plugin/src/vlc_whisper_module.c:91-113`
+2. `vw_plugin_open`: `calloc` sys; `vw_spsc_queue_create(16)` (8 s, 512 ms chunks) — `:96`; sets `pf_audio_filter = vw_plugin_filter`, `fmt_out.audio = fmt_in.audio` — `:107-108`
+3. VLC calls `vw_plugin_filter` per audio block — `:48-83`; codec mapped S16/S32/FL32 — `:53-62`; unsupported codec → passthrough — `:63-65`
+4. `vw_audio_capture_process_block(&sys->capture, &input)` — `:73` → `plugin/src/vw_audio_capture.c:12-80`: downmix/resample to 16 kHz mono S16, split into ≤8192-frame chunks, contiguous PTS
+5. Each chunk pushed to the ring — `vw_audio_capture.c:75` → `plugin/src/vw_queue.c:36-54` (release-store head)
+6. `block_count` hits 1, 101, ... — `vlc_whisper_module.c:76-78` → `vw_caption_presenter_display(..., 2000000, VW_PRESENTER_MODE_AUTO)` — `plugin/src/vw_caption_presenter.c:100-111`
+7. `find_vout` walks `obj.parent`: filter → audio output → decoder → input; `input_GetVout` returns held vout — `:21-87`
+8. `vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 2000000, text)` — `:95`; release — `:96`
+9. Filter returns the original block untouched — `vlc_whisper_module.c:83`
+
+Not yet wired: the worker/IPC consumer of the queue (sender + worker inference loop are outside this milestone; the queue is produced into but nothing drains it yet).
 
 ## 3. Most Important Failure Path
 
-1. **Authentication Failure (Mismatched Secret Token)**:
-   - Client connects and sends `VW_MSG_HELLO` containing an invalid/all-zero token.
-   - Worker receives frame, decodes payload, executes `verify_token_constant_time(config->token, payload_decoded.hello.token)` ([worker/src/vw_worker.c:102](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L102)).
-   - Verification fails (`diff != 0`), worker frees payload, breaks out of main loop ([worker/src/vw_worker.c:104](file:///home/razvan/vlc-whisper/.worktrees/gemini-milestone-1/worker/src/vw_worker.c#L104)), closes transport handle via `vw_ipc_close()`, and returns exit code `1`.
-   - Plugin receives pipe disconnect (`recv` returns 0), handles worker crash gracefully, and preserves VLC media playback uninterrupted.
+**Merge blocker — Windows build cannot reproduce on a fresh checkout:**
 
----
+1. Merge to main; fresh clone/CI checkout
+2. `.gitignore:144` (`*.def`) excludes `plugin/libvlccore.def` from the tree
+3. Windows preset configure: `add_custom_command` has `DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libvlccore.def` — `plugin/CMakeLists.txt:31-38`
+4. File missing → `dlltool` invocation fails (or Ninja errors on missing dependency) → `libvlccore.dll.a` never generated → `vlc_whisper_plugin.dll` link fails
+5. Only this machine's worktree (file present but untracked) builds; every other machine is broken. Fix: `git add -f plugin/libvlccore.def` or add `!plugin/libvlccore.def` negation before committing.
+
+**Runtime failure path (graceful by design):** audio-only media → `find_vout` finds no vout → WARN `PRESENTER_VOUT_NOT_FOUND` (`vw_caption_presenter.c:85-86`) → false → passthrough continues; OSD disabled by user settings or `duration <= 0` → `vout_OSDText` silent no-op (documented).
 
 ## 4. Boundary Summary
 
 | Boundary type | What to check | Code location | Status |
 | --- | --- | --- | --- |
-| **Input validation** | Payload size limit `payload_length <= 1,048,576` | `protocol/src/vw_protocol_validate.c:16` | ✅ Validated |
-| **Input validation** | Magic header `0x564C4357` check | `protocol/src/vw_protocol_validate.c:9` | ✅ Validated |
-| **Authorization** | Constant-time 32-byte secret token comparison | `worker/src/vw_worker.c:12-18` | ✅ Constant-time |
-| **Authorization** | First message enforcement (`VW_MSG_HELLO`) | `worker/src/vw_worker.c:98` | ✅ Enforced |
-| **Concurrency** | Worker thread isolation from VLC audio callbacks | `tests/integration/test_worker_ipc.c` | ✅ Thread safe |
-| **I/O** | 10s connection accept timeout (`vw_ipc_listen`) | `protocol/src/vw_ipc_socket_linux.c:36`, `vw_ipc_pipe_win32.c:22` | ✅ 10s timeout |
-| **I/O** | 3s read/write frame timeout (`vw_ipc_receive` / `vw_ipc_send`) | `protocol/src/vw_ipc_socket_linux.c:46`, `vw_ipc_pipe_win32.c:80,101` | ✅ 3s timeout |
-| **Persistence** | Stale socket file cleanup (`unlink(endpoint_name)`) | `protocol/src/vw_ipc_socket_linux.c:24` | ✅ Unlinked |
-
----
+| **Input validation** | Null text / duration <= 0 | `vw_caption_presenter.c:101-102` | Validated |
+| **Input validation** | Null segment / text_utf8 | `vw_caption_presenter.c:115-116` | Validated |
+| **Input validation** | Queue capacity 0 / alloc failure | `vw_queue.c:10-21` | Validated |
+| **Input validation** | Null sys / block in callback | `vlc_whisper_module.c:50` | Validated |
+| **Input validation** | `sample_rate == 0` in capture | `vw_audio_capture.c:17-18` | **Gap — division by zero** |
+| **Input validation** | `VLC_TICK_INVALID` PTS blocks | `vw_audio_capture.c:22` | **Gap — enqueued with INT64_MIN** |
+| **Input validation** | `(void*)` → `filter_t*` cast | `vw_caption_presenter.c:104` | No runtime type check (documented) |
+| **Authorization** | In-process module; token auth is worker-side (prior milestone) | N/A | N/A here |
+| **Concurrency** | SPSC memory ordering | `vw_queue.c:41,43,49,61,63,75` | Correct (release/acquire pairs) |
+| **Concurrency** | `block_count` non-atomic | `vlc_whisper_module.c:76` | Safe — single aout thread per instance |
+| **Concurrency** | `input_GetVout`/`find_name` lock acquisition on audio thread | `vw_caption_presenter.c:33,44,57` | Accepted (short-held), low risk |
+| **I/O** | None in callback (no pipe writes this milestone) | `vlc_whisper_module.c:48-83` | Compliant (Rule 4) |
+| **Persistence** | `libvlccore.def` tracked | `.gitignore:144` | **Gap — build input untracked** |
 
 ## 5. Acceptance Criterion → Code Mapping
 
-| # | Criterion | Code | Test | Status |
-|---|-----------|------|------|--------|
-| 1 | C17 standard compliance across all authored files | All `.c` / `.h` files | `-std=c17` compiler flag | ✅ |
-| 2 | Pure byte transport decoupling (token in protocol layer) | `vw_ipc_transport.h` | `test_worker_ipc.c` | ✅ |
-| 3 | Constant-time secret token authentication | `vw_worker.c:12-18` | `test_worker_lifecycle.c` | ✅ |
-| 4 | 10s connection accept timeout | `vw_ipc_socket_linux.c:36`, `vw_ipc_pipe_win32.c:22` | `test_worker_lifecycle.c` | ✅ |
-| 5 | 3s read/write frame timeout | `vw_ipc_socket_linux.c:46`, `vw_ipc_pipe_win32.c:80` | `test_worker_ipc.c` | ✅ |
-| 6 | Unlink stale Unix domain socket files on listen | `vw_ipc_socket_linux.c:24` | `test_worker_ipc.c` | ✅ |
-| 7 | Full session state machine dispatch (`HELLO` -> `SHUTDOWN`) | `vw_worker.c:114-130` | `test_worker_lifecycle.c` | ✅ |
-| 8 | Valgrind memory leak verification | `AGENTS.md:16` | `ctest -T memcheck` | ✅ |
+| # | Criterion | Plan Source | Code | Test | Status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Single DLL contains both SPU and OSD display logic | M2.11 plan `:31` | OSD only; SPU enum exists (`vw_caption_presenter.h:8-12`) | `test_caption_presenter.c:63-65` | **Missing** (SPU) |
+| 2 | Automatic fallback to OSD if SPU unavailable | M2.11 plan `:32` | Always OSD; "fallback" never exercised | N/A | Partial |
+| 3 | Tested against sample video without crashes | M2.11 plan `:33` | README manual Windows run | Not automated | Partial |
+| 4 | `vlc_entry__3_0_0f` ABI entry point | Roadmap step 9 | `vlc_whisper_module.c:129-136` | `test_plugin_load.c:31-41` | Done |
+| 5 | Capture PCM + PTS, non-blocking, canonical 16k S16 | Roadmap step 10 | `vw_audio_capture.c:12-80` | `test_audio_capture.c:31-56` | Done |
+| 6 | Bounded queue, playback wins, measurable drops | Roadmap step 10 / ADR-008 | `vw_queue.c:36-54` | `test_queue.c:44-61` | Done |
+| 7 | Out-of-tree packaging decision | Roadmap step 12 / ADR-012 | `docs/decisions.md:85-94` | N/A | Done |
+| 8 | C17, no project C++ | M2.11 DoD | All files | build | Done |
+| 9 | No blocking in audio callback | M2.11 DoD | `vlc_whisper_module.c:48-83` | invariant | Done |
+| 10 | Warnings-as-errors and formatting pass | M2.11 DoD | — | `clang-format --Werror` clean; build emits 2 warnings; no `-Werror` on plugin | Partial |
 
----
-
-## 6. Assumptions, Tradeoffs, and Low-Confidence Code
-
-### Assumptions
-- Linux platform supports POSIX `AF_UNIX` sockets with `SOCK_SEQPACKET` message-boundary preservation.
-- Windows platform supports Win32 Named Pipes in message mode (`PIPE_TYPE_MESSAGE`).
-- Local user environment has `valgrind` available when running memory checks on Linux.
-
-### Tradeoffs
-- **Single Connection Model**: `vw_ipc_listen()` accepts a single client connection per worker run and immediately closes the listening socket server descriptor. This simplifies state management for MVP (one VLC instance per worker).
-- **Transport I/O Timeout**: 3s read/write timeout prevents hung socket reads. If extended pauses occur, the transport will return timeout errors, which can be handled by session reconnects.
-
-### Low-Confidence Code
-- None. All code paths pass strict C17 compilation, zero-warning checks (`-Werror`), full integration test suite, and Valgrind memory leak verification.
-
----
-
-## 7. Code Review Findings (Bugs, Risks, Nitpicks)
+## 7. Code Review Findings
 
 ### Bugs (Sorted by Priority)
 
-| Priority | Component / Location | Description | Impact | Resolution |
+| Priority | Component / Location | Description | Impact | Proposed Fix |
 | --- | --- | --- | --- | --- |
-| **High** | `worker/src/vw_worker.c:39,69`, `vw_ipc_socket_linux.c:108`, `vw_ipc_pipe_win32.c:122` | `vw_ipc_receive()` returns `0` on 3s read timeout, `vw_worker.c` checks `res == 0` and continues loop | Pausing video > 3 seconds no longer kills worker process | **RESOLVED**: `vw_ipc_receive()` returns `0` on timeout (connection open), `-1` on EOF/error. `vw_worker` continues loop on `0`. |
-| **Medium** | `protocol/src/vw_ipc_pipe_win32.c:120` | `CreateEventA()` event handle cleanup | Win32 event handle leak | **RESOLVED**: `CloseHandle(ov.hEvent)` called unconditionally before returning. |
-| **Low** | `tests/integration/test_worker_ipc.c:61`, `test_worker_lifecycle.c:59` | Compiler emits `-Wimplicit-function-declaration` for `usleep()` | Compiler warning during test build | Add `#define _DEFAULT_SOURCE` at top of test files before `<unistd.h>` |
+| **High** | `.gitignore:144` + `plugin/CMakeLists.txt:31-38` | `*.def` rule ignores the hand-written `plugin/libvlccore.def`, which is a `DEPENDS` of the Windows import-library generation. File exists only in this worktree, untracked. | Windows cross-build fails on any fresh clone/CI; milestone 2 Windows deliverables unbuildable | `git add -f plugin/libvlccore.def` (or add `!plugin/libvlccore.def` negation) before merge |
+| **Medium** | `plugin/src/vw_caption_presenter.c:100` (unstaged) | `(void)mode;` deleted; parameter still unused (warning at declaration line 100) | `-Wunused-parameter` warning in current tree; build no longer warning-clean | Restore `(void)mode;` or implement mode dispatch (AUTO/OSD → OSD; SPU → OSD + WARN) |
+| **Medium** | `plugin/src/vw_audio_capture.c:17-18` | `output_frames = (frame_count * 16000) / input->sample_rate` with no `sample_rate == 0` guard | Division by zero (crash) if any caller passes rate 0; API is public and testable | Early-reject `input->sample_rate == 0` |
 
 ### Architectural & Operational Risks
 
 | Category | Risk Description | Affected Files | Mitigation Strategy |
 | --- | --- | --- | --- |
-| **Portability** | Message boundary handling differs between Linux (`SOCK_SEQPACKET`) and Win32 (`PIPE_TYPE_MESSAGE`) | `vw_ipc_socket_linux.c`, `vw_ipc_pipe_win32.c` | Enforce full-frame atomic buffer reads and payload length validation |
+| **Build reproducibility** | Windows import lib depends on an untracked file (see H-1) | `plugin/CMakeLists.txt`, `plugin/libvlccore.def` | Track the .def; add a CI job for the windows-x64 preset to catch this class of issue |
+| **SPU promise vs OSD reality** | Enum, header comments, unit test, roadmap all assert a native SPU channel that does not exist; the `.def` even exports unused SPU symbols | `vw_caption_presenter.h`, `test_caption_presenter.c`, `roadmap.md:29`, `libvlccore.def` | Either implement `subpicture_New`/`vout_PutSubpicture` path in M3 and keep the enum, or strip SPU from enum/docs/tests now |
+| **Unenforced warning gate** | Plan DoD claims warnings-as-errors, but plugin target has no `-Werror`; two live warnings (deprecated `vlc_object_find_name`, unused `mode`) | `plugin/CMakeLists.txt:41-45`, `vw_caption_presenter.c` | Add `-Werror`; address or document both warnings |
+| **Consumer gap** | Queue is produced into but nothing drains it; worker inference loop stubbed — milestone is plugin-side only | `vw_audio_capture.c`, `worker/src/vw_whisper_engine.c` | Explicitly out of scope for M2; first M3 task is the sender |
+| **Windows test gap** | `test_plugin_load` would fail on Windows (DLL imports libvlccore.dll, not present in test env); no windows test preset | `tests/CMakeLists.txt:31-34` | Ship real libvlccore.dll in CI or skip test on Windows with a documented reason |
+| **OSD-only captions** | `vout_OSDText` overlays may be disabled by user `osd` setting, styled differently, or coexisting poorly with native subtitles | `vw_caption_presenter.c:95` | Documented in `vlc-api-essentials.md` Section 7; revisit SPU in M3 |
 
 ### Code Style & Quality Nitpicks
 
 | Issue Type | File & Line | Description | Recommendation |
 | --- | --- | --- | --- |
-| **Compiler Warning** | `worker/src/vw_worker.c:15` | Signed `int i` compared against `uint32_t VW_AUTH_TOKEN_BYTES` | Use `size_t i` |
-| **Compiler Warning** | `worker/src/vw_worker.c:37` | Signed `int32_t bytes_read` compared against `size_t` | Use `(size_t)bytes_read` |
-| **Compiler Warning** | `protocol/src/vw_ipc_pipe_win32.c:97` | ISO C forbids an empty translation unit on Linux builds | Add dummy static typedef outside `#if` |
+| **Dead Code** | `tests/unit/test_caption_presenter.c:77-78` | `(void)segment; (void)empty_seg;` suppressions for variables that are used | Remove both lines (previously flagged, still open) |
+| **Naming** | `vw_caption_presenter.h:16` / `.c:122` | Field `vlc_subpicture` stores a filter pointer, never a subpicture | Rename to `p_filter_ctx` |
+| **Misleading Test** | `test_caption_presenter.c:63-65` | Asserts SPU mode succeeds when SPU is unimplemented (NULL-filter early-return masks it) | Drop the SPU assertion or gate on mode semantics |
+| **Unused Include** | `vw_caption_presenter.c:10` | `<vlc_block.h>` included, no `block_t` used | Remove (keep `vlc_common.h` ordering rule) |
+| **Docs/Plan Drift** | `milestone_2_11_plan.md:31-33` | Acceptance criteria unchecked while code is committed | Check off or annotate each box |
+| **Roadmap Overstatement** | `roadmap.md:29` | Step 11 marked done though native subtitle route unimplemented | Reword to "OSD overlay proven; native SPU deferred to M3" |
+| **Negative duration** | `vw_caption_presenter.c:118-120` | Negative segment duration silently becomes 2 s default; invalid data should be rejected or warned | WARN on negative; reject instead of defaulting |
+
+---
+
+**Bottom line**: The Linux-side milestone is in good shape — 10/10 tests pass, Valgrind clean, memory ordering and hold/release ownership are correct, and the docs are now consistent (8 s backlog everywhere). The merge is **blocked by H-1** (untracked `libvlccore.def` breaks the Windows build on any other machine); fix that, then decide on the `(void)mode` warning and the SPU-vs-OSD promise before merging.

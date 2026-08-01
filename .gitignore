@@ -142,6 +142,10 @@ install_manifest.txt
 *.ilk
 *.exp
 
+# Don't exclude libvlccore.def, as it is needed for building the plugin. However, exclude other .def files.
+*.def
+!plugin/libvlccore.def
+
 # Logs and coverage
 *.log
 *.gcda
@@ -183,5 +187,7 @@ worker/third_party/vlc*/
 diff.md
 review.md
 
-# MCP config w/ API keys
+# MCP configs w/ API keys (TODO: move to env vars)
 .agents/mcp_config.json
+opencode.jsonc
+opencode.json
