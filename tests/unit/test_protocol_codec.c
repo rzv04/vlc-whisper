@@ -20,7 +20,7 @@ int main(void) {
 
   // HELLO
   vw_msg_hello_t hello = {.min_major = 1, .max_major = 1, .client_version_length = 6, .client_version = (char*)"1.0.0"};
-  memset(hello.token, 0xAB, 32);
+  memset(hello.token, 0xAB, VW_CAPABILITY_TOKEN_BYTES);
   EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &hello, buffer, sizeof(buffer), &written));
   vw_msg_hello_t decoded_hello = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_HELLO, buffer, written, &decoded_hello));
@@ -43,7 +43,7 @@ int main(void) {
   // START
   vw_msg_start_t start = {
       .timeline_origin_pts_us = 1000, .sample_rate = 16000, .channels = 1, .sample_format = 1, .source_kind = 1};
-  memset(start.session_id.bytes, 1, 16);
+  memset(start.session_id.bytes, 1, VW_SESSION_ID_BYTES);
   strcpy(start.model_id, "ggml-tiny");
   strcpy(start.language, "en");
   EXPECT(vw_protocol_encode_payload(VW_MSG_START_SESSION, &start, buffer, sizeof(buffer), &written));
@@ -64,7 +64,7 @@ int main(void) {
 
   // CONTROL
   vw_msg_control_t control = {.reason = 42};
-  memset(control.session_id.bytes, 2, 16);
+  memset(control.session_id.bytes, 2, VW_SESSION_ID_BYTES);
   EXPECT(vw_protocol_encode_payload(VW_MSG_PAUSE, &control, buffer, sizeof(buffer), &written));
   vw_msg_control_t decoded_control = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_PAUSE, buffer, written, &decoded_control));

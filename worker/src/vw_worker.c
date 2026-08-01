@@ -9,10 +9,10 @@
 #include "vw_protocol_types.h"
 
 // Constant-time comparison of two 32-byte tokens to prevent timing attacks
-static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES],
-                                       const uint8_t token_b[VW_AUTH_TOKEN_BYTES]) {
+static bool verify_token_constant_time(const uint8_t token_a[VW_CAPABILITY_TOKEN_BYTES],
+                                       const uint8_t token_b[VW_CAPABILITY_TOKEN_BYTES]) {
   volatile uint8_t diff = 0;
-  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
+  for (size_t i = 0; i < VW_CAPABILITY_TOKEN_BYTES; i++) {
     diff |= (token_a[i] ^ token_b[i]);
   }
   return diff == 0;

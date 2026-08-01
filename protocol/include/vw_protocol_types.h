@@ -24,7 +24,8 @@
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
 #define VW_MAX_MODEL_ID_BYTES 64U        // Model identifier string limit
-#define VW_AUTH_TOKEN_BYTES 32U          // Local IPC 32-byte secret authentication token
+#define VW_CAPABILITY_TOKEN_BYTES 32U    // Local IPC 32-byte secret capability token
+#define VW_SESSION_ID_BYTES 16U          // Local IPC session identifier size in bytes
 #define VW_MAX_TEXT_BYTES 1024U          // Max caption text length in bytes (UTF-8)
 
 // Capability flags (bitfield)
@@ -63,7 +64,7 @@ typedef struct vw_frame_header {
 #pragma pack(pop)
 
 typedef struct vw_session_id {
-  uint8_t bytes[16];
+  uint8_t bytes[VW_SESSION_ID_BYTES];
 } vw_session_id_t;
 
 // Payload Structs — each serialized as the payload bytes following vw_frame_header_t.
@@ -73,7 +74,7 @@ typedef struct vw_session_id {
 typedef struct vw_msg_hello {
   uint16_t min_major;
   uint16_t max_major;
-  uint8_t token[VW_AUTH_TOKEN_BYTES];
+  uint8_t token[VW_CAPABILITY_TOKEN_BYTES];
   uint16_t client_version_length;
   char* client_version;
 } vw_msg_hello_t;

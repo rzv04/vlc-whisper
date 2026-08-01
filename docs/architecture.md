@@ -90,7 +90,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 
 | Type                      | Direction                | Required payload                                                                       |
 | ------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| `HELLO` / `HELLO_ACK`     | both                     | version range, session ID, 32-byte token, capabilities                                 |
+| `HELLO` / `HELLO_ACK`     | both                     | version range, 32-byte token, capabilities                                             |
 | `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin |
 | `AUDIO`                   | plugin -> worker         | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes                   |
 | `PAUSE`, `RESUME`, `STOP` | plugin -> worker         | session ID, reason where applicable                                                    |

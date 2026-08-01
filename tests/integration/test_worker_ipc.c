@@ -24,7 +24,7 @@ static void send_hello(vw_ipc_handle_t* handle, const uint8_t* token) {
   memset(&hello_msg, 0, sizeof(hello_msg));
   hello_msg.min_major = 1;
   hello_msg.max_major = 1;
-  memcpy(hello_msg.token, token, VW_AUTH_TOKEN_BYTES);
+  memcpy(hello_msg.token, token, VW_CAPABILITY_TOKEN_BYTES);
   hello_msg.client_version_length = 5;
   hello_msg.client_version = "1.0.0";
 
@@ -50,7 +50,7 @@ int main(void) {
   vw_worker_config_t config;
   memset(&config, 0, sizeof(config));
   strncpy(config.pipe_name, "test_ipc_socket", sizeof(config.pipe_name) - 1);
-  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.token[i] = (uint8_t)i;
+  for (size_t i = 0; i < VW_CAPABILITY_TOKEN_BYTES; i++) config.token[i] = (uint8_t)i;
 
   pthread_t thread;
   int err = pthread_create(&thread, NULL, worker_thread, &config);
