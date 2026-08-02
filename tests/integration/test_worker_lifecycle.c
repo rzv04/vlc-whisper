@@ -89,6 +89,33 @@ int main(void) {
 
   vw_worker_client_disconnect(client);
 
+  // 3. Client-side failure paths: bad args and no listener
+  EXPECT(vw_worker_client_launch_and_connect(NULL, NULL, config.token) == NULL);  // NULL endpoint
+  EXPECT(vw_worker_client_launch_and_connect(NULL, "no_such_lifecycle_endpoint", config.token) == NULL);  // no listener
+  EXPECT(vw_worker_client_launch_and_connect(NULL, config.pipe_name, NULL) == NULL);                      // NULL token
+
+  // 4. First frame is not HELLO: worker must reject the connection and exit non-zero
+  err = pthread_create(&thread, NULL, worker_thread, &config);
+  (void)err;
+  assert(err == 0);
+  usleep(100000);
+
+  vw_ipc_handle_t* raw = vw_ipc_connect(config.pipe_name);
+  EXPECT(raw != NULL);
+
+  vw_frame_header_t non_hello = {.magic = VW_PROTOCOL_MAGIC,
+                                 .major = VW_PROTOCOL_VERSION_MAJOR,
+                                 .type = VW_MSG_SHUTDOWN,
+                                 .payload_length = 0,
+                                 .sequence = 1};
+  uint8_t non_hello_buf[sizeof(vw_frame_header_t)];
+  EXPECT(vw_protocol_encode_header(&non_hello, non_hello_buf, sizeof(non_hello_buf)));
+  vw_ipc_send(raw, non_hello_buf, sizeof(non_hello_buf));
+
+  pthread_join(thread, &ret_val);
+  EXPECT((int)(intptr_t)ret_val == 1);  // First message must be HELLO
+  vw_ipc_close(raw);
+
   printf("test_worker_lifecycle PASSED\n");
   return 0;
 }

@@ -23,6 +23,7 @@ int main(void) {
 
   EXPECT(!vw_platform_get_random_bytes(NULL, sizeof(buf)));  // NULL buffer rejected
   EXPECT(!vw_platform_get_random_bytes(buf, 0));             // zero size rejected
+  EXPECT(!vw_platform_get_random_bytes(NULL, 0));            // NULL buffer and zero size rejected
 
   EXPECT(vw_platform_get_random_bytes(buf, sizeof(buf)));  // fills buffer, returns true
 
@@ -47,8 +48,12 @@ int main(void) {
   const char* argv_ok[] = {kSpawnOk, NULL};
   EXPECT(vw_platform_spawn_process(kSpawnOk, argv_ok));
 
+  // Failure paths: partial-NULL arguments must be rejected
+  EXPECT(!vw_platform_spawn_process(NULL, argv_ok));   // NULL executable
+  EXPECT(!vw_platform_spawn_process(kSpawnOk, NULL));  // NULL argv
+
   const char* argv_missing[] = {kSpawnMissing, NULL};
-  EXPECT(!vw_platform_spawn_process(kSpawnMissing, argv_missing));
+  EXPECT(!vw_platform_spawn_process(kSpawnMissing, argv_missing));  // non-existent executable
 
   return 0;
 }

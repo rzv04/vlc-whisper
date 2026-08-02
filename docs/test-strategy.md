@@ -6,21 +6,21 @@ The primary invariant is: **captioning must never harm playback**. A transcripti
 
 ## Test layers
 
-| Layer | Scope | Examples |
-|---|---|---|
-| Unit | Pure C logic | Ring buffer, PTS arithmetic/overflow, session state, UTF-8 validation, dedupe |
-| Protocol | Binary compatibility | Golden frames, unknown fields/types, max lengths, token failure, sequence/stale session |
-| Worker integration | Local inference | Fixed PCM fixtures, VAD boundaries, model missing/hash mismatch, deterministic settings |
-| VLC integration | Module behavior | Load/unload, PCM capture format, display scheduling, pause/end/stop |
-| End-to-end | Pinned Windows VLC | Install, local video, visible captions, worker crash, seek rejection, uninstall |
-| Performance | Reference machines | Real-time factor, p50/p95 caption latency, CPU/RAM, queue drops |
-| Security/privacy | Local boundary | Pipe ACLs, random name/token, no listener, no remote traffic, log redaction |
+| Layer              | Scope                | Examples                                                                                |
+| ------------------ | -------------------- | --------------------------------------------------------------------------------------- |
+| Unit               | Pure C logic         | Ring buffer, PTS arithmetic/overflow, session state, UTF-8 validation, dedupe           |
+| Protocol           | Binary compatibility | Golden frames, unknown fields/types, max lengths, token failure, sequence/stale session |
+| Worker integration | Local inference      | Fixed PCM fixtures, VAD boundaries, model missing/hash mismatch, deterministic settings |
+| VLC integration    | Module behavior      | Load/unload, PCM capture format, display scheduling, pause/end/stop                     |
+| End-to-end         | Pinned Windows VLC   | Install, local video, visible captions, worker crash, seek rejection, uninstall         |
+| Performance        | Reference machines   | Real-time factor, p50/p95 caption latency, CPU/RAM, queue drops                         |
+| Security/privacy   | Local boundary       | Pipe ACLs, random name/token, no listener, no remote traffic, log redaction             |
 
 ## Code Coverage
 
-Code coverage instrumentation (`--coverage`) is configured for native Linux builds to ensure project-authored C17 logic is thoroughly exercised. 
+Code coverage instrumentation (`--coverage`) is configured for native Linux builds to ensure project-authored C17 logic is thoroughly exercised.
 
-- **Target Matrix**: Coverage generation and reporting run natively on Linux (`linux-x64-coverage`). Code coverage is not executed for Windows MinGW cross-builds or macOS. 
+- **Target Matrix**: Coverage generation and reporting run natively on Linux (`linux-x64-coverage`). Code coverage is not executed for Windows MinGW cross-builds or macOS.
 - **Invariant Rules**: Third-party libraries (`worker/third_party/whisper.cpp`, `ggml`), VLC SDK headers, and test suite code are strictly **excluded** from coverage calculations (via `gcovr` `--exclude` flags). ZERO modifications are permitted to third-party/VLC codebase.
 - **Reporting**: HTML and CLI reports are generated using `gcovr` after running the automated `ctest` suite.
 
@@ -39,6 +39,11 @@ Golden expected text should tolerate model-version variance only through explici
 - Worker absent, wrong version, invalid token, model missing/corrupt, pipe disconnect, bad payload, invalid UTF-8, or worker nonzero exit: safe disable, no playback impact.
 - Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises.
 - Existing subtitle track and VLC-whisper behavior follow the documented coexistence policy.
+
+### Automated failure-path coverage
+
+- `tests/unit/test_platform.c`: NULL/zero-size RNG rejection, NULL executable/argv spawn rejection, non-existent executable spawn failure, time monotonicity and wall-clock sanity.
+- `tests/integration/test_worker_lifecycle.c`: wrong-token HELLO rejection (worker exits 1), first-frame-not-HELLO rejection (worker exits 1), client NULL-arg validation (NULL endpoint/token), connect failure with no listener.
 
 ## Performance contract
 

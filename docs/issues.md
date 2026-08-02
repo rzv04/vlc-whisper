@@ -2,8 +2,8 @@
 
 ## Issue #1 — `test_platform` fails under Valgrind memcheck (pre-existing)
 
-- **Priority**: P1 (blocks `-T memcheck` gate in the verification checklist)
-- **Status**: Open, pre-existing (not introduced by the 2026-08-02 codec/handshake refactor).
+- **Priority**: P1 — now also blocks the GitHub Actions CI memcheck gate (`.github/workflows/ci.yml`, strict fail); every CI run stays red until fixed.
+- **Status**: Open, pre-existing (not introduced by the 2026-08-02 codec/handshake refactor). Code fix intentionally deferred (2026-08-02) until the CI workflow is in place.
 - **Symptom**: `ctest --test-dir build/linux-x64-debug -T memcheck` reports 10/11 passed; only `test_platform` fails. Normal `ctest --preset linux-x64-debug` passes 11/11.
 - **Reproduce**: `valgrind -q --tool=memcheck --leak-check=yes --show-reachable=yes ./build/linux-x64-debug/tests/test_platform`
 - **Failure**: `Test failed: !vw_platform_spawn_process(kSpawnMissing, argv_missing) at tests/unit/test_platform.c:51`. The test expects spawning a non-existent executable to return `false`; under Valgrind's process interception (`posix_spawn`/fork) the call behaves differently, so the assertion fails.
