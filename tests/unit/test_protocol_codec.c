@@ -20,12 +20,12 @@ int main(void) {
 
   // HELLO
   vw_msg_hello_t hello = {.min_major = 1, .max_major = 1, .client_version_length = 6, .client_version = (char*)"1.0.0"};
-  memset(hello.token, 0xAB, VW_CAPABILITY_TOKEN_BYTES);
+  memset(hello.auth_token, 0xAB, VW_AUTH_TOKEN_BYTES);
   EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &hello, buffer, sizeof(buffer), &written));
   vw_msg_hello_t decoded_hello = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_HELLO, buffer, written, &decoded_hello));
   EXPECT(decoded_hello.min_major == 1);
-  EXPECT(decoded_hello.token[0] == 0xAB);
+  EXPECT(decoded_hello.auth_token[0] == 0xAB);
   EXPECT_EQ_STR(decoded_hello.client_version, "1.0.0");
 
   // HELLO_ACK

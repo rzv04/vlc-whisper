@@ -47,7 +47,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       const vw_msg_hello_t* p = (const vw_msg_hello_t*)payload;
       ENC_FIELD(p->min_major);
       ENC_FIELD(p->max_major);
-      ENC_BYTES(p->token, VW_CAPABILITY_TOKEN_BYTES);
+      ENC_BYTES(p->auth_token, VW_AUTH_TOKEN_BYTES);
       ENC_FIELD(p->client_version_length);
       ENC_BYTES(p->client_version, p->client_version_length);
       break;
@@ -162,7 +162,7 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       vw_msg_hello_t* p = (vw_msg_hello_t*)out_payload;
       DEC_FIELD(p->min_major);
       DEC_FIELD(p->max_major);
-      DEC_BYTES(p->token, VW_CAPABILITY_TOKEN_BYTES);
+      DEC_BYTES(p->auth_token, VW_AUTH_TOKEN_BYTES);
       DEC_FIELD(p->client_version_length);
       DEC_PTR(p->client_version, p->client_version_length);
       break;

@@ -6,6 +6,7 @@ add_library(vlc_whisper_plugin SHARED
     src/vw_worker_client.c
     src/vw_queue.c
     src/vw_platform_win32.c
+    src/vw_platform_linux.c
 )
 
 target_compile_definitions(vlc_whisper_plugin PRIVATE

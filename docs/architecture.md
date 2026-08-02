@@ -67,7 +67,7 @@ MVP seeking & discontinuity policy: when a non-monotonic PTS, seek event (`BLOCK
 
 ## IPC protocol
 
-Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit capability token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
+Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit authentication token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
 
 ### Transport Timeouts & Return Semantics
 
@@ -103,6 +103,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 The worker manages models; the plugin knows only a model ID string (`tiny.en`).
 
 Incoming audio frames carry:
+
 - `pcm_data`: Raw sample bytes (S16LE, FL32, or S32LE)
 - `frame_count`: Number of audio frames in the block
 - `pts_us`: Signed 64-bit microsecond PTS
@@ -110,6 +111,7 @@ Incoming audio frames carry:
 - `channels`: e.g., 1 or 2
 
 Converted SPSC queue chunks carry:
+
 - `start_pts_us`: Signed 64-bit microsecond PTS
 - `duration_us`: Duration of the chunk in microseconds
 - `sample_rate`: 16000 Hz
@@ -118,6 +120,7 @@ Converted SPSC queue chunks carry:
 - `pcm_data`: `int16_t` inline sample array (zero allocation)
 
 Transcribed segments carry:
+
 - `segment_id`: Monotonic 64-bit integer per session
 - `start_pts_us` / `end_pts_us`: microsecond media timeline bounds
 - `is_final`: Boolean flag

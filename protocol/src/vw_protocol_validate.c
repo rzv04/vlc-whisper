@@ -74,7 +74,6 @@ static bool is_empty_or_whitespace(const char* s, size_t len) {
   return true;
 }
 
-// Validate the payload struct for a given message type. Returns true if valid, false otherwise.
 bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
   if (!payload && type != VW_MSG_SHUTDOWN && type != VW_MSG_STARTED) return false;
   switch (type) {

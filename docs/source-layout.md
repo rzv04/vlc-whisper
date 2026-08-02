@@ -8,13 +8,13 @@ The codebase is an ensemble: a native C17 VLC integration module, an isolated lo
 
 ## Ownership Rules
 
-| Area | Owns | Must not own |
-|---|---|---|
-| `plugin/` | VLC lifecycle, audio capture, bounded queues, worker supervision, caption presentation | Whisper inference, VAD decisions, persistent transcripts |
-| `worker/` | IPC session handling, VAD, audio windows, Whisper inference, final caption segments | VLC callbacks, subtitle internals |
-| `protocol/` | Versioned frames, encoding, decoding, validation, transport abstraction | VLC or Whisper APIs, application policy |
-| `models/` | Local GGML whisper model binary storage and model manifest validation | Model downloading over network at runtime |
-| `tests/` | Automated verification, fixtures, manual E2E procedure | Production implementation logic |
+| Area        | Owns                                                                                   | Must not own                                             |
+| ----------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `plugin/`   | VLC lifecycle, audio capture, bounded queues, worker supervision, caption presentation | Whisper inference, VAD decisions, persistent transcripts |
+| `worker/`   | IPC session handling, VAD, audio windows, Whisper inference, final caption segments    | VLC callbacks, subtitle internals                        |
+| `protocol/` | Versioned frames, encoding, decoding, validation, transport abstraction                | VLC or Whisper APIs, application policy                  |
+| `models/`   | Local GGML whisper model binary storage and model manifest validation                  | Model downloading over network at runtime                |
+| `tests/`    | Automated verification, fixtures, manual E2E procedure                                 | Production implementation logic                          |
 
 All project-authored source is C17. The pinned `whisper.cpp` dependency may contain C/C++, but project-owned plugin code remains C.
 
@@ -33,15 +33,16 @@ vlc-whisper/
 │   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC OSD/subtitle cues
 │   │   ├── vw_worker_client.h                 # Authenticated IPC client, worker process supervisor
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
-│   │   └── vw_platform.h                      # OS abstraction interface for paths, security tokens, and timing
+│   │   └── vw_platform.h                      # OS abstraction: CSPRNG, timing, process spawning
 │   └── src/
 │       ├── vlc_whisper_module.c               # Entry point: VLC module descriptor, open/close hooks
 │       ├── vw_session.c                       # Session lifecycle logic (start, pause, resume, seek reset)
 │       ├── vw_audio_capture.c                 # Audio callback handler & PCM format normalization
 │       ├── vw_caption_presenter.c             # Schedules and renders timed text captions in VLC
-│       ├── vw_worker_client_win32.c           # Windows Named Pipe IPC client & process launcher
+│       ├── vw_worker_client.c                 # Worker process launcher, IPC client & HELLO handshake
 │       ├── vw_queue.c                         # Non-blocking lock-free SPSC queue implementation
-│       └── vw_platform_win32.c                # Windows API paths, security tokens, and process management
+│       ├── vw_platform_win32.c                # Windows: paths, BCrypt CSPRNG, process spawn, timing
+│       └── vw_platform_linux.c                # Linux/Unix: random bytes, posix_spawn, timing
 ├── worker/                                    # Standalone local transcription worker application
 │   ├── CMakeLists.txt                         # Builds vlc-whisper-worker executable and links whisper.cpp
 │   ├── include/
@@ -67,7 +68,7 @@ vlc-whisper/
 │   ├── include/
 │   │   ├── vw_protocol.h                      # High-level protocol encoder/decoder API
 │   │   ├── vw_protocol_types.h                # Binary message headers, magic bytes, and struct definitions
-│   │   ├── vw_protocol_codec.h                # Serialization/deserialization helper signatures
+│   │   ├── vw_protocol_codec.h                # Serialization/deserialization helpers
 │   │   ├── vw_ipc_transport.h                 # Platform transport abstraction (Named Pipe / Unix Domain Socket)
 │   │   └── vw_log.h                           # Privacy-safe variadic diagnostic logging API
 │   └── src/
@@ -87,8 +88,11 @@ vlc-whisper/
 │   │   ├── test_protocol_codec.c              # Serialization & frame encoding unit tests
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
+│   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
-│   │   └── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
+│   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
+│   │   ├── test_caption_presenter.c           # Caption cue conversion tests
+│   │   └── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test
 │   │   └── test_worker_lifecycle.c            # Worker startup, crash recovery & shutdown test
@@ -122,30 +126,31 @@ The `models/` directory serves as the local offline store for GGML model files a
 
 ## Plugin Files
 
-| File | Responsibility |
-|---|---|
-| `vlc_whisper_module.c` | VLC module registration, activation/deactivation, module setup |
-| `vw_session.c` | Caption session state: start, pause, resume, stop, discontinuity, failure |
-| `vw_audio_capture.c` | Receive/normalize PCM and associate monotonic media PTS |
-| `vw_queue.c` | Bounded audio producer-consumer queue and overload/drop policy |
-| `vw_worker_client_win32.c` | Launch worker, named-pipe connection, handshake, send/receive, cleanup |
-| `vw_caption_presenter.c` | Convert final worker segments into VLC caption cues |
-| `vw_log.c` | Privacy-safe diagnostics; never log PCM/transcript by default |
-| `vw_platform_win32.c` | Windows paths, handles, randomness, cleanup, timing helpers |
+| File                     | Responsibility                                                            |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `vlc_whisper_module.c`   | VLC module registration, activation/deactivation, module setup            |
+| `vw_session.c`           | Caption session state: start, pause, resume, stop, discontinuity, failure |
+| `vw_audio_capture.c`     | Receive/normalize PCM and associate monotonic media PTS                   |
+| `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |
+| `vw_worker_client.c`     | Launch worker, IPC connect, HELLO handshake, send/receive, cleanup        |
+| `vw_caption_presenter.c` | Convert final worker segments into VLC caption cues                       |
+| `vw_log.c`               | Privacy-safe diagnostics; never log PCM/transcript by default             |
+| `vw_platform_win32.c`    | Windows: paths, handles, BCrypt CSPRNG, process spawn, timing helpers     |
+| `vw_platform_linux.c`    | Linux/Unix: random bytes, posix_spawn, timing helpers                     |
 
 The VLC audio callback may only do bounded non-blocking work. It must never wait for the worker, infer, do blocking IPC, or allocate unbounded memory.
 
 ## Worker Files
 
-| File | Responsibility |
-|---|---|
-| `main.c` | Parse arguments, initialize, run, and return meaningful exit codes |
-| `vw_worker.c` | IPC event loop, protocol dispatch, worker state transitions |
-| `vw_whisper_engine.c` | Whisper C API adapter, model load/unload, inference calls |
-| `vw_vad.c` | Voice-activity detection state and window decisions |
-| `vw_audio_buffer.c` | PCM accumulation, window extraction, overlap |
-| `vw_segment_builder.c` | Ordered timed segments and overlap deduplication |
-| `vw_worker_config.c` | Validate model path, initial `en` language, and safe defaults |
+| File                   | Responsibility                                                     |
+| ---------------------- | ------------------------------------------------------------------ |
+| `main.c`               | Parse arguments, initialize, run, and return meaningful exit codes |
+| `vw_worker.c`          | IPC event loop, protocol dispatch, worker state transitions        |
+| `vw_whisper_engine.c`  | Whisper C API adapter, model load/unload, inference calls          |
+| `vw_vad.c`             | Voice-activity detection state and window decisions                |
+| `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
+| `vw_segment_builder.c` | Ordered timed segments and overlap deduplication                   |
+| `vw_worker_config.c`   | Validate model path, initial `en` language, and safe defaults      |
 
 MVP supports CPU inference using `tiny.en`, one local playback session, and final-only segments.
 
@@ -172,9 +177,11 @@ typedef enum vw_message_type {
 
 Frames carry protocol version, message type, session ID, payload size, and payload. All audio/caption timing uses media PTS in microseconds. See `docs/api-contracts.md` for the authoritative wire contract.
 
+Payload structs are constructed at call sites with C99 designated initializers (fields not listed are zero-filled).
+
 ## Tests
 
-- `tests/unit/`: codec/validation, queue policy, segment building, caption timing.
+- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, caption timing, platform abstraction.
 - `tests/integration/`: worker process, pipe handshake, lifecycle/errors/cleanup.
 - `tests/e2e/`: repeatable manual test of the pinned VLC build and local English video.
 - `tests/fixtures/`: legal, small, deterministic offline input data only.

@@ -9,10 +9,10 @@
 #include "vw_protocol_types.h"
 
 // Constant-time comparison of two 32-byte tokens to prevent timing attacks
-static bool verify_token_constant_time(const uint8_t token_a[VW_CAPABILITY_TOKEN_BYTES],
-                                       const uint8_t token_b[VW_CAPABILITY_TOKEN_BYTES]) {
+static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES],
+                                       const uint8_t token_b[VW_AUTH_TOKEN_BYTES]) {
   volatile uint8_t diff = 0;
-  for (size_t i = 0; i < VW_CAPABILITY_TOKEN_BYTES; i++) {
+  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
     diff |= (token_a[i] ^ token_b[i]);
   }
   return diff == 0;
@@ -59,6 +59,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
       payload_buf = (uint8_t*)malloc(header.payload_length);
       if (!payload_buf) break;
 
+      // receive the payload in a loop to handle partial reads
       uint32_t payload_read = 0;
       while (payload_read < header.payload_length) {
         int32_t res = vw_ipc_receive(handle, payload_buf + payload_read, header.payload_length - payload_read);
@@ -93,6 +94,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
     }
 
+    // also enforce after receiving
     if (!valid_payload && header.payload_length > 0) {
       free(payload_buf);
       break;  // Invalid payload
@@ -103,14 +105,37 @@ int vw_worker_run(const vw_worker_config_t* config) {
         free(payload_buf);
         break;  // First message must be HELLO
       }
-      if (!verify_token_constant_time(config->token, payload_decoded.hello.token)) {
+      if (!verify_token_constant_time(config->token, payload_decoded.hello.auth_token)) {
         free(payload_buf);
         break;  // Auth failed
       }
       authenticated = true;
 
-      // We could send HELLO_ACK here
-      // For now just continue
+      // Reply HELLO_ACK with the negotiated version and supported capabilities
+      vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
+                                .selected_minor = VW_PROTOCOL_VERSION_MINOR,
+                                .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO,
+                                .worker_version = VW_WORKER_VERSION,
+                                .worker_version_length = VW_WORKER_VERSION_LENGTH};
+      uint8_t ack_payload[256];
+      size_t ack_len = 0;
+      if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, ack_payload, sizeof(ack_payload), &ack_len)) {
+        free(payload_buf);
+        break;
+      }
+      vw_frame_header_t ack_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                   .major = VW_PROTOCOL_VERSION_MAJOR,
+                                   .type = VW_MSG_HELLO_ACK,
+                                   .payload_length = (uint32_t)ack_len,
+                                   .sequence = 1};
+      uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
+      if (!vw_protocol_encode_header(&ack_hdr, ack_hdr_buf, sizeof(ack_hdr_buf))) {
+        free(payload_buf);
+        break;
+      }
+      vw_ipc_send(handle, ack_hdr_buf, sizeof(ack_hdr_buf));
+      vw_ipc_send(handle, ack_payload, ack_len);
+
       free(payload_buf);
       continue;
     }

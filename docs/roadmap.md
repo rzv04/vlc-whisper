@@ -58,5 +58,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [ ] 22. Multilingual models (`small`, `medium`, `large`) and automatic language detection.
 - [ ] 23. Native SPU subpicture channel integration (`subpicture_New`/`vout_PutSubpicture`).
 - [ ] 24. Release documentation: troubleshooting, privacy statement, uninstall guide, and bug report templates.
+- [ ] 25. Benchmark suite and performance output metrics (inference latency, queue high-water mark, audio processing speed ratio).
+- [ ] 26. Explore GPU/Vulkan `whisper.cpp` backend acceleration and future inference performance optimizations (BLAS, AVX-512, SIMD quantization).
 
 **Exit Status:** **PLANNED** — Reproducible signed/hashed release package with documented compatibility matrix.

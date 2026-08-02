@@ -10,7 +10,7 @@ Build offline, real-time speech captions inside VLC for local media. The first d
 - The VLC module must be native C and is version-coupled to the selected VLC build. Do not invent a stable VLC plugin SDK/ABI.
 - Never perform inference, pipe I/O, blocking wait, or unbounded allocation in VLC's audio callback.
 - No network traffic at runtime: no HTTP/TCP listener, cloud service, telemetry, auto-update, or automatic model download.
-- Audio/transcripts are in-memory only in MVP. Logs must not contain PCM, transcript text, full local paths, or capability tokens.
+- Audio/transcripts are in-memory only in MVP. Logs must not contain PCM, transcript text, full local paths, or authentication tokens.
 - Windows IPC is authenticated current-user-only message-mode named pipe; Linux abstraction is Unix `SOCK_SEQPACKET`.
 - Use media PTS in signed 64-bit microseconds; never synchronize captions using wall clock.
 - Bounded queues: if overloaded, drop old audio and record it; never slow VLC.

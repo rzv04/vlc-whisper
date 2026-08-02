@@ -132,16 +132,5 @@ void vw_ipc_close(vw_ipc_handle_t* handle) {
     free(handle);
   }
 }
-#else
-// Non-Windows fallback stubs for platforms other than Linux/Mac
-#if !defined(__linux__) && !defined(__APPLE__) && !defined(__unix__)
-#include <stdlib.h>
 
-#include "vw_ipc_transport.h"
-vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) { return NULL; }
-vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) { return NULL; }
-bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) { return false; }
-int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) { return -1; }
-void vw_ipc_close(vw_ipc_handle_t* handle) {}
-#endif
 #endif
