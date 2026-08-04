@@ -108,22 +108,120 @@ Baseline (Milestone 3 Baseline)
    └─► Look-Ahead Branch: Ahead-of-Time Source Decoding (Worker FFmpeg/MF Demux -> SPU Text Regions)
 ```
 
-### Key Technical Patterns Discovered
-1. **SPU Text Region Construction**:
-   - Native VLC subtitle decoders construct subpictures by allocating a text region:
-     ```c
-     video_format_t fmt;
-     memset(&fmt, 0, sizeof(fmt));
-     fmt.i_chroma = VLC_CODEC_TEXT;
-     subpicture_region_t* region = subpicture_region_New(&fmt);
-     region->p_text = text_segment_New(text_utf8);
-     region->i_align = SUBPICTURE_ALIGN_BOTTOM;
-     subpic->p_region = region;
-     ```
-2. **System vs. Media Timeline Mapping**:
-   - SPU subpictures are rendered against VLC's `SYSTEM` date domain (`mdate()`). Media timeline PTS (`int64_t pts_us`) must be mapped using live system-to-media offsets (`offset_us = mdate() - input_time`) to prevent captions from being rejected as "late".
-3. **Process-Wide Media Framework Initialization**:
-   - Windows Media Foundation (`MFStartup`/`MFShutdown`) must be initialized once per worker process lifetime in `vw_worker_run`, never inside short-lived worker threads.
+### Detailed Implementation of Solved Blockers & Solved Architecture
+
+#### 1. Inheriting Media Location MRL (`vw_plugin_find_input_location`)
+When starting source decoding mode, the plugin must find the current media file path or URI from VLC's object hierarchy. In VLC 3.0, the `filter_t` object does not directly hold the input MRL; it must walk up the parent object chain or inspect the children list:
+```c
+static char* vw_plugin_find_input_location(filter_t* p_filter) {
+  if (!p_filter) return NULL;
+  vlc_object_t* cur = VLC_OBJECT(p_filter);
+
+  // Method A: Direct vlc_object_find_name lookup for "input"
+  if (vlc_object_find_name != NULL) {
+    vlc_object_t* input_obj = vlc_object_find_name(VLC_OBJECT(p_filter), "input");
+    if (input_obj) {
+      char* uri = NULL;
+      if (input_GetItem != NULL) {
+        input_item_t* item = input_GetItem((input_thread_t*)input_obj);
+        if (item && item->psz_uri && item->psz_uri[0] != '\0') {
+          uri = strdup(item->psz_uri);
+        }
+      }
+      vlc_object_release(input_obj);
+      if (uri && uri[0] != '\0') return uri;
+      if (uri) free(uri);
+    }
+  }
+
+  // Method B: Parent chain walk to find "playlist" ancestor and playlist_CurrentInput()
+  while (cur) {
+    if (cur->obj.object_type && strcmp(cur->obj.object_type, "playlist") == 0) {
+      playlist_t* p_playlist = (playlist_t*)cur;
+      if (playlist_CurrentInput != NULL) {
+        input_thread_t* p_input = playlist_CurrentInput(p_playlist);
+        if (p_input) {
+          char* uri = NULL;
+          if (input_GetItem != NULL) {
+            input_item_t* item = input_GetItem(p_input);
+            if (item && item->psz_uri && item->psz_uri[0] != '\0') {
+              uri = strdup(item->psz_uri);
+            }
+          }
+          vlc_object_release(VLC_OBJECT(p_input));
+          if (uri && uri[0] != '\0') return uri;
+          if (uri) free(uri);
+        }
+      }
+    }
+    cur = cur->obj.parent;
+  }
+  return NULL;
+}
+```
+
+#### 2. Cross-Platform Ahead-of-Time Source Decoding: FFmpeg (Linux) vs. Media Foundation (Windows)
+The worker source decoder (`vw_source_decode.c`) decodes media files out-of-process to feed 16 kHz Mono S16LE PCM chunks ahead of real-time playback:
+
+- **Linux Implementation (FFmpeg / `libavformat` + `libswresample`)**:
+  - Opens media via `avformat_open_input()`, locates best audio stream with `av_find_best_stream()`.
+  - Configures `SwrContext` resampler (`swr_alloc_set_opts2`) to convert arbitrary sample formats and rates to 16000 Hz Mono S16LE.
+  - Seeks using `av_seek_frame(fmt_ctx, audio_idx, ts, AVSEEK_FLAG_BACKWARD)` and flushes buffers with `avcodec_flush_buffers()`.
+
+- **Windows Implementation (Media Foundation / `IMFSourceReader`)**:
+  - Converts UTF-8 source MRL to wide-char string and strips leading `file:///` (e.g. `file:///C:/video.mp4` → `C:/video.mp4`).
+  - Creates reader via `MFCreateSourceReaderFromURL()`.
+  - Configures target media type to PCM 16kHz 16-bit Mono:
+    ```c
+    IMFMediaType* pPartialType = NULL;
+    MFCreateMediaType(&pPartialType);
+    pPartialType->lpVtbl->SetGUID(pPartialType, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
+    pPartialType->lpVtbl->SetGUID(pPartialType, &MF_MT_SUBTYPE, &MFAudioFormat_PCM);
+    pPartialType->lpVtbl->SetUINT32(pPartialType, &MF_MT_AUDIO_NUM_CHANNELS, 1);
+    pPartialType->lpVtbl->SetUINT32(pPartialType, &MF_MT_AUDIO_SAMPLES_PER_SECOND, 16000);
+    pPartialType->lpVtbl->SetUINT32(pPartialType, &MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    pReader->lpVtbl->SetCurrentMediaType(pReader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, NULL, pPartialType);
+    ```
+  - Seeks using `SetCurrentPosition` with 100ns timestamp units:
+    ```c
+    PROPVARIANT var;
+    var.vt = VT_I8;
+    var.hVal.QuadPart = target_pts_us * 10;
+    pReader->lpVtbl->SetCurrentPosition(pReader, &GUID_NULL, &var);
+    ```
+  - Process-wide lifecycle: `MFStartup`/`MFShutdown` are called once per worker lifetime in `vw_worker_run`, preventing per-thread refcount races.
+
+#### 3. Native SPU Text Region Construction & MinGW Symbol Linkage
+- **Text Region Construction**: Native subpictures must carry a `subpicture_region_t` containing text segments:
+  ```c
+  subpicture_t* subpic = subpicture_New(NULL);
+  if (subpic) {
+    video_format_t fmt;
+    memset(&fmt, 0, sizeof(fmt));
+    fmt.i_chroma = VLC_CODEC_TEXT;
+    subpicture_region_t* region = subpicture_region_New(&fmt);
+    region->p_text = text_segment_New(text_utf8);
+    region->i_align = SUBPICTURE_ALIGN_BOTTOM;
+    region->i_x = 0;
+    region->i_y = 20;
+    subpic->p_region = region;
+    subpic->i_channel = channel_id;
+    subpic->i_start = (vlc_tick_t)system_start_pts_us;
+    subpic->i_stop = (vlc_tick_t)system_end_pts_us;
+    subpic->b_subtitle = true;
+    vout_PutSubpicture(vout, subpic);
+  }
+  ```
+- **Windows MinGW Symbol Linkage**: Weak symbol attributes (`__attribute__((weak))`) fail on MinGW by evaluating function pointers to NULL at link time. Resolved using conditional `VW_WEAK` macro and exporting required symbols in `plugin/libvlccore.def`:
+  ```c
+  #ifdef _WIN32
+  #define VW_WEAK
+  #else
+  #define VW_WEAK __attribute__((weak))
+  #endif
+  extern subpicture_region_t* subpicture_region_New(const video_format_t*) VW_WEAK;
+  extern text_segment_t* text_segment_New(const char*) VW_WEAK;
+  ```
 
 ---
 
