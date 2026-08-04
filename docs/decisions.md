@@ -95,3 +95,34 @@ Consequences:
 1. **Compatibility**: We must strictly target the ABI of a pinned VLC release (e.g. 3.x series) to ensure the DLL loads correctly in user installations.
 2. **Installation**: The installer will locate the user's existing VLC installation directory and copy `libvlc_whisper_plugin.dll` into the `plugins/` subdirectory.
 3. **No Engine Forks**: We cannot modify VLC core player behavior or patch VLC itself to accommodate our subtitle or audio timing needs. We must use public VLC APIs and handle synchronization carefully within the plugin boundaries.
+
+## ADR-013: Decoupled Worker IPC Reader Thread
+
+**Status:** Accepted.
+
+The worker process receives incoming `VW_MSG_AUDIO_PCM` frames across the IPC transport. Running `whisper_full()` inference directly on the worker main/reader loop introduces 200–500 ms of blocking delay per window. If the pipe is not drained continuously, backpressure travels back to the plugin's sender thread.
+
+Consequences:
+1. **Thread Decoupling**: Decouple IPC frame receiving from worker main loop using a dedicated worker IPC reader thread (`vw_worker_reader_main`) and a bounded SPSC queue (`vw_spsc_queue_t`).
+2. **Pipe Safety**: The reader thread drains named pipe / socket frames continuously, while the worker main loop pops PCM chunks and executes inference asynchronously.
+
+## ADR-014: Process-Wide Platform Media Framework Management
+
+**Status:** Accepted.
+
+Windows Media Foundation (`MFStartup`/`MFShutdown`) was originally called inside per-seek source decode threads. Rapid seeks caused race conditions between `MFShutdown` in an old thread and `MFStartup` in a newly spawned thread.
+
+Consequences:
+1. **Process Lifetime**: Manage platform media frameworks process-wide in `vw_worker_run` (`vw_source_decode_platform_init` and `vw_source_decode_platform_shutdown`).
+2. **Thread Safety**: `MFStartup` is called once at worker startup, and `MFShutdown` is called once at worker exit. Short-lived demux threads must not alter global COM refcounts.
+
+## ADR-015: Model-Once Worker Lifetime Across Seek Epochs
+
+**Status:** Accepted.
+
+Loading the ~74 MB `ggml-tiny.en.bin` model on every `START_SESSION` message required 1–2 seconds per seek. Rapid seeks resulted in continuous model reloads, killing new session epochs before captions could start.
+
+Consequences:
+1. **Single Model Load**: Worker process loads the whisper engine once at startup (`shared->engine`) and reuses it across all seek epochs (`START_SESSION`).
+2. **Resource Ownership**: The engine is owned by the worker process and released only at worker process exit. Seeks reset audio buffers and builders without reloading model parameters from disk.
+

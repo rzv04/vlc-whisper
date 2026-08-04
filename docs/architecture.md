@@ -16,19 +16,22 @@ capture module (C, non-blocking producer)
   | bounded in-process SPSC queue
   v
 IPC sender thread ---- local named pipe ---- worker.exe (C application)
-                                                  |
-                                             whisper.cpp C API
-                                                  |
+                                                   |
+                                            worker IPC reader thread (ADR-013)
+                                                   |
+                                              whisper.cpp C API (Model-once ADR-015)
+                                                   |
 caption receiver thread -- timed segments --> caption presenter (C)
-                                                  |
-                                             VLC subtitle/OSD path
+                                                   |
+                                              VLC subtitle/SPU/OSD path
 ```
 
 | Component                  | Owns                                                            | Must not do                                                  |
 | -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
 | Capture module             | Audio-format validation, PTS mapping, bounded PCM enqueue       | Wait for worker, infer, write pipe, allocate per audio block |
 | IPC sender                 | Session handshake, PCM framing, queue drain, backpressure       | Call VLC presentation API                                    |
-| Worker                     | Model lifetime, VAD/windowing, inference, segment deduplication | Read arbitrary paths, expose network service, control VLC    |
+| Worker IPC Reader (`ADR-013`) | Pipe frame reading, protocol validation, worker queue enqueue | Block on whisper.cpp inference or delay transport reading   |
+| Worker Engine (`ADR-015`)   | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder  | Read arbitrary paths, expose network service, control VLC    |
 | Caption receiver/presenter | Validate worker messages, schedule/show/clear captions          | Trust malformed text/timestamps or block VLC playback        |
 | Supervisor                 | Worker start/stop/restart policy and status                     | Restart endlessly or conceal a fatal compatibility error     |
 
