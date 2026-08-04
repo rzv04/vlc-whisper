@@ -23,7 +23,7 @@ int main(void) {
   vw_worker_config_t config;
   memset(&config, 0, sizeof(config));
   strncpy(config.pipe_name, "test_ipc_socket", sizeof(config.pipe_name) - 1);
-  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.token[i] = (uint8_t)i;
+  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 
   pthread_t thread;
   int err = pthread_create(&thread, NULL, worker_thread, &config);
@@ -33,7 +33,7 @@ int main(void) {
   // Give listener time to bind
   usleep(100000);
 
-  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.token);
+  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.auth_token);
   EXPECT(client != NULL);  // HELLO handshake completed inside
 
   // Send a valid SHUTDOWN message

@@ -11,7 +11,7 @@ typedef struct vw_worker_client {
 } vw_worker_client_t;
 
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
-                                                        const uint8_t token[VW_AUTH_TOKEN_BYTES]);
+                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES]);
 void vw_worker_client_disconnect(vw_worker_client_t* client);
 
 #endif  // VW_WORKER_CLIENT_H_

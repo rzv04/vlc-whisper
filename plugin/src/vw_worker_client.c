@@ -1,7 +1,16 @@
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+
 #include "vw_worker_client.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "vw_ipc_transport.h"
 #include "vw_platform.h"
@@ -33,7 +42,17 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
     }
   }
 
-  vw_ipc_handle_t* ipc = vw_ipc_connect(endpoint_name);
+  // Retry connecting for up to 2 seconds (40 * 50ms) to allow the spawned process to bind the socket/pipe.
+  vw_ipc_handle_t* ipc = NULL;
+  for (int retry = 0; retry < 40; retry++) {
+    ipc = vw_ipc_connect(endpoint_name);
+    if (ipc) break;
+#ifdef _WIN32
+    Sleep(50);
+#else
+    usleep(50000);
+#endif
+  }
   if (!ipc) {
     return NULL;
   }
@@ -78,7 +97,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (!vw_protocol_decode_header(ack_hdr_buf, sizeof(ack_hdr_buf), &ack_hdr)) goto fail;  // validates header too
   if (ack_hdr.type != VW_MSG_HELLO_ACK) goto fail;
 
-  if (ack_hdr.payload_length > 0 && ack_hdr.payload_length <= VW_MAX_PAYLOAD_BYTES) {
+  if (ack_hdr.payload_length > 0 && ack_hdr.payload_length <= 1024) {
     uint8_t* ack_payload = (uint8_t*)malloc(ack_hdr.payload_length);
     if (!ack_payload) goto fail;
     bool decoded = receive_all(ipc, ack_payload, ack_hdr.payload_length);

@@ -11,7 +11,7 @@ typedef struct vw_worker_config {
   char language[8];
   uint32_t sample_rate;
   char pipe_name[256];
-  uint8_t token[VW_AUTH_TOKEN_BYTES];
+  uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
 } vw_worker_config_t;
 
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);

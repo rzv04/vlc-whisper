@@ -33,14 +33,33 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
   }
 }
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#include <process.h>
+#include <windows.h>
+#else
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
 #include "vw_audio_capture.h"
 #include "vw_caption_presenter.h"
+#include "vw_platform.h"
 #include "vw_queue.h"
+#include "vw_worker_client.h"
 
 // Plugin instance state
 typedef struct {
   vw_spsc_queue_t* queue;
   vw_audio_capture_t capture;
+  vw_worker_client_t* client;
+
+  char pipe_name[256];
+  uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
+  char worker_path[256];
 } vw_plugin_sys_t;
 
 // Passthrough filter callback required by VLC filter pipeline (100% lock-free, Rule 4 compliant)
@@ -102,6 +121,26 @@ static int vw_plugin_open(vlc_object_t* obj) {
   p_filter->fmt_out.audio = p_filter->fmt_in.audio;
 
   vw_log_set_sink(vw_plugin_log_sink, obj);
+
+#ifdef _WIN32
+  snprintf(sys->pipe_name, sizeof(sys->pipe_name), "\\\\.\\pipe\\vlc-whisper-%lu", (unsigned long)_getpid());
+  snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker.exe");
+#else
+  snprintf(sys->pipe_name, sizeof(sys->pipe_name), "/tmp/vlc-whisper-%ld.sock", (long)getpid());
+  snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker");
+#endif
+
+  if (!vw_platform_get_random_bytes(sys->auth_token, VW_AUTH_TOKEN_BYTES)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_RNG_FAIL", "failed to generate random auth_token");
+  } else {
+    sys->client = vw_worker_client_launch_and_connect(sys->worker_path, sys->pipe_name, sys->auth_token);
+  }
+
+  if (!sys->client) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_UNAVAILABLE",
+                 "caption worker unavailable; running passthrough only");
+  }
+
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_OPEN", "vlc-whisper audio filter module opened");
   return VLC_SUCCESS;
 }
@@ -111,6 +150,10 @@ static void vw_plugin_close(vlc_object_t* obj) {
   vw_plugin_sys_t* sys = (vw_plugin_sys_t*)p_filter->p_sys;
 
   if (sys) {
+    if (sys->client) {
+      vw_worker_client_disconnect(sys->client);
+      sys->client = NULL;
+    }
     if (sys->queue) {
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_CLOSE", "Dropped %llu us of audio during session",
                    (unsigned long long)vw_spsc_queue_get_dropped_microseconds(sys->queue));

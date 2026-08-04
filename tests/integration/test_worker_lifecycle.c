@@ -23,7 +23,7 @@ int main(void) {
   vw_worker_config_t config;
   memset(&config, 0, sizeof(config));
   strncpy(config.pipe_name, "test_lifecycle_socket", sizeof(config.pipe_name) - 1);
-  for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.token[i] = (uint8_t)i;
+  for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 
   pthread_t thread;
   int err = pthread_create(&thread, NULL, worker_thread, &config);
@@ -47,7 +47,7 @@ int main(void) {
   usleep(100000);
 
   // 2. Connect with good token (handshake inside), send START_SESSION, then SHUTDOWN
-  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.token);
+  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.auth_token);
   EXPECT(client != NULL);  // HELLO handshake completed
 
   vw_msg_start_t start_msg = {.timeline_origin_pts_us = 0,
@@ -90,9 +90,10 @@ int main(void) {
   vw_worker_client_disconnect(client);
 
   // 3. Client-side failure paths: bad args and no listener
-  EXPECT(vw_worker_client_launch_and_connect(NULL, NULL, config.token) == NULL);  // NULL endpoint
-  EXPECT(vw_worker_client_launch_and_connect(NULL, "no_such_lifecycle_endpoint", config.token) == NULL);  // no listener
-  EXPECT(vw_worker_client_launch_and_connect(NULL, config.pipe_name, NULL) == NULL);                      // NULL token
+  EXPECT(vw_worker_client_launch_and_connect(NULL, NULL, config.auth_token) == NULL);  // NULL endpoint
+  EXPECT(vw_worker_client_launch_and_connect(NULL, "no_such_lifecycle_endpoint", config.auth_token) ==
+         NULL);                                                                       // no listener
+  EXPECT(vw_worker_client_launch_and_connect(NULL, config.pipe_name, NULL) == NULL);  // NULL token
 
   // 4. First frame is not HELLO: worker must reject the connection and exit non-zero
   err = pthread_create(&thread, NULL, worker_thread, &config);

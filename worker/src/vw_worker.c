@@ -105,7 +105,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
         free(payload_buf);
         break;  // First message must be HELLO
       }
-      if (!verify_token_constant_time(config->token, payload_decoded.hello.auth_token)) {
+      if (!verify_token_constant_time(config->auth_token, payload_decoded.hello.auth_token)) {
         free(payload_buf);
         break;  // Auth failed
       }
