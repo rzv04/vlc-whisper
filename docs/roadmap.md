@@ -37,7 +37,10 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 
 ---
 
-## Milestone 3: Local & Live MVP with Seeking & Play/Pause (Planned)
+## Milestone 3: Local & Live MVP with Seeking & Play/Pause (In Progress)
+
+> [!NOTE]
+> A detailed postmortem evaluation and phased 4-step re-implementation blueprint for real-time PCM streaming, GPU acceleration, SPU subpicture rendering, and look-ahead source decoding is documented in [`docs/plans/milestone3_postmortem.md`](file:///home/razvan/vlc-whisper/.worktrees/gemini/docs/plans/milestone3_postmortem.md).
 
 - [ ] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
 - [ ] 14. Feed captured PCM chunks from SPSC queue across IPC transport to worker process in real time.
@@ -46,7 +49,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [ ] 17. Implement Seeking & Discontinuity support: detect `BLOCK_FLAG_DISCONTINUITY` / non-monotonic PTS, clear active presenter captions, send `STOP` (`SEEK_DISCONTINUITY`), reset SPSC queue/VAD state, and start new session epoch without interrupting playback.
 - [ ] 18. Package local developer build and run end-to-end local video and stream acceptance tests.
 
-**Exit Status:** **PLANNED** — Local and stream media show real-time captions with full play/pause timeline sync and seamless seeking support; zero audio stutter or memory leaks.
+**Exit Status:** **IN PROGRESS** — Local and stream media show real-time captions with full play/pause timeline sync and seamless seeking support; zero audio stutter or memory leaks.
 
 ---
 
