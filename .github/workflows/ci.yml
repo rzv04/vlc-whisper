@@ -1,0 +1,69 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [main, "gemini/*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang-format valgrind gcovr
+
+      - name: Check code formatting (STRICT)
+        run: |
+          clang-format --dry-run --Werror \
+            plugin/include/*.h plugin/src/*.c \
+            protocol/include/*.h protocol/src/*.c \
+            worker/include/*.h worker/src/*.c \
+            tests/include/*.h tests/unit/*.c tests/integration/*.c
+
+      - name: Configure CMake (coverage preset)
+        run: cmake --preset linux-x64-coverage
+
+      - name: Build binaries & test executables
+        run: cmake --build --preset linux-x64-coverage
+
+      - name: CTest unit & integration suite (STRICT)
+        run: ctest --preset linux-x64-coverage --output-on-failure
+
+      - name: Valgrind memcheck (STRICT)
+        run: ctest --test-dir build/linux-x64-coverage -T memcheck --output-on-failure
+
+      - name: Generate per-file coverage summary (gcovr)
+        if: github.event_name == 'pull_request'
+        id: coverage
+        continue-on-error: true
+        run: |
+          gcovr --root . \
+            --filter 'plugin/src/' \
+            --filter 'protocol/src/' \
+            --filter 'worker/src/' \
+            --exclude 'worker/third_party/' \
+            --exclude 'tests/' \
+            --txt-metric line \
+            --markdown-header-level 3 \
+            --markdown coverage.md
+
+      - name: Post coverage comment on PR (NON-BLOCKING)
+        if: github.event_name == 'pull_request' && steps.coverage.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          header: code-coverage-report
+          path: coverage.md
+          ignore_empty: true
