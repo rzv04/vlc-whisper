@@ -1,6 +1,6 @@
 # Known Issues
 
-## Issue #1 — `test_platform` fails under Valgrind memcheck (pre-existing)
+## Issue #1 — `test_platform` fails under Valgrind memcheck (pre-existing) (FIXED)
 
 - **Priority**: P1 — now also blocks the GitHub Actions CI memcheck gate (`.github/workflows/ci.yml`, strict fail); every CI run stays red until fixed.
 - **Status**: Open, pre-existing (not introduced by the 2026-08-02 codec/handshake refactor). Code fix intentionally deferred (2026-08-02) until the CI workflow is in place.
@@ -14,7 +14,7 @@
   - Validate executable existence before spawning in `vw_platform_spawn_process` so the failure is deterministic regardless of runtime, or
   - Add a CTest/Valgrind suppression for this specific test.
 
-## Issue #2 — Pre-existing warnings in `tests/integration/test_worker_lifecycle.c` (cosmetic)
+## Issue #2 — Pre-existing warnings in `tests/integration/test_worker_lifecycle.c` (cosmetic) (FIXED)
 
 - **Priority**: P2 (non-blocking; tests pass)
 - `usleep` is undeclared under strict C17 (`-std=c17`); should be `nanosleep`/`setitimer`. Only warns because the file compiles without `-Werror` in this preset.

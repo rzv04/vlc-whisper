@@ -10,7 +10,7 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size) {
     return false;
   }
   // Seed the PRNG once; reseeding per call would return identical bytes for
-  // calls within the same second. Note: rand() is not a CSPRNG (MVP shortcut).
+  // calls within the same second. Note: rand() is NOT a CSPRNG (MVP shortcut).
   static bool seeded = false;
   if (!seeded) {
     srand((unsigned int)time(NULL) ^ (unsigned int)getpid());

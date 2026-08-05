@@ -6,6 +6,8 @@
 
 #include "vw_protocol_types.h"
 
+#define VW_WORKER_CLIENT_RETRY_COUNT 40
+
 typedef struct vw_worker_client {
   void* pipe_handle;
 } vw_worker_client_t;

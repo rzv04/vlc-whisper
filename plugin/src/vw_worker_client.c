@@ -44,7 +44,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
 
   // Retry connecting for up to 2 seconds (40 * 50ms) to allow the spawned process to bind the socket/pipe.
   vw_ipc_handle_t* ipc = NULL;
-  for (int retry = 0; retry < 40; retry++) {
+  for (int retry = 0; retry < VW_WORKER_CLIENT_RETRY_COUNT; retry++) {
     ipc = vw_ipc_connect(endpoint_name);
     if (ipc) break;
 #ifdef _WIN32

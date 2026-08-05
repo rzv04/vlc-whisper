@@ -1,7 +1,9 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
-
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 // clang-format off
 #include <vlc_common.h>
 #include <vlc_block.h>
@@ -13,6 +15,7 @@
 #include "vw_plugin.h"
 
 // Implements callback signature matching vw_log_sink_fn from protocol/include/vw_log.h
+// Posts messages to VLC logging system (msg_Err, msg_Warn, msg_Dbg) with event_id prefix
 static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const char* formatted_msg, void* user_data) {
   vlc_object_t* obj = (vlc_object_t*)user_data;
   if (!obj) {
@@ -32,10 +35,6 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
       break;
   }
 }
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #ifdef _WIN32
 #include <process.h>
