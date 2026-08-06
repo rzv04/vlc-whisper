@@ -24,12 +24,22 @@ void vw_audio_buffer_free(vw_audio_buffer_t* buf) {
   }
 }
 
+// Advances start_pts_us by `samples` samples at 16 kHz (62.5 µs/sample) exactly, carrying the 0.5 µs remainder in
+// start_pts_frac_us so repeated advancement never drifts (e.g. a 32,000-sample hop advances exactly 2,000,000 µs).
+static void vw_audio_buffer_advance_pts(vw_audio_buffer_t* buf, int64_t samples) {
+  buf->start_pts_us += samples * 62;
+  buf->start_pts_frac_us += samples;  // each sample contributes 0.5 µs
+  buf->start_pts_us += buf->start_pts_frac_us / 2;
+  buf->start_pts_frac_us %= 2;
+}
+
 bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, size_t sample_count, int64_t pts_us) {
   if (!buf || !buf->samples || !pcm16 || sample_count == 0) return false;
 
   // Set initial start PTS if buffer is currently empty
   if (buf->count == 0 || buf->start_pts_us < 0) {
     buf->start_pts_us = pts_us;
+    buf->start_pts_frac_us = 0;
   }
 
   for (size_t i = 0; i < sample_count; i++) {
@@ -39,9 +49,9 @@ bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, 
     if (buf->count < buf->max_samples) {
       buf->count++;
     } else {
-      // Ring buffer overflow: drop oldest sample and advance start_pts_us by 1 sample duration (62.5 us at 16kHz)
+      // Ring buffer overflow: drop oldest sample and advance start_pts_us by 1 sample (62.5 µs at 16 kHz)
       buf->dropped_samples++;
-      buf->start_pts_us += 63;  // 1000000 us / 16000 Hz = 62.5 us
+      vw_audio_buffer_advance_pts(buf, 1);
     }
   }
   return true;
@@ -71,11 +81,12 @@ void vw_audio_buffer_drain(vw_audio_buffer_t* buf, size_t sample_count) {
 
   size_t drained = (sample_count < buf->count) ? sample_count : buf->count;
   buf->count -= drained;
-  buf->start_pts_us += (int64_t)(drained * 63);  // 16kHz sample duration
+  vw_audio_buffer_advance_pts(buf, (int64_t)drained);
 
   if (buf->count == 0) {
     buf->head = 0;
     buf->start_pts_us = -1;
+    buf->start_pts_frac_us = 0;
   }
 }
 
@@ -84,4 +95,5 @@ void vw_audio_buffer_clear(vw_audio_buffer_t* buf) {
   buf->head = 0;
   buf->count = 0;
   buf->start_pts_us = -1;
+  buf->start_pts_frac_us = 0;
 }

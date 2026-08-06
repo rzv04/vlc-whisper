@@ -52,11 +52,21 @@ int main(void) {
   EXPECT(vw_audio_buffer_append_s16le(small_buf, small_pcm, 15, 1000));
   EXPECT(vw_audio_buffer_get_count(small_buf) == 10);
   EXPECT(small_buf->dropped_samples == 5);
+  // 5 dropped samples advance PTS by exactly 5 × 62.5 µs = 312.5 µs (0.5 µs carried, not lost or inflated)
+  int64_t ovf_pts = 0;
+  float ovf_s[1];
+  EXPECT(vw_audio_buffer_get_samples(small_buf, ovf_s, 1, &ovf_pts) == 1);
+  EXPECT(ovf_pts == 1312);
   vw_audio_buffer_free(small_buf);
 
   // 6. Drain and clear
   vw_audio_buffer_drain(buf, 50);
   EXPECT(vw_audio_buffer_get_count(buf) == 50);
+  // 50 drained samples advance PTS by exactly 50 × 62.5 µs = 3125 µs (no per-hop drift)
+  int64_t drain_pts = 0;
+  float drain_s[1];
+  EXPECT(vw_audio_buffer_get_samples(buf, drain_s, 1, &drain_pts) == 1);
+  EXPECT(drain_pts == 1003125);
 
   vw_audio_buffer_clear(buf);
   EXPECT(vw_audio_buffer_get_count(buf) == 0);

@@ -66,12 +66,13 @@ typedef struct __attribute__((packed)) {
 } vw_chunk_header_t;
 
 typedef struct vw_audio_buffer {
-  float* samples;            // Ring buffer array of float32 samples [-1.0, 1.0]
-  size_t max_samples;        // Maximum capacity in samples (e.g., 160000 for 10s at 16kHz)
-  size_t head;               // Write index in ring buffer
-  size_t count;              // Current sample count in buffer
-  int64_t start_pts_us;      // Media presentation timestamp of the oldest sample
-  uint64_t dropped_samples;  // Cumulative count of dropped samples due to ring buffer overflow
+  float* samples;             // Ring buffer array of float32 samples [-1.0, 1.0]
+  size_t max_samples;         // Maximum capacity in samples (e.g., 160000 for 10s at 16kHz)
+  size_t head;                // Write index in ring buffer
+  size_t count;               // Current sample count in buffer
+  int64_t start_pts_us;       // Media presentation timestamp of the oldest sample (integer microseconds)
+  int64_t start_pts_frac_us;  // 0.5-µs remainder accumulator; keeps 16 kHz (62.5 µs/sample) advancement exact
+  uint64_t dropped_samples;   // Cumulative count of dropped samples due to ring buffer overflow
 } vw_audio_buffer_t;
 
 // Allocates a new audio buffer capable of holding the specified maximum number of PCM samples.
