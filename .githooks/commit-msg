@@ -26,7 +26,7 @@ if echo "$subject" | grep -Eq "$pattern"; then
 fi
 
 cat >&2 <<'EOF'
-XXXCommit message does not follow Conventional Commits.
+Commit message does not follow Conventional Commits, or it has more than 72 characters in its subject.
 Expected: type(scope): description
 Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
 Add ! after type/scope for breaking changes, e.g. feat(api)!: drop legacy buffer
