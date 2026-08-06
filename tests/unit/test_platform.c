@@ -17,6 +17,12 @@ static const char* kSpawnOk = "/bin/true";
 static const char* kSpawnMissing = "/nonexistent/vw_missing_binary";
 #endif
 
+// A bare executable name (no directory) must resolve through PATH, not CWD.
+// "true" is guaranteed present in PATH on POSIX CI runners.
+#ifndef _WIN32
+static const char* kSpawnBarePath = "true";
+#endif
+
 int main(void) {
   // --- vw_platform_get_random_bytes ---
   uint8_t buf[32];
@@ -54,6 +60,12 @@ int main(void) {
 
   const char* argv_missing[] = {kSpawnMissing, NULL};
   EXPECT(!vw_platform_spawn_process(kSpawnMissing, argv_missing));  // non-existent executable
+
+#ifndef _WIN32
+  // Bare-name spawn must use PATH search (posix_spawnp), independent of CWD.
+  const char* argv_bare[] = {kSpawnBarePath, NULL};
+  EXPECT(vw_platform_spawn_process(kSpawnBarePath, argv_bare));
+#endif
 
   return 0;
 }

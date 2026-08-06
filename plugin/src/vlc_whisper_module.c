@@ -138,7 +138,7 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
     const char* fname = info.dli_fname;
     const char* slash = strrchr(fname, '/');
     size_t dir_len = slash ? (size_t)(slash - fname) : 0;
-    for (int up = 0; up <= 4; ++up) {
+    for (int up = 1; up <= 4; ++up) {
       size_t try_len = dir_len;
       for (int k = 0; k < up; ++k) {
         if (try_len == 0) break;
@@ -152,17 +152,13 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
         }
         try_len = (size_t)(last - fname);
       }
+      if (try_len == 0) continue;
       char candidate[1024];
-      if (try_len == 0) {
-        if (up != 0) continue;
-        snprintf(candidate, sizeof(candidate), "%s", worker_name);
-      } else {
-        size_t need = try_len + 1 + strlen(worker_name) + 1;
-        if (need > sizeof(candidate)) continue;
-        memcpy(candidate, fname, try_len);
-        candidate[try_len] = '/';
-        strcpy(candidate + try_len + 1, worker_name);
-      }
+      size_t need = try_len + 1 + strlen(worker_name) + 1;
+      if (need > sizeof(candidate)) continue;
+      memcpy(candidate, fname, try_len);
+      candidate[try_len] = '/';
+      strcpy(candidate + try_len + 1, worker_name);
       if (vw_plugin_path_exists(candidate)) {
         if (strlen(candidate) + 1 > out_size) return false;
         strcpy(out, candidate);
@@ -274,13 +270,23 @@ static int vw_plugin_open(vlc_object_t* obj) {
 #else
   snprintf(sys->pipe_name, sizeof(sys->pipe_name), "/tmp/vlc-whisper-%ld.sock", (long)getpid());
 #endif
-  if (!vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
+
+  // Explicit per-install override for layouts outside the bounded discovery paths.
+  char* configured = config_GetPsz(obj, "worker-path");
+  if (configured && configured[0]) {
+    snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", configured);
+  } else if (vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
+    // Resolved to a concrete path next to the plugin or VLC executable.
+  } else {
+    // Fall back to a bare name; the spawn layer resolves it via PATH
+    // (posix_spawnp), never relative to VLC's CWD.
 #ifdef _WIN32
     snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker.exe");
 #else
     snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker");
 #endif
   }
+  free(configured);
 
   if (!vw_platform_get_random_bytes(sys->auth_token, VW_AUTH_TOKEN_BYTES)) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_RNG_FAIL", "failed to generate random auth_token");
@@ -323,5 +329,8 @@ static void vw_plugin_close(vlc_object_t* obj) {
 #pragma GCC diagnostic ignored "-Wpedantic"
 vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper AI Captions Filter")
     set_capability("audio filter", 0) add_shortcut("vlc_whisper", "whisper")
-        set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
+        add_loadfile("worker-path", NULL, "Path to vlc-whisper-worker executable (optional)",
+                     "Explicit location of vlc-whisper-worker[.exe] for installs where it is "
+                     "not co-located with the plugin; defaults to discovery",
+                     false) set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
 #pragma GCC diagnostic pop

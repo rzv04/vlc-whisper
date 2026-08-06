@@ -363,4 +363,15 @@ vlc_module_end()
 | `set_description` | Full plugin description displayed in VLC module lists. |
 | `set_capability` | Category string (`"audio filter"`) and priority score (`0`). |
 | `add_shortcut` | Command line flags (`--audio-filter=vlc_whisper`). |
+| `add_loadfile` | Registers the `worker-path` string option consumed via `config_GetPsz()` for the worker executable location override. |
 | `set_callbacks` | Initialization (`open`) and cleanup (`close`) function pointers. |
+
+### Worker executable discovery
+
+The plugin locates `vlc-whisper-worker[.exe]` in this order:
+
+1. `config_GetPsz(obj, "worker-path")` — explicit override (CLI `--vlc-whisper-worker-path`, or the module prefs).
+2. Next to the plugin module (`dladdr` on POSIX / `GetModuleHandleEx` + `GetModuleFileNameA` on Windows), walking up to 4 ancestor directories.
+3. Next to the VLC executable (Linux `/proc/self/exe`, Windows `GetModuleFileNameA(NULL)`).
+
+If none of those produce an existing file, the plugin falls back to a bare `vlc-whisper-worker[.exe]` name. On POSIX that is resolved through `PATH` via `posix_spawnp` — never relative to VLC's current working directory — so a worker installed on `PATH` starts even when VLC launches from an arbitrary directory.
