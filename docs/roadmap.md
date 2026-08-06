@@ -42,7 +42,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 > [!NOTE]
 > A detailed postmortem evaluation and phased 4-step re-implementation blueprint for real-time PCM streaming, GPU acceleration, SPU subpicture rendering, and look-ahead source decoding is documented in [`docs/plans/milestone3_postmortem.md`](file:///home/razvan/vlc-whisper/.worktrees/gemini/docs/plans/milestone3_postmortem.md).
 
-- [ ] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
+- [x] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
 - [ ] 14. Feed captured PCM chunks from SPSC queue across IPC transport to worker process in real time.
 - [ ] 15. Receive incoming `SEGMENT` frames on plugin background thread and trigger `vw_caption_presenter_display()`.
 - [ ] 16. Implement Play/Pause lifecycle: send `PAUSE`/`RESUME` IPC control frames, suspend PCM queue forwarding on pause, and resume timeline PTS sync on resume.
