@@ -1,6 +1,6 @@
 # .github/workflows/commitlint.yml
 name: Lint Commit Messages
-on: [pull_request]
+on: [pull_request, workflow_dispatch]
 permissions:
   contents: read
   pull-requests: read
