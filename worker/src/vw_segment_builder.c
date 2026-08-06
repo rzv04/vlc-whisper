@@ -116,3 +116,16 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   vw_segment_builder_write_slot(builder, text, start_pts_us, end_pts_us);
   return true;
 }
+
+bool vw_segment_builder_pop(vw_segment_builder_t* builder, vw_caption_segment_t* out) {
+  if (!builder || !out || builder->count == 0 || !builder->segment_queue) {
+    return false;
+  }
+
+  size_t tail = (builder->head + VW_SEGMENT_BUILDER_MAX_BUFSZ - builder->count) % VW_SEGMENT_BUILDER_MAX_BUFSZ;
+  *out = builder->segment_queue[tail];
+  // Clear slot in ring buffer so ownership of text_utf8 is transferred to caller
+  memset(&builder->segment_queue[tail], 0, sizeof(vw_caption_segment_t));
+  builder->count--;
+  return true;
+}

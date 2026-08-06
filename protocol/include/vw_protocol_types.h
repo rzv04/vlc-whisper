@@ -40,6 +40,19 @@
 // Source kind enum
 typedef enum vw_source_kind { VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
 
+// Error codes for VW_MSG_ERROR frames
+typedef enum vw_error_code {
+  E_PROTOCOL_VERSION = 1,
+  E_AUTH = 2,
+  E_MODEL_MISSING = 3,
+  E_MODEL_INVALID = 4,
+  E_AUDIO_FORMAT = 5,
+  E_BACKPRESSURE = 6,
+  E_DISCONTINUITY = 7,
+  E_WORKER_CRASH = 8,
+  E_INTERNAL = 9
+} vw_error_code_t;
+
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
 
@@ -140,5 +153,9 @@ typedef struct vw_caption_segment {  // worker to plugin
   char* text_utf8;
   uint16_t text_bytes;
 } vw_caption_segment_t;
+
+// Wire size of vw_caption_segment_t's fixed fields (session 16 + id 8 + start 8 + end 8 + is_final 1 + text_bytes 2),
+// used by emitters to size the encode buffer for a max-length caption segment.
+#define VW_CAPTION_SEGMENT_FIXED_BYTES 43
 
 #endif  // VW_PROTOCOL_TYPES_H_

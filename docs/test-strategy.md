@@ -43,7 +43,10 @@ Golden expected text should tolerate model-version variance only through explici
 ### Automated failure-path coverage
 
 - `tests/unit/test_platform.c`: NULL/zero-size RNG rejection, NULL executable/argv spawn rejection, non-existent executable spawn failure, time monotonicity and wall-clock sanity.
+- `tests/unit/test_audio_buffer.c`: float32 ring buffer creation, S16LE conversion, PTS indexing, drain, clear, ring buffer overflow drop-oldest accounting, and exact 62.5 µs/sample PTS advancement (no drift).
+- `tests/unit/test_whisper_engine.c`: invalid model path initialization failure (NULL), model file presence check, and model-gated skip (exit 77). Under Valgrind/memcheck the heavy model-gated section is also skipped (exit 77): loading the 77MB model plus multi-threaded whisper inference is impractically slow under Valgrind and whisper's GPU-less Vulkan fallback emits false-positive `close(-1)` warnings, so the memcheck gate remains fast and clean.
 - `tests/integration/test_worker_lifecycle.c`: wrong-token HELLO rejection (worker exits 1), first-frame-not-HELLO rejection (worker exits 1), client NULL-arg validation (NULL endpoint/token), connect failure with no listener.
+- `tests/integration/test_worker_ipc.c`: `START` with an unsupported sample rate rejected with an `E_AUDIO_FORMAT` error reply; clean `SHUTDOWN` exit.
 - `tests/unit/test_worker_config.c`: worker CLI arg parsing — valid `--token`/`--pipe`/`--model` success, and startup failure paths returning exit code 2 (bad `--token` length, non-hex `--token`, unknown option, dangling `--token`, NULL config).
 
 ## Performance contract

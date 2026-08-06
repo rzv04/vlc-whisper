@@ -85,11 +85,37 @@ static void test_circular_buffer_wrap(void) {
   vw_segment_builder_free(builder);
 }
 
+static void test_pop(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  vw_caption_segment_t out;
+  assert(!vw_segment_builder_pop(builder, &out));
+
+  assert(vw_segment_builder_push_hypothesis(builder, "First segment", 0, 2000000));
+  assert(vw_segment_builder_push_hypothesis(builder, "Second segment", 2000000, 4000000));
+
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "First segment") == 0);
+  assert(out.start_pts_us == 0);
+  free(out.text_utf8);
+
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "Second segment") == 0);
+  assert(out.start_pts_us == 2000000);
+  free(out.text_utf8);
+
+  assert(!vw_segment_builder_pop(builder, &out));
+
+  vw_segment_builder_free(builder);
+}
+
 int main(void) {
   test_create_and_free();
   test_invalid_hypothesis_rejection();
   test_push_and_deduplication();
   test_circular_buffer_wrap();
+  test_pop();
 
   printf("test_segment_builder PASSED (all unit assertions verified)\n");
   return 0;

@@ -5,6 +5,7 @@ on:
     branches: [main, "gemini/*"]
   pull_request:
     branches: [main, "gemini/*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,7 +23,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build clang-format valgrind gcovr
+          sudo apt-get install -y cmake ninja-build clang-format valgrind gcovr python3-pip
+          sudo python3 -m pip install --break-system-packages --upgrade gcovr
 
       - name: Check code formatting (STRICT)
         run: |
@@ -56,8 +58,9 @@ jobs:
             --exclude 'worker/third_party/' \
             --exclude 'tests/' \
             --txt-metric line \
+            --markdown \
             --markdown-header-level 3 \
-            --markdown coverage.md
+            --output coverage.md
 
       - name: Post coverage comment on PR (NON-BLOCKING)
         if: github.event_name == 'pull_request' && steps.coverage.outcome == 'success'

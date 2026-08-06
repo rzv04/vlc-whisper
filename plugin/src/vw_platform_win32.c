@@ -103,4 +103,43 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   return true;
 }
 
+typedef struct {
+  void* (*func)(void*);
+  void* arg;
+} vw_win32_thread_arg_t;
+
+static DWORD WINAPI vw_win32_thread_proc(LPVOID lpParameter) {
+  vw_win32_thread_arg_t* targ = (vw_win32_thread_arg_t*)lpParameter;
+  void* (*func)(void*) = targ->func;
+  void* arg = targ->arg;
+  free(targ);
+  func(arg);
+  return 0;
+}
+
+bool vw_platform_thread_create(vw_thread_t* thread, void* (*func)(void*), void* arg) {
+  if (!thread || !func) return false;
+  vw_win32_thread_arg_t* targ = (vw_win32_thread_arg_t*)malloc(sizeof(vw_win32_thread_arg_t));
+  if (!targ) return false;
+  targ->func = func;
+  targ->arg = arg;
+  HANDLE hThread = CreateThread(NULL, 0, vw_win32_thread_proc, targ, 0, NULL);
+  if (!hThread) {
+    free(targ);
+    return false;
+  }
+  *thread = (vw_thread_t)hThread;
+  return true;
+}
+
+void vw_platform_thread_join(vw_thread_t thread) {
+  if (thread) {
+    HANDLE hThread = (HANDLE)thread;
+    WaitForSingleObject(hThread, INFINITE);
+    CloseHandle(hThread);
+  }
+}
+
+void vw_platform_sleep_ms(uint32_t ms) { Sleep(ms); }
+
 #endif
