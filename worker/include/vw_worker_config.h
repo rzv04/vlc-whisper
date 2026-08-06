@@ -16,4 +16,8 @@ typedef struct vw_worker_config {
 
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 
+// Parse worker CLI args (--pipe, --token <64 hex>, --model) into config.
+// Returns 0 on success, or 2 on bad usage (malformed --token, unknown option, missing value).
+int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** argv);
+
 #endif  // VW_WORKER_CONFIG_H_

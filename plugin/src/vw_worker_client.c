@@ -17,15 +17,30 @@
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
 
-// Receive exactly len bytes, retrying on partial reads. Returns true on success, false on timeout/EOF/error.
-static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len) {
+// Receive exactly len bytes, retrying on partial reads and on read timeouts
+// (VW_IPC_RECV_TIMEOUT). Returns false on fatal error (EOF / broken pipe,
+// VW_IPC_RECV_FATAL) or if the total handshake deadline (deadline_us) expires.
+static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
   size_t got = 0;
   while (got < len) {
     int32_t res = vw_ipc_receive(ipc, buf + got, len - got);
-    if (res <= 0) return false;  // 0 = timeout, -1 = error/EOF
+    if (res < 0) {
+      if (res == VW_IPC_RECV_TIMEOUT) {  // timeout — keep waiting, bounded by the deadline
+        if (vw_platform_get_time_us() >= deadline_us) return false;
+        continue;
+      }
+      return false;  // fatal (VW_IPC_RECV_FATAL): EOF / broken pipe / closed
+    }
     got += (size_t)res;
   }
   return true;
+}
+
+// Format 32 raw bytes as a 64-char lowercase hex string.
+static void token_to_hex(const uint8_t tok[VW_AUTH_TOKEN_BYTES], char out[VW_AUTH_TOKEN_BYTES * 2 + 1]) {
+  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
+    snprintf(out + i * 2, 3, "%02x", tok[i]);
+  }
 }
 
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
@@ -36,7 +51,9 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
 
   // Spawn the worker first so it can bind the endpoint before we connect.
   if (executable_path) {
-    const char* argv[] = {executable_path, NULL};
+    char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
+    token_to_hex(auth_token, token_hex);
+    const char* argv[] = {executable_path, "--pipe", endpoint_name, "--token", token_hex, NULL};
     if (!vw_platform_spawn_process(executable_path, argv)) {
       return NULL;
     }
@@ -90,9 +107,13 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
     goto fail;
   }
 
+  // Total budget for the HELLO/HELLO_ACK reads: a silently-dead worker must not
+  // hang module open forever (each vw_ipc_receive can block up to 3s on timeout).
+  const int64_t handshake_deadline_us = vw_platform_get_time_us() + VW_HANDSHAKE_TIMEOUT_US;
+
   // Wait for HELLO_ACK (header, then payload)
   uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
-  if (!receive_all(ipc, ack_hdr_buf, sizeof(ack_hdr_buf))) goto fail;
+  if (!receive_all(ipc, ack_hdr_buf, sizeof(ack_hdr_buf), handshake_deadline_us)) goto fail;
   vw_frame_header_t ack_hdr;
   if (!vw_protocol_decode_header(ack_hdr_buf, sizeof(ack_hdr_buf), &ack_hdr)) goto fail;  // validates header too
   if (ack_hdr.type != VW_MSG_HELLO_ACK) goto fail;
@@ -100,13 +121,18 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (ack_hdr.payload_length > 0 && ack_hdr.payload_length <= 1024) {
     uint8_t* ack_payload = (uint8_t*)malloc(ack_hdr.payload_length);
     if (!ack_payload) goto fail;
-    bool decoded = receive_all(ipc, ack_payload, ack_hdr.payload_length);
+    bool decoded = receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us);
     if (decoded) {
       vw_msg_hello_ack_t ack;
       decoded = vw_protocol_decode_payload(VW_MSG_HELLO_ACK, ack_payload, ack_hdr.payload_length, &ack);
     }
     free(ack_payload);
     if (!decoded) goto fail;
+  }
+
+  // validate the version major
+  if (ack_hdr.major != VW_PROTOCOL_VERSION_MAJOR) {
+    goto fail;
   }
 
   // Handshake complete: the worker has authenticated us.

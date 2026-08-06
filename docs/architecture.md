@@ -26,14 +26,14 @@ caption receiver thread -- timed segments --> caption presenter (C)
                                               VLC subtitle/SPU/OSD path
 ```
 
-| Component                  | Owns                                                            | Must not do                                                  |
-| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
-| Capture module             | Audio-format validation, PTS mapping, bounded PCM enqueue       | Wait for worker, infer, write pipe, allocate per audio block |
-| IPC sender                 | Session handshake, PCM framing, queue drain, backpressure       | Call VLC presentation API                                    |
-| Worker IPC Reader (`ADR-013`) | Pipe frame reading, protocol validation, worker queue enqueue | Block on whisper.cpp inference or delay transport reading   |
-| Worker Engine (`ADR-015`)   | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder  | Read arbitrary paths, expose network service, control VLC    |
-| Caption receiver/presenter | Validate worker messages, schedule/show/clear captions          | Trust malformed text/timestamps or block VLC playback        |
-| Supervisor                 | Worker start/stop/restart policy and status                     | Restart endlessly or conceal a fatal compatibility error     |
+| Component                     | Owns                                                           | Must not do                                                  |
+| ----------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
+| Capture module                | Audio-format validation, PTS mapping, bounded PCM enqueue      | Wait for worker, infer, write pipe, allocate per audio block |
+| IPC sender                    | Session handshake, PCM framing, queue drain, backpressure      | Call VLC presentation API                                    |
+| Worker IPC Reader (`ADR-013`) | Pipe frame reading, protocol validation, worker queue enqueue  | Block on whisper.cpp inference or delay transport reading    |
+| Worker Engine (`ADR-015`)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder | Read arbitrary paths, expose network service, control VLC    |
+| Caption receiver/presenter    | Validate worker messages, schedule/show/clear captions         | Trust malformed text/timestamps or block VLC playback        |
+| Supervisor                    | Worker start/stop/restart policy and status                    | Restart endlessly or conceal a fatal compatibility error     |
 
 ## Time and buffering
 
@@ -76,7 +76,7 @@ Use a Windows **message-mode named pipe** with a random pipe name and a one-time
 
 - **Connection Accept Timeout**: 10 seconds. `vw_ipc_listen()` waits up to 10s (`poll()` on POSIX, `WaitForSingleObject` on Win32) for an incoming plugin connection before closing the socket/pipe and self-terminating (returns `NULL`).
 - **I/O Read/Write Timeout**: 3 seconds. `vw_ipc_receive()` and `vw_ipc_send()` enforce a 3-second timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO` on POSIX, overlapped `WaitForSingleObject(3000)` on Win32).
-- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` on 3s read timeout (allowing worker loop to continue waiting during long video pauses), and `-1` on fatal error or peer disconnect (EOF / broken pipe).
+- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `VW_IPC_RECV_TIMEOUT` (`-1`) on 3s read timeout (connection stays open; callers retry / keep waiting, e.g. during long video pauses), and `VW_IPC_RECV_FATAL` (`-2`) on fatal error or peer disconnect (EOF / broken pipe) — the handle is dead and the caller must abort.
 
 Each frame is binary and little-endian:
 

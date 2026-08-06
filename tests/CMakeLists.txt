@@ -25,6 +25,8 @@ add_vw_test(test_caption_timing unit/test_caption_timing.c)
 add_vw_test(test_caption_presenter unit/test_caption_presenter.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_caption_presenter.c)
 target_compile_definitions(test_caption_presenter PRIVATE __PLUGIN__ MODULE_STRING="vlc_whisper" _GNU_SOURCE)
 
+add_vw_test(test_worker_config unit/test_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
+
 add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 

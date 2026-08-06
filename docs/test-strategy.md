@@ -44,6 +44,7 @@ Golden expected text should tolerate model-version variance only through explici
 
 - `tests/unit/test_platform.c`: NULL/zero-size RNG rejection, NULL executable/argv spawn rejection, non-existent executable spawn failure, time monotonicity and wall-clock sanity.
 - `tests/integration/test_worker_lifecycle.c`: wrong-token HELLO rejection (worker exits 1), first-frame-not-HELLO rejection (worker exits 1), client NULL-arg validation (NULL endpoint/token), connect failure with no listener.
+- `tests/unit/test_worker_config.c`: worker CLI arg parsing — valid `--token`/`--pipe`/`--model` success, and startup failure paths returning exit code 2 (bad `--token` length, non-hex `--token`, unknown option, dangling `--token`, NULL config).
 
 ## Performance contract
 

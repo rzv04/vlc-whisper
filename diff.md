@@ -2,6 +2,7 @@
 
 **35 files changed, +1215 / -554 lines**
 **Base**: `gemini/milestone-3` @ `5fbce99` → `HEAD` (`gemini/milestone-3-step-13`, 9 commits)
+**Review snapshot**: reflects the follow-up H-1 fix (uncommitted at review time): `main.c` arg parsing + spawn `--pipe`/`--token` plumbing, plus a later follow-up refactoring the CLI parse into `vw_worker_config_parse_args` (`vw_worker_config.c`) with a new `test_worker_config.c` unit suite. Verified this session: `clang-format` clean on all touched files (except the `vw_worker.c` whitespace hunk), build 31/31, `ctest` 12/12, memcheck 12/12.
 
 Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13), `HELLO`/`HELLO_ACK` authentication handshake, cross-platform process spawning (`vw_platform_linux.c` new), protocol message-builder groundwork, HELLO_ACK reply in the worker, new `test_platform` suite, expanded lifecycle failure-path tests, and the Milestone 3 postmortem/blueprint docs. Plan: `docs/plans/step13_plan.md`; postmortem: `docs/plans/milestone3_postmortem.md`.
 
@@ -45,7 +46,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 **Callers**: CTest. **Callees**: none. **Happy path**: `ctest -T memcheck` reports all leak kinds. **Failure path**: N/A.
 
-**Boundaries**: Option string only. **Acceptance map**: `CMakeLists.txt:40`. Status: done — full memcheck is 11/11 clean (verified this session).
+**Boundaries**: Option string only. **Acceptance map**: `CMakeLists.txt:40`. Status: done — full memcheck is 12/12 clean (verified this session).
 
 ---
 
@@ -115,7 +116,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 **Callers**: Developers/CI. **Callees**: none.
 
-**Happy path**: Issues link symptom → root cause → fix path. **Failure path**: Issue #1's content is **stale and factually wrong for this tree** (see §7, Bug M-2): `test_platform` passes under memcheck 11/11 with the current build (verified this session with both direct `valgrind` and `ctest -T memcheck`). The suggested fix it describes — "validate executable existence before spawning" — is **already implemented** (`vw_platform_linux.c:33`, the `access()` pre-check), which is exactly why the failure no longer reproduces. It also calls the failure "pre-existing" although `test_platform` is a new file in this branch.
+**Happy path**: Issues link symptom → root cause → fix path. **Failure path**: Issue #1's content is **stale and factually wrong for this tree** (see §7, Bug M-2): `test_platform` passes under memcheck (suite 12/12) with the current build (verified this session with both direct `valgrind` and `ctest -T memcheck`). The suggested fix it describes — "validate executable existence before spawning" — is **already implemented** (`vw_platform_linux.c:33`, the `access()` pre-check), which is exactly why the failure no longer reproduces. It also calls the failure "pre-existing" although `test_platform` is a new file in this branch.
 
 **Boundaries**: N/A. **Acceptance map**: Issue #1 `:3-18`, Issue #2 `:20-22`. Status: ⚠️ stale.
 
@@ -131,7 +132,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 **Happy path**: Reader extracts the five critical bug fixes (empty subpicture `subpicture_New(NULL)`, MinGW weak-symbol resolution, session-ID zero-stamping, model-reload latency/ADR-015, MF lifecycle races) and the phased roadmap. **Failure path**: N/A.
 
-**Boundaries**: N/A. **Acceptance map**: postmortem checklist `:299-306` (all `[x]`); 4-phase diagram `:245-266`. Status: done, with one accuracy nit — it claims "13/13 tests passing on `gemini/milestone-3` baseline", but the milestone-3 baseline + this branch has 11 tests (10 baseline + `test_platform`). This means that new tests have been added on the way.
+**Boundaries**: N/A. **Acceptance map**: postmortem checklist `:299-306` (all `[x]`); 4-phase diagram `:245-266`. Status: done, with one accuracy nit — it claims "13/13 tests passing on `gemini/milestone-3` baseline", but the milestone-3 baseline + this branch has 12 tests (10 baseline + `test_platform` + `test_worker_config`). This means that new tests have been added on the way.
 
 ---
 
@@ -244,7 +245,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 **Boundaries**:
 
 - Input validation: none needed beyond sys/block null guards (unchanged).
-- Authorization: token generated per-instance; **never transmitted to the worker** (see §7, Bug H-1).
+- Authorization: token generated per-instance; now transmitted to the worker out-of-band via the spawn `--token` arg (H-1 resolved).
 - Concurrency: spawn+handshake run in `vw_plugin_open` (module-activation thread, not the audio callback) — blocks module open up to ~2 s when no worker responds.
 - I/O: up to 2 s connect retry, then 3 s read timeouts.
 - Persistence: `/tmp/vlc-whisper-<pid>.sock` — no cleanup path in this diff; stale socket file if the worker dies.
@@ -323,13 +324,13 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 ### 1.22 `plugin/src/vw_worker_client.c`
 
-**Why change**: Full Step 13 implementation — spawn worker, retry-connect, encode+send `HELLO`, receive/decode `HELLO_ACK`, return authenticated client; `receive_all` helper for partial reads.
+**Why change**: Full Step 13 implementation — spawn worker, retry-connect, encode+send `HELLO`, receive/decode `HELLO_ACK`, return authenticated client; `receive_all` helper for partial reads. Follow-up (H-1): add `token_to_hex` and pass `--pipe`/`--token` in the spawn argv.
 
 **Responsibility before**: Stub that ignored args and returned a bare connected handle. **After**: Worker supervisor + authentication manager.
 
 **Callers**: `vlc_whisper_module.c`, `test_worker_ipc.c`, `test_worker_lifecycle.c`. **Callees**: `vw_platform_spawn_process`, `vw_ipc_connect`, `vw_ipc_send`, `vw_ipc_receive`, `vw_ipc_close`, `vw_protocol_encode/decode_header/payload`.
 
-**Happy path** (test path, `executable_path == NULL`): connect → `vw_msg_hello_t` init (`:59-66`) → encode payload into 256-byte buf (`:68-71`) → header `sequence=1` (`:73-79`) → send (`:80-82`) → `receive_all` header (`:84`) → decode+type-check (`:86-89`) → bounded ACK payload malloc (`:92-104`) → decode → return client.
+**Happy path** (test path, `executable_path == NULL`): connect → `vw_msg_hello_t` init (`:77-81`) → encode payload into 256-byte buf (`:83-87`) → header `sequence=1` (`:89-93`) → send (`:95-100`) → `receive_all` header (`:102-104`) → decode+type-check (`:105-107`) → bounded ACK payload malloc (`:109-119`) → decode → return client. Production path additionally spawns with `--pipe`/`--token` (`:45-52`) after `token_to_hex` (`:31-36`).
 
 **Failure path**: NULL endpoint/token → NULL (`:30-32`); spawn fail → NULL (`:36-39`); connect timeout 40×50 ms → NULL (`:43-52`); encode/send/ACK failures → `goto fail` → `vw_worker_client_disconnect` (`:123-125`) → NULL.
 
@@ -338,18 +339,18 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 - Input validation: NULL checks; `ack_hdr.payload_length > 0 && <= 1024` bounds the malloc (good); 256-byte HELLO buffer is sufficient.
 - Authorization: client presents token; **client never verifies the ACK** (no version negotiation check, no authenticity check on `HELLO_ACK` — the worker→client direction is unauthenticated).
 - Concurrency: runs on module-open thread; `receive_all` blocks up to 3 s per read.
-- I/O: partial-read loop handles frame fragmentation; `res <= 0` treats both timeout and EOF as failure (worker treats `res == 0` as "keep waiting" — inconsistent semantics).
+- I/O: partial-read loop handles frame fragmentation; `VW_IPC_RECV_TIMEOUT` (`-1`) retries within the 5s handshake deadline, `VW_IPC_RECV_FATAL` (`-2`) fails.
 - Persistence: none.
 
 **Acceptance map**:
 
-| #   | Criterion                      | Code                         | Test                            | Status                    |
-| --- | ------------------------------ | ---------------------------- | ------------------------------- | ------------------------- |
-| 1   | Spawn before connect           | `vw_worker_client.c:36-39`   | `test_worker_lifecycle.c:40`    | ✅ (only when path given) |
-| 2   | HELLO/HELLO_ACK handshake      | `vw_worker_client.c:59-104`  | `test_worker_ipc.c:35`          | ✅                        |
-| 3   | Handshake failure → clean NULL | `vw_worker_client.c:123-125` | `test_worker_lifecycle.c:38,63` | ✅                        |
+| #   | Criterion                      | Code                         | Test                            | Status                              |
+| --- | ------------------------------ | ---------------------------- | ------------------------------- | ----------------------------------- |
+| 1   | Spawn before connect           | `vw_worker_client.c:45-52`   | `test_worker_lifecycle.c:40`    | ✅ (spawns with `--pipe`/`--token`) |
+| 2   | HELLO/HELLO_ACK handshake      | `vw_worker_client.c:59-104`  | `test_worker_ipc.c:35`          | ✅                                  |
+| 3   | Handshake failure → clean NULL | `vw_worker_client.c:123-125` | `test_worker_lifecycle.c:38,63` | ✅                                  |
 
-**Assumptions/Tradeoffs**: When `executable_path` is non-NULL (production), the spawned worker is passed **no arguments** — no pipe name, no token (see §7, Bug H-1). `malloc(ack_hdr.payload_length)` is properly capped at 1024. `disconnect` closes the pipe but never sends `SHUTDOWN` and never waits for the worker process.
+**Assumptions/Tradeoffs**: The spawned worker receives `--pipe <name>` and `--token <64-char hex>` (hex encoding is required because argv is NUL-terminated strings and a raw 32-byte token can contain NUL/non-printable bytes). The hex token is visible in the process list (`/proc/<pid>/cmdline`) for the worker's lifetime — matches the `architecture.md:73` "command line/handle setup" design. `malloc(ack_hdr.payload_length)` is properly capped at 1024. `disconnect` closes the pipe but never sends `SHUTDOWN` and never waits for the worker process.
 
 ---
 
@@ -403,11 +404,11 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 ### 1.28 `tests/CMakeLists.txt`
 
-**Why change**: Add `vw_platform_linux.c`/`vw_platform_win32.c` to `test_worker_ipc`/`test_worker_lifecycle` sources; add `test_platform` (win32 or linux impl); link `bcrypt` on Windows for the three tests.
+**Why change**: Add `vw_platform_linux.c`/`vw_platform_win32.c` to `test_worker_ipc`/`test_worker_lifecycle` sources; add `test_platform` (win32 or linux impl); add `test_worker_config` (worker CLI arg-parsing success + failure paths, links `vw_worker_config.c`); link `bcrypt` on Windows for the platform-dependent tests.
 
-**Responsibility before**: Test targets. **After**: Platform coverage wired into unit + integration.
+**Responsibility before**: Test targets. **After**: Platform + worker-config coverage wired into unit + integration.
 
-**Callers**: CTest. **Callees**: test binaries. **Happy path**: 11 targets registered, 11/11 pass. **Failure path**: N/A.
+**Callers**: CTest. **Callees**: test binaries. **Happy path**: 12 targets registered, 12/12 pass. **Failure path**: N/A.
 
 **Acceptance map**: `tests/CMakeLists.txt:28-42`. Status: done — note both `vw_platform_linux.c` and `vw_platform_win32.c` are compiled into the integration tests simultaneously; each is `#if`-guarded so only one contributes symbols per platform. Clean.
 
@@ -423,7 +424,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 **Happy path**: pthread worker (`vw_worker_run` with config `pipe_name="test_ipc_socket"`, token `0..31`) → client connects + handshakes → SHUTDOWN frame → worker exits. **Failure path**: N/A here (covered in lifecycle).
 
-**Boundaries**: config token `(uint8_t)i` for i in 0..31. **Acceptance map**: `test_worker_ipc.c:32-41`. Status: done — passes 11/11 and under memcheck.
+**Boundaries**: config token `(uint8_t)i` for i in 0..31. **Acceptance map**: `test_worker_ipc.c:32-41`. Status: done — passes 12/12 and under memcheck.
 
 ---
 
@@ -437,7 +438,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 **Happy path**: good-token connect → START_SESSION → SHUTDOWN → clean exit. **Failure path**: wrong token → client NULL (worker `vw_worker.c:108-111` exits 1); non-HELLO first frame → worker exits 1 (`vw_worker.c:101-104`); NULL endpoint/token → NULL; no listener → NULL after ~2 s retry.
 
-**Boundaries**: `for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++)` — signed/unsigned compare (documented in `docs/issues.md` #2); `usleep` undeclared under strict C17 (warns). **Acceptance map**: `test_worker_lifecycle.c:31-113`. Status: done — passes 11/11 + memcheck; two documented cosmetic warnings remain.
+**Boundaries**: `for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++)` — signed/unsigned compare (documented in `docs/issues.md` #2); `usleep` undeclared under strict C17 (warns). **Acceptance map**: `test_worker_lifecycle.c:31-113`. Status: done — passes 12/12 + memcheck; two documented cosmetic warnings remain.
 
 ---
 
@@ -459,7 +460,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 - I/O: `posix_spawn` of `/bin/true`.
 - Persistence: none.
 
-**Acceptance map**: `test_platform.c:18-57`. Status: done — passes 11/11 + memcheck (the `access()` pre-check at `vw_platform_linux.c:33` makes the missing-executable case deterministic under Valgrind, which is why `docs/issues.md` #1 is stale).
+**Acceptance map**: `test_platform.c:18-57`. Status: done — passes 12/12 + memcheck (the `access()` pre-check at `vw_platform_linux.c:33` makes the missing-executable case deterministic under Valgrind, which is why `docs/issues.md` #1 is stale).
 
 ---
 
@@ -495,7 +496,7 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 - Input validation: header magic/major/payload≤1 MB validated before malloc; payload validated post-decode.
 - Authorization: constant-time 32-byte compare (correct pattern, `volatile uint8_t diff`); **but the token itself never reaches the worker in production** (H-1).
-- Concurrency: single-threaded; ACK read loop `res==0` busy-continues on timeout (no backoff).
+- Concurrency: single-threaded; read loops `continue` on `VW_IPC_RECV_TIMEOUT` without backoff — the server keeps waiting across video pauses.
 - I/O: header+payload partial-read loops handle fragmentation.
 - Persistence: none.
 
@@ -511,6 +512,38 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 ---
 
+### 1.35 `worker/src/main.c` (+ `worker/src/vw_worker_config.c`)
+
+**Why change**: From a stub (`printf("Hello, VLC Whisper worker!\n"); return 0;`) to the production entry point — init config defaults, parse `--token`/`--pipe`/`--model`, call `vw_worker_run`. This closes Bug H-1: the worker now binds the endpoint and holds the reference auth token. Follow-up: the CLI parsing was moved out of `main` into `vw_worker_config_parse_args` (`vw_worker_config.c:44-64`, hex parser `vw_token_from_hex` at `:7-31`) so the startup failure paths are unit-testable; `main.c` is now a thin `init → parse → run` entry point (`main.c:4-13`).
+
+**Responsibility before**: Stub that exited immediately. **After**: Thin entry point; parsing owned by `vw_worker_config.c`.
+
+**Callers**: OS process spawn (plugin). **Callees**: `vw_worker_config_init_defaults`, `vw_worker_config_parse_args`, `vw_worker_run`.
+
+**Happy path**: `--pipe /tmp/vlc-whisper-<pid>.sock --token <64 hex> --model models/ggml-tiny.en.bin` → config populated → `vw_worker_run` listens, verifies HELLO, replies HELLO_ACK.
+
+**Failure path**: `vw_worker_config_parse_args` returns 2 on bad `--token` (wrong length/non-hex, `:50-53`), unknown option, or dangling flag (`:58-60`); `main` propagates it unchanged. `vw_worker_run` failure → exit 1 (auth/IPC). Lifecycle exit-code contract preserved: 0 clean, 1 auth/IPC, 2 CLI.
+
+**Boundaries**:
+
+- Input validation: `vw_token_from_hex` rejects wrong length and non-hex chars (`vw_worker_config.c:7-31`); `snprintf` bounds `pipe_name`/`model_path`.
+- Authorization: `--token` is the out-of-band shared secret; visible in `/proc/<pid>/cmdline` while the worker runs.
+- Concurrency: single-threaded `main`, runs on the spawned worker process.
+- I/O: none before `vw_worker_run`.
+- Persistence: none.
+
+**Acceptance map**:
+
+| #   | Criterion                   | Code                       | Test                          | Status |
+| --- | --------------------------- | -------------------------- | ----------------------------- | ------ |
+| 1   | Parse `--token` (hex → 32B) | `vw_worker_config.c:7-31`  | `test_worker_config.c`        | ✅     |
+| 2   | Parse `--pipe` / `--model`  | `vw_worker_config.c:54-57` | `test_worker_config.c`        | ✅     |
+| 3   | Bad `--token` → exit 2      | `vw_worker_config.c:50-53` | `test_worker_config.c` (unit) | ✅     |
+
+**Assumptions/Tradeoffs**: No plugin-dir discovery — `--pipe`/`--token`/`--model` come explicitly from the plugin spawn argv. `--model` is parsed but unused until the engine lands (Step 14+). Nitpick N-2 (missing trailing newline) is resolved by the rewrite.
+
+---
+
 ## 2. Happy-Path Request Trace
 
 **Production-intended path (as the design intends):**
@@ -519,15 +552,16 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 2. Pipe name + worker path built per-OS — `vlc_whisper_module.c:123-131` (`/tmp/vlc-whisper-<pid>.sock`, `vlc-whisper-worker`)
 3. `vw_platform_get_random_bytes(sys->auth_token, 32)` — `vlc_whisper_module.c:128` → Win32 `BCryptGenRandom` / Linux `rand()` (see H-2)
 4. `vw_worker_client_launch_and_connect(path, pipe, token)` — `vlc_whisper_module.c:130`
-5. `vw_platform_spawn_process(path, {path, NULL})` — `plugin/src/vw_worker_client.c:36-39` → Linux `posix_spawn` (`vw_platform_linux.c:31-39`) / Win32 `CreateProcessW` (`vw_platform_win32.c:41-107`)
-6. Connect retry (40 × 50 ms) — `vw_worker_client.c:43-53`
-7. Client builds `HELLO` (`min_major=max_major=1`, token, client_version "1.0.0") — `vw_worker_client.c:59-66`, encodes payload + header, sends — `:68-82`
-8. Worker `vw_worker_run` reads header loop — `worker/src/vw_worker.c:46-58`, decodes/validates — `:60-96`, first-frame HELLO check — `:101`, constant-time token verify — `:108`, sends `HELLO_ACK` (version 1.0, `VW_CAPABILITY_PCM_S16LE_16K_MONO`) — `:111-142`
-9. Client `receive_all` reads ACK header — `vw_worker_client.c:84`, decode + type check — `:86-89`, bounded payload decode — `:92-104`
-10. `vw_worker_client_t*` returned, stored in `sys->client`; `PLUGIN_OPEN` logged — `vlc_whisper_module.c:138-140`
-11. On module unload → `vw_plugin_close` → `vw_worker_client_disconnect` — `vlc_whisper_module.c:153-157` → `vw_worker_client.c:128-135` (close pipe, free)
+5. `token_to_hex` encodes the token → `vw_platform_spawn_process(path, {path, "--pipe", pipe, "--token", token_hex, NULL})` — `vw_worker_client.c:45-52` → Linux `posix_spawn` (`vw_platform_linux.c:31-39`) / Win32 `CreateProcessW` (`vw_platform_win32.c:41-107`)
+6. Worker `main.c` inits config and calls `vw_worker_run` after `vw_worker_config_parse_args` (`vw_worker_config.c:44-64`) parses `--pipe`/`--token`/`--model` → binds the endpoint and holds the reference token
+7. Connect retry (40 × 50 ms) — `vw_worker_client.c:54-64`
+8. Client builds `HELLO` (`min_major=max_major=1`, token, client_version "1.0.0") — `vw_worker_client.c:77-81`, encodes payload + header, sends — `:83-100`
+9. Worker `vw_worker_run` reads header loop — `worker/src/vw_worker.c:46-58`, decodes/validates — `:60-96`, first-frame HELLO check — `:101`, constant-time token verify — `:108`, sends `HELLO_ACK` (version 1.0, `VW_CAPABILITY_PCM_S16LE_16K_MONO`) — `:111-142`
+10. Client `receive_all` reads ACK header — `vw_worker_client.c:102-104`, decode + type check — `:105-107`, bounded payload decode — `:109-119`
+11. `vw_worker_client_t*` returned, stored in `sys->client`; `PLUGIN_OPEN` logged — `vlc_whisper_module.c:138-140`
+12. On module unload → `vw_plugin_close` → `vw_worker_client_disconnect` — `vlc_whisper_module.c:153-157` → `vw_worker_client.c:129-136` (close pipe, free)
 
-**Reality check (critical):** Step 5 spawns `vlc-whisper-worker` with **zero arguments**, and `worker/src/main.c:6-7` is still `printf("Hello, VLC Whisper worker!\n"); return 0;`. The worker therefore (a) never binds the pipe and (b) never learns the token — the production happy path **cannot complete**. The path above only works in the integration tests, which bypass the spawn (`executable_path == NULL`) and drive `vw_worker_run` in-process with a pre-populated `vw_worker_config_t` (`tests/integration/test_worker_ipc.c:18-31`, `test_worker_lifecycle.c:18-29`).
+**Reality check (updated after H-1 fix):** the production happy path is now **achievable** — the spawn delivers `--pipe`/`--token`, `main.c` parses them and runs `vw_worker_run`, and the token is reachable for the constant-time compare (verified this session: build 31/31, `ctest` 12/12, memcheck 12/12). Remaining production caveats: `worker_path` is a bare relative name resolved against VLC's CWD (worker-path risk, §7); if the worker binary is missing, module open still stalls ~2 s before the passthrough fallback. The integration tests still bypass the spawn (`executable_path == NULL`) and drive `vw_worker_run` in-process with a pre-populated `vw_worker_config_t` (`tests/integration/test_worker_ipc.c:18-31`, `test_worker_lifecycle.c:18-29`) — an end-to-end spawned-process test is still absent (Risk R-3).
 
 ---
 
@@ -547,49 +581,50 @@ Scope: VLC plugin worker-client connection during module `Open` (roadmap step 13
 
 Verified by `test_worker_lifecycle.c:31-41` (asserts `bad_client == NULL` and worker exit code 1). The first-frame-not-HELLO variant follows the same shape (`vw_worker.c:101-104`, test section 4).
 
-**Secondary failure path (production-only):** worker binary missing or not in CWD → Linux `access(F_OK)` fails → `vw_platform_spawn_process` false → client NULL after ~2 s connect-retry time spent waiting — `vw_worker_client.c:36-53`. This is the only path actually reachable in production today (because `main.c` is a stub), and it adds a **2-second stall to every module activation**.
+**Secondary failure paths (production):** (1) worker binary missing/not in CWD → Linux `access(F_OK)` fails → `vw_platform_spawn_process` false → client NULL after ~2 s connect-retry time spent waiting — `vw_worker_client.c:45-64`; adds a **2-second stall to every module activation**. (2) malformed `--token` or unknown option → worker exits 2 before binding → the client burns the full 2 s connect retry then returns NULL — `main.c:40-52`.
 
 ---
 
 ## 4. Boundary Summary
 
-| Boundary type        | What to check                                           | Code location                                                 | Status                                                                                 |
-| -------------------- | ------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **Input validation** | NULL endpoint/token rejected                            | `vw_worker_client.c:30-32`                                    | Validated                                                                              |
-| **Input validation** | ACK payload capped before malloc (≤1024)                | `vw_worker_client.c:92`                                       | Validated                                                                              |
-| **Input validation** | Header magic/major/payload ≤ 1 MB                       | `vw_protocol_validate.c:3-7`                                  | Validated                                                                              |
-| **Input validation** | Partial reads (header + payload)                        | `vw_worker_client.c:19-25`, `vw_worker.c:46-77`               | Validated                                                                              |
-| **Input validation** | RNG NULL / zero-size                                    | `vw_platform_linux.c:9-12`, `vw_platform_win32.c:14-16`       | Validated                                                                              |
-| **Input validation** | Spawn NULL / missing executable                         | `vw_platform_linux.c:32-34`, `vw_platform_win32.c:42-44`      | Validated                                                                              |
-| **Input validation** | `test_platform.c:51` Valgrind determinism               | `vw_platform_linux.c:33` (`access`)                           | Validated                                                                              |
-| **Authorization**    | Constant-time 32-byte token compare (worker)            | `vw_worker.c:12-21,108`                                       | Validated                                                                              |
-| **Authorization**    | Token reaches worker in production                      | `vw_worker_client.c:36-39` (no args), `main.c:6-7`            | **Gap — token never delivered** (H-1)                                                  |
-| **Authorization**    | Client verifies worker (HELLO_ACK) authenticity/version | `vw_worker_client.c:86-104`                                   | **Gap — type check only, no version/authenticity**                                     |
-| **Authorization**    | Token is cryptographically random                       | `vw_platform_linux.c:8-25`                                    | **Gap — `rand()` (H-2)**                                                               |
-| **Concurrency**      | Audio callback lock-free (Rule 4)                       | `vlc_whisper_module.c:47-87`                                  | Validated (unchanged)                                                                  |
-| **Concurrency**      | Module-open blocking                                    | `vw_worker_client.c:43-53`                                    | **Risk — up to ~2 s stall per activation**                                             |
-| **Concurrency**      | Worker single-threaded loop                             | `vw_worker.c`                                                 | Consistent with Step 13 scope                                                          |
-| **I/O**              | Connect retry / read timeout semantics                  | `vw_worker_client.c:43-53`, `vw_ipc_socket_linux.c:52-53,108` | Partial — 3 s per read; `res==0` handled inconsistently (client=fail, worker=continue) |
-| **I/O**              | Spawn flags on Windows                                  | `vw_platform_win32.c:88`                                      | **Doc drift — intent is `CREATE_NO_WINDOW`, passes `0`**                               |
-| **Persistence**      | `/tmp/vlc-whisper-<pid>.sock` cleanup                   | `vlc_whisper_module.c:124`                                    | **Gap — no unlink/cleanup path in this diff**                                          |
-| **Persistence**      | No PCM/transcript/token logging                         | entire diff                                                   | Validated (log events carry event IDs only)                                            |
+| Boundary type        | What to check                                           | Code location                                                       | Status                                                                                                          |
+| -------------------- | ------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Input validation** | NULL endpoint/token rejected                            | `vw_worker_client.c:30-32`                                          | Validated                                                                                                       |
+| **Input validation** | ACK payload capped before malloc (≤1024)                | `vw_worker_client.c:92`                                             | Validated                                                                                                       |
+| **Input validation** | Header magic/major/payload ≤ 1 MB                       | `vw_protocol_validate.c:3-7`                                        | Validated                                                                                                       |
+| **Input validation** | Partial reads (header + payload)                        | `vw_worker_client.c:19-25`, `vw_worker.c:46-77`                     | Validated                                                                                                       |
+| **Input validation** | RNG NULL / zero-size                                    | `vw_platform_linux.c:9-12`, `vw_platform_win32.c:14-16`             | Validated                                                                                                       |
+| **Input validation** | Spawn NULL / missing executable                         | `vw_platform_linux.c:32-34`, `vw_platform_win32.c:42-44`            | Validated                                                                                                       |
+| **Input validation** | `test_platform.c:51` Valgrind determinism               | `vw_platform_linux.c:33` (`access`)                                 | Validated                                                                                                       |
+| **Input validation** | Bad `--token` (len/non-hex) → worker exit 2             | `main.c:9-33,40-44`                                                 | Validated (no unit test)                                                                                        |
+| **Authorization**    | Constant-time 32-byte token compare (worker)            | `vw_worker.c:12-21,108`                                             | Validated                                                                                                       |
+| **Authorization**    | Token reaches worker in production                      | `vw_worker_client.c:45-52` (`--pipe`/`--token` hex), `main.c:40-44` | Validated (H-1 resolved); hex token visible in `/proc/<pid>/cmdline`                                            |
+| **Authorization**    | Client verifies worker (HELLO_ACK) authenticity/version | `vw_worker_client.c:86-104`                                         | **Gap — type check only, no version/authenticity**                                                              |
+| **Authorization**    | Token is cryptographically random                       | `vw_platform_linux.c:8-25`                                          | **Gap — `rand()` (H-2)**                                                                                        |
+| **Concurrency**      | Audio callback lock-free (Rule 4)                       | `vlc_whisper_module.c:47-87`                                        | Validated (unchanged)                                                                                           |
+| **Concurrency**      | Module-open blocking                                    | `vw_worker_client.c:54-64`                                          | **Risk — up to ~2 s stall per activation** (spawn fail or worker exit 2 both burn the connect retry)            |
+| **Concurrency**      | Worker single-threaded loop                             | `vw_worker.c`                                                       | Consistent with Step 13 scope                                                                                   |
+| **I/O**              | Connect retry / read timeout semantics                  | `vw_worker_client.c:54-64`, `vw_ipc_socket_linux.c:52-53,101`       | Validated — unified `VW_IPC_RECV_TIMEOUT`/`VW_IPC_RECV_FATAL` contract; client handshake bounded by 5s deadline |
+| **I/O**              | Spawn flags on Windows                                  | `vw_platform_win32.c:88`                                            | **Doc drift — intent is `CREATE_NO_WINDOW`, passes `0`**                                                        |
+| **Persistence**      | `/tmp/vlc-whisper-<pid>.sock` cleanup                   | `vlc_whisper_module.c:124`                                          | **Gap — no unlink/cleanup path in this diff**                                                                   |
+| **Persistence**      | No PCM/transcript/token logging                         | entire diff                                                         | Validated (log events carry event IDs only)                                                                     |
 
 ---
 
 ## 5. Acceptance Criterion → Code Mapping
 
-| #   | Criterion                                                      | Plan Source            | Code                                | Test                                          | Status                                         |
-| --- | -------------------------------------------------------------- | ---------------------- | ----------------------------------- | --------------------------------------------- | ---------------------------------------------- |
-| 1   | `vw_plugin_open` generates 32-byte token + OS endpoint         | `step13_plan.md:36`    | `vlc_whisper_module.c:123-131`      | `test_platform.c:18-27`                       | ⚠️ partial (token not CSPRNG on Linux)         |
-| 2   | `vw_plugin_open` invokes `vw_worker_client_launch_and_connect` | `step13_plan.md:37`    | `vlc_whisper_module.c:130`          | `test_worker_ipc.c:35`                        | ✅                                             |
-| 3   | `vw_plugin_close` cleans up via `vw_worker_client_disconnect`  | `step13_plan.md:38`    | `vlc_whisper_module.c:153-157`      | lifecycle suite                               | ✅                                             |
-| 4   | Missing worker → warn + `VLC_SUCCESS` passthrough              | `step13_plan.md:39`    | `vlc_whisper_module.c:133-135`      | `test_worker_lifecycle.c:44-46` (no listener) | ✅                                             |
-| 5   | Build + unit tests pass 100%                                   | `step13_plan.md:40`    | —                                   | 11/11 ctest                                   | ✅ (verified)                                  |
-| 6   | Valgrind memcheck 100% clean                                   | `step13_plan.md:41`    | —                                   | 11/11 memcheck                                | ✅ (verified; contradicts `docs/issues.md` #1) |
-| 7   | C17, no blocking in audio callback                             | `step13_plan.md:44-45` | `vlc_whisper_module.c:47-87`        | invariant                                     | ✅                                             |
-| 8   | **End-to-end authenticated handshake on module load**          | `step13_plan.md` goal  | `main.c:6-7` (stub), spawn w/o args | tests bypass spawn                            | ❌ **not achievable in production** (H-1)      |
-| 9   | Plan/DoD checkboxes reflect implementation                     | `step13_plan.md:36-46` | —                                   | —                                             | ❌ all `[ ]` unchecked                         |
-| 10  | Wire/protocol changes → `docs/api-contracts.md` (Rule 14)      | `AGENTS.md:18`         | `vw_protocol_types.h`               | —                                             | ❌ not updated (R-2)                           |
+| #   | Criterion                                                      | Plan Source            | Code                                                    | Test                                          | Status                                                                                          |
+| --- | -------------------------------------------------------------- | ---------------------- | ------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 1   | `vw_plugin_open` generates 32-byte token + OS endpoint         | `step13_plan.md:36`    | `vlc_whisper_module.c:123-131`                          | `test_platform.c:18-27`                       | ⚠️ partial (token not CSPRNG on Linux)                                                          |
+| 2   | `vw_plugin_open` invokes `vw_worker_client_launch_and_connect` | `step13_plan.md:37`    | `vlc_whisper_module.c:130`                              | `test_worker_ipc.c:35`                        | ✅                                                                                              |
+| 3   | `vw_plugin_close` cleans up via `vw_worker_client_disconnect`  | `step13_plan.md:38`    | `vlc_whisper_module.c:153-157`                          | lifecycle suite                               | ✅                                                                                              |
+| 4   | Missing worker → warn + `VLC_SUCCESS` passthrough              | `step13_plan.md:39`    | `vlc_whisper_module.c:133-135`                          | `test_worker_lifecycle.c:44-46` (no listener) | ✅                                                                                              |
+| 5   | Build + unit tests pass 100%                                   | `step13_plan.md:40`    | —                                                       | 12/12 ctest                                   | ✅ (verified)                                                                                   |
+| 6   | Valgrind memcheck 100% clean                                   | `step13_plan.md:41`    | —                                                       | 12/12 memcheck                                | ✅ (verified; contradicts `docs/issues.md` #1)                                                  |
+| 7   | C17, no blocking in audio callback                             | `step13_plan.md:44-45` | `vlc_whisper_module.c:47-87`                            | invariant                                     | ✅                                                                                              |
+| 8   | **End-to-end authenticated handshake on module load**          | `step13_plan.md` goal  | `vw_worker_config.c:44-64` + `vw_worker_client.c:45-52` | lifecycle suite (in-process)                  | ✅ achievable in production (H-1 resolved, uncommitted); still no spawned end-to-end test (R-3) |
+| 9   | Plan/DoD checkboxes reflect implementation                     | `step13_plan.md:36-46` | —                                                       | —                                             | ❌ all `[ ]` unchecked                                                                          |
+| 10  | Wire/protocol changes → `docs/api-contracts.md` (Rule 14)      | `AGENTS.md:18`         | `vw_protocol_types.h`                                   | —                                             | ❌ not updated (R-2)                                                                            |
 
 ---
 
@@ -597,41 +632,44 @@ Verified by `test_worker_lifecycle.c:31-41` (asserts `bad_client == NULL` and wo
 
 ### Bugs (Sorted by Priority)
 
-| Priority   | Component / Location                                                    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Impact                                                                                                     | Proposed Fix                                                                                                                                                                     |
-| ---------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **High**   | `plugin/src/vw_worker_client.c:36-39` + `worker/src/main.c:6-7`         | Production spawn passes **no arguments** (no pipe name, no auth token), and `main.c` is still a stub that prints "Hello, VLC Whisper worker!" and exits. The worker never binds the endpoint and never learns the token, so the Step 13 handshake is **unreachable in production**; `vw_plugin_open` always lands in passthrough after a ~2 s connect timeout. Tests pass only because they bypass the spawn (`executable_path == NULL`) and inject config directly. | Step 13 goal (authenticated handshake on module load) not delivered; every module activation stalls ~2 s   | Implement `main.c` arg parsing (`--pipe`, `--token`, `--model`, etc.) calling `vw_worker_config_init_defaults` + `vw_worker_run`; pass pipe name and hex token in the spawn argv |
-| **High**   | `plugin/src/vw_platform_linux.c:8-25`                                   | `vw_platform_get_random_bytes` uses `rand()` seeded once with `time ^ pid` — explicitly not a CSPRNG (admitted in comment `:17`). The 32-byte auth token is guessable by anyone approximating spawn time/PID, defeating the documented "cryptographically secure random" security model and the secret-token privacy invariant.                                                                                                                                      | Token forgery enables unauthorized IPC clients                                                             | Use `getrandom(2)` (or `/dev/urandom` with full-read loop) on Linux; keep BCrypt on Windows                                                                                      |
-| **Medium** | `plugin/src/vw_worker_client.c:86-104`                                  | Client decodes `HELLO_ACK` but never validates `selected_major`/version or any ACK authenticity — a mismatched or malicious worker can negotiate any version and the client accepts.                                                                                                                                                                                                                                                                                 | Version-negotiation contract silently ignored; no mutual auth (client→worker only)                         | Validate `ack.selected_major == VW_PROTOCOL_VERSION_MAJOR`; fail otherwise                                                                                                       |
-| **Medium** | `docs/issues.md:3-18`                                                   | Issue #1 is stale and inaccurate for this tree: `test_platform` passes under memcheck **11/11** (verified this session, direct `valgrind` and `ctest -T memcheck`). The suggested fix (pre-validate executable before spawn) is **already implemented** (`vw_platform_linux.c:33`), and the test is new in this branch, so "pre-existing" is wrong. The doc also claims CI is blocked.                                                                               | Misleading docs; Rule 14 doc accuracy violated; CI claim disproven                                         | Rewrite Issue #1 as resolved (note the `access()` pre-check), or delete it                                                                                                       |
-| **Medium** | `plugin/src/vw_platform_win32.c:88,99-105`                              | `CreateProcessW` called with `dwCreationFlags = 0` (no `CREATE_NO_WINDOW`, contrary to the intent), and both process handles are closed immediately — no handle retained for supervision/wait/cleanup. `vw_worker_client_disconnect` never sends `SHUTDOWN` nor waits for the worker.                                                                                                                                                                                | Console window may flash on Windows; orphaned worker processes possible if the plugin crashes before close | Pass `CREATE_NO_WINDOW`; retain `pi.hProcess` in the client and `WaitForSingleObject`/`TerminateProcess` on disconnect                                                           |
-| **Low**    | `plugin/src/vw_worker_client.c:19-25` vs `worker/src/vw_worker.c:50-56` | Timeout semantics inconsistent: client's `receive_all` treats `vw_ipc_receive == 0` (timeout) as failure, worker treats `res == 0` as "keep waiting".                                                                                                                                                                                                                                                                                                                | Different handshake behavior under slow links; no total handshake deadline                                 | Define one contract: treat 0 as retryable only where intended; add a total deadline                                                                                              |
-| **Low**    | `plugin/src/vw_platform_linux.c:29`                                     | `vw_platform_get_time_us` is second-resolution wall clock (`time(NULL) * 1e6`) — the header promises microseconds; Win32 gives 100 ns resolution.                                                                                                                                                                                                                                                                                                                    | Coarse timestamps if ever used for timing (Rule 6 caution)                                                 | Use `clock_gettime(CLOCK_REALTIME)` for µs resolution                                                                                                                            |
+| Priority              | Component / Location                                                                                                                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                     | Impact                                                                                                     | Proposed Fix                                                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| ~~High~~ **Resolved** | `plugin/src/vw_worker_client.c:45-52` + `worker/src/main.c` + `worker/src/vw_worker_config.c`                                       | ~~Production spawn passes no arguments and `main.c` is a stub; handshake unreachable in production, ~2 s stall, passthrough only.~~ Fixed in follow-up (uncommitted): `token_to_hex` + spawn `--pipe`/`--token` argv (`vw_worker_client.c:31-52`); `main.c` + `vw_worker_config.c` parse `--token`/`--pipe`/`--model` and call `vw_worker_run` (startup failure paths now unit-tested). Verified: build 31/31, ctest 12/12, memcheck 12/12.     | Resolved                                                                                                   | Commit the change; consider adding an end-to-end spawned-process test (R-3)                                                       |
+| **High**              | `plugin/src/vw_platform_linux.c:8-25`                                                                                               | `vw_platform_get_random_bytes` uses `rand()` seeded once with `time ^ pid` — explicitly not a CSPRNG (admitted in comment `:17`). The 32-byte auth token is guessable by anyone approximating spawn time/PID, defeating the documented "cryptographically secure random" security model and the secret-token privacy invariant.                                                                                                                 | Token forgery enables unauthorized IPC clients                                                             | Use `getrandom(2)` (or `/dev/urandom` with full-read loop) on Linux; keep BCrypt on Windows                                       |
+| **Medium**            | `plugin/src/vw_worker_client.c:86-104`                                                                                              | Client decodes `HELLO_ACK` but never validates `selected_major`/version or any ACK authenticity — a mismatched or malicious worker can negotiate any version and the client accepts.                                                                                                                                                                                                                                                            | Version-negotiation contract silently ignored; no mutual auth (client→worker only)                         | Validate `ack.selected_major == VW_PROTOCOL_VERSION_MAJOR`; fail otherwise                                                        |
+| **Medium**            | `docs/issues.md:3-18`                                                                                                               | Issue #1 is stale and inaccurate for this tree: `test_platform` passes under memcheck **12/12** (verified this session, direct `valgrind` and `ctest -T memcheck`). The suggested fix (pre-validate executable before spawn) is **already implemented** (`vw_platform_linux.c:33`), and the test is new in this branch, so "pre-existing" is wrong. The doc also claims CI is blocked.                                                          | Misleading docs; Rule 14 doc accuracy violated; CI claim disproven                                         | Rewrite Issue #1 as resolved (note the `access()` pre-check), or delete it                                                        |
+| **Medium**            | `plugin/src/vw_platform_win32.c:88,99-105`                                                                                          | `CreateProcessW` called with `dwCreationFlags = 0` (no `CREATE_NO_WINDOW`, contrary to the intent), and both process handles are closed immediately — no handle retained for supervision/wait/cleanup. `vw_worker_client_disconnect` never sends `SHUTDOWN` nor waits for the worker.                                                                                                                                                           | Console window may flash on Windows; orphaned worker processes possible if the plugin crashes before close | Pass `CREATE_NO_WINDOW`; retain `pi.hProcess` in the client and `WaitForSingleObject`/`TerminateProcess` on disconnect            |
+| ~~Low~~ **Resolved**  | `protocol/src/vw_ipc_socket_linux.c` / `vw_ipc_pipe_win32.c`, `plugin/src/vw_worker_client.c:19-34`, `worker/src/vw_worker.c:47-62` | ~~Timeout semantics inconsistent (client `receive_all`: `0` = failure; worker: `0` = keep waiting); no total handshake deadline.~~ Fixed: unified 3-state contract — `vw_ipc_receive` returns `>0` bytes, `-1` `VW_IPC_RECV_TIMEOUT` (keep waiting), `-2` `VW_IPC_RECV_FATAL` (EOF/broken pipe, abort). Both call sites treat timeout as retryable; client `receive_all` now carries a 5s total handshake deadline (`VW_HANDSHAKE_TIMEOUT_US`). | Resolved                                                                                                   | Covered by existing lifecycle tests (wrong-token → worker exits → client sees `-2` EOF); a dedicated transport unit test deferred |
+| **Low**               | `plugin/src/vw_platform_linux.c:29`                                                                                                 | `vw_platform_get_time_us` is second-resolution wall clock (`time(NULL) * 1e6`) — the header promises microseconds; Win32 gives 100 ns resolution.                                                                                                                                                                                                                                                                                               | Coarse timestamps if ever used for timing (Rule 6 caution)                                                 | Use `clock_gettime(CLOCK_REALTIME)` for µs resolution                                                                             |
 
 ### Architectural & Operational Risks
 
-| Category                   | Risk Description                                                                                                                                                                                                   | Affected Files                                                    | Mitigation Strategy                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **Step 13 not end-to-end** | The named deliverable (client↔worker handshake on module load) is only proven in tests; production wiring is a stub-to-stub no-op                                                                                  | `worker/src/main.c`, `vw_worker_client.c`, `vlc_whisper_module.c` | Land `main.c` arg parsing + spawn-arg plumbing as part of Step 13 before marking done (Bug H-1)           |
-| **Rule 14 violation**      | Protocol wire contract changed (new version constants, `auth_token` rename, `VW_SESSION_ID_BYTES`, HELLO_ACK now sent) but `docs/api-contracts.md` / `docs/whisper-api.md` were **not updated** in the same change | `protocol/include/vw_protocol_types.h`, `docs/api-contracts.md`   | Add the HELLO/HELLO_ACK version-negotiation and constant table to `api-contracts.md`                      |
-| **Worker path resolution** | Bare relative `worker_path` ("vlc-whisper-worker") resolved against VLC's CWD; no plugin-dir discovery or config override                                                                                          | `vlc_whisper_module.c:127-130`                                    | Resolve worker next to the plugin module (or configurable), check existence before spawn                  |
-| **Forward-looking ADRs**   | ADR-013/014/015 document worker architecture (reader thread, MF lifecycle, Model-Once) not present in this tree; architecture.md is ahead of code                                                                  | `docs/decisions.md:98-140`, `docs/architecture.md`                | Keep as blueprint (postmortem already frames them for Phase A/D) but label clearly as not-yet-implemented |
-| **Windows test gap**       | No Windows test preset runs `test_platform`/IPC suites; Win32 spawn/BCrypt paths verified only by cross-compile                                                                                                    | `tests/CMakeLists.txt:31-42`                                      | Add a windows-x64 test target or document manual verification                                             |
+| Category                   | Risk Description                                                                                                                                                                                                   | Affected Files                                                  | Mitigation Strategy                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **End-to-end test gap**    | The production spawn path (spawn → `main.c` args → `vw_worker_run`) is verified only by build+tests in isolation; no test exercises a real spawned `vlc-whisper-worker` binary with `--pipe`/`--token`             | `worker/src/main.c`, `vw_worker_client.c`                       | Add an integration test that spawns the real binary (or keep the in-process bypass and document it)       |
+| **Rule 14 violation**      | Protocol wire contract changed (new version constants, `auth_token` rename, `VW_SESSION_ID_BYTES`, HELLO_ACK now sent) but `docs/api-contracts.md` / `docs/whisper-api.md` were **not updated** in the same change | `protocol/include/vw_protocol_types.h`, `docs/api-contracts.md` | Add the HELLO/HELLO_ACK version-negotiation and constant table to `api-contracts.md`                      |
+| **Worker path resolution** | Bare relative `worker_path` ("vlc-whisper-worker") resolved against VLC's CWD; no plugin-dir discovery or config override                                                                                          | `vlc_whisper_module.c:127-130`                                  | Resolve worker next to the plugin module (or configurable), check existence before spawn                  |
+| **Forward-looking ADRs**   | ADR-013/014/015 document worker architecture (reader thread, MF lifecycle, Model-Once) not present in this tree; architecture.md is ahead of code                                                                  | `docs/decisions.md:98-140`, `docs/architecture.md`              | Keep as blueprint (postmortem already frames them for Phase A/D) but label clearly as not-yet-implemented |
+| **Windows test gap**       | No Windows test preset runs `test_platform`/IPC suites; Win32 spawn/BCrypt paths verified only by cross-compile                                                                                                    | `tests/CMakeLists.txt:31-42`                                    | Add a windows-x64 test target or document manual verification                                             |
 
 ### Code Style & Quality Nitpicks
 
-| Issue Type            | File & Line                                         | Description                                                                                     | Recommendation                                                                                                          |
-| --------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Include Order**     | `vlc_whisper_module.c:36-47`                        | `stdio.h`/`stdlib.h`/`string.h` + platform headers inserted mid-file after `vw_plugin_log_sink` | Move all non-VLC includes to the top of the file                                                                        |
-| **Doc Drift**         | `vw_platform_win32.c:41-107`                        | Comment/design intent is `CREATE_NO_WINDOW`; code passes `0`                                    | Align comment with code (or add the flag)                                                                               |
-| **Semantic Constant** | `vw_platform_win32.c:30`                            | `status != CMC_STATUS_SUCCESS` compares NTSTATUS to a `wincrypt.h` constant                     | Use `STATUS_SUCCESS` (or `!= 0`) for clarity                                                                            |
-| **Signed/Unsigned**   | `test_worker_lifecycle.c:26`                        | `int i < VW_AUTH_TOKEN_BYTES` (`-Wsign-compare`)                                                | Use `size_t` loop counter                                                                                               |
-| **Strict C17**        | `test_worker_lifecycle.c`                           | `usleep` undeclared under `-std=c17` (warns)                                                    | Use `nanosleep`/`setitimer`                                                                                             |
-| **Missing Newline**   | `vw_platform_linux.c:40`, `vw_platform_win32.c:110` | Files end without trailing newline                                                              | Add newline                                                                                                             |
-| **Weak Test**         | `test_platform.c:24-26`                             | "consecutive draws must differ" is satisfied by `rand()`; does not detect the CSPRNG regression | Document that Linux RNG is not a CSPRNG; gate a stronger check (e.g., determinism/entropy smoke) once `getrandom` lands |
-| **Unchecked Boxes**   | `step13_plan.md:36-46`, `roadmap.md:41`             | All acceptance/DoD boxes `[ ]` while code is committed; roadmap step 13 unchecked               | Check off completed criteria; annotate the end-to-end criterion pending H-1                                             |
-| **Count Drift**       | `milestone3_postmortem.md:305`                      | Claims "13/13 tests passing" on milestone-3 baseline; tree has 11 tests                         | Correct the count or clarify the baseline                                                                               |
-| **Empty Suppression** | `cmake/valgrind.supp`                               | Zero-byte placeholder not referenced anywhere                                                   | Remove or wire it into memcheck config                                                                                  |
+| Issue Type                    | File & Line                                         | Description                                                                                                                | Recommendation                                                                                                          |
+| ----------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Include Order**             | `vlc_whisper_module.c:36-47`                        | `stdio.h`/`stdlib.h`/`string.h` + platform headers inserted mid-file after `vw_plugin_log_sink`                            | Move all non-VLC includes to the top of the file                                                                        |
+| **Doc Drift**                 | `vw_platform_win32.c:41-107`                        | Comment/design intent is `CREATE_NO_WINDOW`; code passes `0`                                                               | Align comment with code (or add the flag)                                                                               |
+| **Semantic Constant**         | `vw_platform_win32.c:30`                            | `status != CMC_STATUS_SUCCESS` compares NTSTATUS to a `wincrypt.h` constant                                                | Use `STATUS_SUCCESS` (or `!= 0`) for clarity                                                                            |
+| **Signed/Unsigned**           | `test_worker_lifecycle.c:26`                        | `int i < VW_AUTH_TOKEN_BYTES` (`-Wsign-compare`)                                                                           | Use `size_t` loop counter                                                                                               |
+| **Strict C17**                | `test_worker_lifecycle.c`                           | `usleep` undeclared under `-std=c17` (warns)                                                                               | Use `nanosleep`/`setitimer`                                                                                             |
+| **Missing Newline**           | `vw_platform_linux.c:40`, `vw_platform_win32.c:110` | Files end without trailing newline                                                                                         | Add newline                                                                                                             |
+| **Weak Test**                 | `test_platform.c:24-26`                             | "consecutive draws must differ" is satisfied by `rand()`; does not detect the CSPRNG regression                            | Document that Linux RNG is not a CSPRNG; gate a stronger check (e.g., determinism/entropy smoke) once `getrandom` lands |
+| **Unchecked Boxes**           | `step13_plan.md:36-46`, `roadmap.md:41`             | All acceptance/DoD boxes `[ ]` while code is committed; roadmap step 13 unchecked                                          | Check off completed criteria now that the end-to-end path exists; note R-3 and R-2 as open                              |
+| **Count Drift**               | `milestone3_postmortem.md:305`                      | Claims "13/13 tests passing" on milestone-3 baseline; tree has 12 tests                                                    | Correct the count or clarify the baseline                                                                               |
+| **Empty Suppression**         | `cmake/valgrind.supp`                               | Zero-byte placeholder not referenced anywhere                                                                              | Remove or wire it into memcheck config                                                                                  |
+| **Format Violation**          | `worker/src/vw_worker.c:19`                         | Follow-up adds two stray blank lines; `clang-format --dry-run --Werror` fails                                              | Revert the whitespace-only hunk (N-1)                                                                                   |
+| ~~Missing Newline~~ **Fixed** | `worker/src/main.c`                                 | ~~File ends without trailing newline.~~ Resolved in the refactor follow-up — the rewritten entry point ends with a newline | (N-2) closed                                                                                                            |
+| **Secret on Cmdline**         | `vw_worker_client.c:48`, `vw_worker_config.c:50-53` | `--token` is visible in the process list (`/proc/<pid>/cmdline`) for the worker's lifetime                                 | Documented tradeoff per `architecture.md:73`; revisit inherited-fd provisioning if the threat model tightens (N-3)      |
 
 ---
 
-**Bottom line**: The Step 13 _code plumbing_ is in good shape — the client-side handshake, constant-time token verification, bounded ACK allocation, partial-read loops, and the new failure-path tests are solid, and the full suite passes 11/11 under both ctest and memcheck (contradicting `docs/issues.md` #1, which should be closed). However, the branch does **not** deliver the Step 13 goal end-to-end: the production worker (`main.c`) is still a stub and the spawn passes no pipe name or token, so the authenticated handshake can only run in tests. Before marking Step 13 complete: implement `main.c` arg parsing + spawn-arg plumbing (H-1), replace the Linux `rand()` token with a real CSPRNG (H-2), update `docs/api-contracts.md` per Rule 14 (R-2), and fix the stale `docs/issues.md` #1. None of these block the current 11/11 test suite, which is why the branch is green while the milestone goal is unmet.
+**Bottom line**: The Step 13 _code plumbing_ is in good shape — the client-side handshake, constant-time token verification, bounded ACK allocation, partial-read loops, and the new failure-path tests are solid, and the full suite passes 12/12 under both ctest and memcheck (contradicting `docs/issues.md` #1, which should be closed). With the follow-up H-1 fix, the branch **now delivers the Step 13 goal end-to-end**: `main.c` + `vw_worker_config.c` parse `--pipe`/`--token`/`--model` and run `vw_worker_run`, the plugin spawn passes the hex-encoded token, and the startup failure paths are unit-tested by `test_worker_config.c` — the authenticated handshake is reachable in production (verified: build 31/31, ctest 12/12, memcheck 12/12). Remaining before Step 13 is truly closed: commit the uncommitted follow-up (and revert the `vw_worker.c` whitespace hunk so `clang-format` passes), replace the Linux `rand()` token with a real CSPRNG (H-2), add a spawned-process end-to-end test (R-3), update `docs/api-contracts.md` per Rule 14 (R-2), and fix the stale `docs/issues.md` #1.

@@ -7,6 +7,7 @@
 #include "vw_protocol_types.h"
 
 #define VW_WORKER_CLIENT_RETRY_COUNT 40
+#define VW_HANDSHAKE_TIMEOUT_US (5 * 1000 * 1000)  // 5s total budget for the HELLO/HELLO_ACK handshake reads
 
 typedef struct vw_worker_client {
   void* pipe_handle;

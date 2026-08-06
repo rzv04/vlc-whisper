@@ -92,7 +92,8 @@ vlc-whisper/
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion tests
-│   │   └── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
+│   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
+│   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model) parsing tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test
 │   │   └── test_worker_lifecycle.c            # Worker startup, crash recovery & shutdown test

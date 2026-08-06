@@ -37,10 +37,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
     while (bytes_read < (int32_t)sizeof(vw_frame_header_t)) {
       int32_t res = vw_ipc_receive(handle, header_buf + bytes_read, sizeof(vw_frame_header_t) - bytes_read);
       if (res < 0) {
-        running = false;
+        if (res == VW_IPC_RECV_TIMEOUT) continue;  // timeout — keep waiting (video pause)
+        running = false;                           // fatal (VW_IPC_RECV_FATAL): peer closed / broken pipe
         break;
       }
-      if (res == 0) continue;  // timeout, no data yet — keep waiting
       bytes_read += res;
     }
     if (!running) break;
@@ -64,10 +64,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
       while (payload_read < header.payload_length) {
         int32_t res = vw_ipc_receive(handle, payload_buf + payload_read, header.payload_length - payload_read);
         if (res < 0) {
-          running = false;
+          if (res == VW_IPC_RECV_TIMEOUT) continue;  // timeout — keep waiting (video pause)
+          running = false;                           // fatal (VW_IPC_RECV_FATAL): peer closed / broken pipe
           break;
         }
-        if (res == 0) continue;  // timeout, no data yet — keep waiting
         payload_read += res;
       }
     }
