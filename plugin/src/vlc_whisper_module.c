@@ -138,7 +138,7 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
     const char* fname = info.dli_fname;
     const char* slash = strrchr(fname, '/');
     size_t dir_len = slash ? (size_t)(slash - fname) : 0;
-    for (int up = 1; up <= 4; ++up) {
+    for (int up = 0; up <= 4; ++up) {
       size_t try_len = dir_len;
       for (int k = 0; k < up; ++k) {
         if (try_len == 0) break;
