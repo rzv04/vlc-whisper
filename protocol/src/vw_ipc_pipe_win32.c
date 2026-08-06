@@ -95,12 +95,12 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
 }
 
 int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) {
-  if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE) return -1;
+  if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE) return VW_IPC_RECV_FATAL;
   HANDLE pipe = (HANDLE)handle->pipe_handle;
 
   OVERLAPPED ov = {0};
   ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
-  if (!ov.hEvent) return -1;
+  if (!ov.hEvent) return VW_IPC_RECV_FATAL;  // fatal: cannot wait for completion
 
   DWORD bytes_read = 0;
   BOOL res = ReadFile(pipe, buffer, (DWORD)buffer_size, &bytes_read, &ov);
@@ -119,8 +119,8 @@ int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size
   }
   CloseHandle(ov.hEvent);
 
-  if (timed_out) return 0;                 // timeout, no data yet
-  if (!res || bytes_read == 0) return -1;  // real error or EOF
+  if (timed_out) return VW_IPC_RECV_TIMEOUT;              // timeout — keep waiting
+  if (!res || bytes_read == 0) return VW_IPC_RECV_FATAL;  // fatal: real error or EOF
   return (int32_t)bytes_read;
 }
 
@@ -132,16 +132,5 @@ void vw_ipc_close(vw_ipc_handle_t* handle) {
     free(handle);
   }
 }
-#else
-// Non-Windows fallback stubs for platforms other than Linux/Mac
-#if !defined(__linux__) && !defined(__APPLE__) && !defined(__unix__)
-#include <stdlib.h>
 
-#include "vw_ipc_transport.h"
-vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) { return NULL; }
-vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) { return NULL; }
-bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) { return false; }
-int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) { return -1; }
-void vw_ipc_close(vw_ipc_handle_t* handle) {}
-#endif
 #endif

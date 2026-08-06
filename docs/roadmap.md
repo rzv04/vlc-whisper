@@ -37,16 +37,23 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 
 ---
 
-## Milestone 3: Local & Live MVP with Seeking & Play/Pause (Planned)
+## Milestone 3: Local & Live MVP with Seeking & Play/Pause (In Progress)
+
+> [!NOTE]
+> A detailed postmortem evaluation and phased 4-step re-implementation blueprint for real-time PCM streaming, GPU acceleration, SPU subpicture rendering, and look-ahead source decoding is documented in [`docs/plans/milestone3_postmortem.md`](file:///home/razvan/vlc-whisper/.worktrees/gemini/docs/plans/milestone3_postmortem.md).
 
 - [ ] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
 - [ ] 14. Feed captured PCM chunks from SPSC queue across IPC transport to worker process in real time.
 - [ ] 15. Receive incoming `SEGMENT` frames on plugin background thread and trigger `vw_caption_presenter_display()`.
 - [ ] 16. Implement Play/Pause lifecycle: send `PAUSE`/`RESUME` IPC control frames, suspend PCM queue forwarding on pause, and resume timeline PTS sync on resume.
 - [ ] 17. Implement Seeking & Discontinuity support: detect `BLOCK_FLAG_DISCONTINUITY` / non-monotonic PTS, clear active presenter captions, send `STOP` (`SEEK_DISCONTINUITY`), reset SPSC queue/VAD state, and start new session epoch without interrupting playback.
+- [ ] 17a. GPU Whisper (Vulkan) Acceleration: Add `ggml-vulkan` backend to worker CLI (`--backend auto|gpu|cpu` & `--gpu-device`), automatic CPU fallback, and parallel build memory limit documentation.
+- [ ] 17b. Native SPU Subpicture Subsystem (Look-Ahead Phase 1): Integrate `vout_RegisterSubpictureChannel` and `vout_PutSubpicture` with proper `subpicture_region_New(VLC_CODEC_TEXT)` text regions, `text_segment_New()`, `VW_WEAK` MinGW symbol linkage, and system-to-media date domain conversion (`mdate() - input_time`).
+- [ ] 17c. Ahead-of-Time Source File Decoding (Look-Ahead Phase 2): Extend IPC protocol to v1.1 (`VW_CAPABILITY_SOURCE_MODE`, `source_url`, `POSITION` lead pacing), implement FFmpeg (Linux) / Media Foundation (Windows) worker demuxer, Model-Once process lifetime (`ADR-015`), and process-wide `MFStartup`/`MFShutdown`.
+- [ ] 17d. Seek Re-Sync Engine (Look-Ahead Phase 3): Implement input clock jump detection (`VW_INPUT_JUMP_DISCONTINUITY_US = 5s`), epoch restarts, SPU channel flushing, explicit `is_seeking` repositioning, and session ID validation.
 - [ ] 18. Package local developer build and run end-to-end local video and stream acceptance tests.
 
-**Exit Status:** **PLANNED** — Local and stream media show real-time captions with full play/pause timeline sync and seamless seeking support; zero audio stutter or memory leaks.
+**Exit Status:** **IN PROGRESS** — Local and stream media show real-time captions with full play/pause timeline sync and seamless seeking support; zero audio stutter or memory leaks.
 
 ---
 
@@ -56,7 +63,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [ ] 20. Add Windows VM smoke test matrix for pinned VLC installation.
 - [ ] 21. Standalone settings GUI (`vlc-whisper-settings.exe`) per ADR-011 for model selection, CPU thread count, and language policy.
 - [ ] 22. Multilingual models (`small`, `medium`, `large`) and automatic language detection.
-- [ ] 23. Native SPU subpicture channel integration (`subpicture_New`/`vout_PutSubpicture`).
-- [ ] 24. Release documentation: troubleshooting, privacy statement, uninstall guide, and bug report templates.
+- [ ] 23. Release documentation: troubleshooting, privacy statement, uninstall guide, and bug report templates.
+- [ ] 24. Benchmark suite and performance output metrics (inference latency, queue high-water mark, audio processing speed ratio).
 
 **Exit Status:** **PLANNED** — Reproducible signed/hashed release package with documented compatibility matrix.

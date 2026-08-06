@@ -99,14 +99,14 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
 }
 
 int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) {
-  if (!handle) return -1;
+  if (!handle) return VW_IPC_RECV_FATAL;  // fatal: invalid handle
   int fd = (int)(intptr_t)handle->pipe_handle;
   ssize_t bytes = recv(fd, buffer, buffer_size, 0);
   if (bytes > 0) return (int32_t)bytes;
-  if (bytes == 0) return -1;  // EOF — peer closed connection
+  if (bytes == 0) return VW_IPC_RECV_FATAL;  // EOF — peer closed connection (fatal)
   // bytes < 0: check for timeout vs real error
-  if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;  // timeout, no data yet
-  return -1;                                              // real error
+  if (errno == EAGAIN || errno == EWOULDBLOCK) return VW_IPC_RECV_TIMEOUT;  // timeout — keep waiting
+  return VW_IPC_RECV_FATAL;                                                 // real error (fatal)
 }
 
 void vw_ipc_close(vw_ipc_handle_t* handle) {

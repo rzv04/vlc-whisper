@@ -47,7 +47,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       const vw_msg_hello_t* p = (const vw_msg_hello_t*)payload;
       ENC_FIELD(p->min_major);
       ENC_FIELD(p->max_major);
-      ENC_BYTES(p->token, VW_AUTH_TOKEN_BYTES);
+      ENC_BYTES(p->auth_token, VW_AUTH_TOKEN_BYTES);
       ENC_FIELD(p->client_version_length);
       ENC_BYTES(p->client_version, p->client_version_length);
       break;
@@ -63,7 +63,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_START_SESSION: {
       const vw_msg_start_t* p = (const vw_msg_start_t*)payload;
-      ENC_BYTES(p->session_id.bytes, 16);
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->timeline_origin_pts_us);
       ENC_FIELD(p->sample_rate);
       ENC_FIELD(p->channels);
@@ -79,7 +79,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_AUDIO_PCM: {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
-      ENC_BYTES(p->session_id.bytes, 16);
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->start_pts_us);
       ENC_FIELD(p->duration_us);
       ENC_FIELD(p->pcm_bytes);
@@ -90,13 +90,13 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     case VW_MSG_RESUME:
     case VW_MSG_STOP_SESSION: {
       const vw_msg_control_t* p = (const vw_msg_control_t*)payload;
-      ENC_BYTES(p->session_id.bytes, 16);
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->reason);
       break;
     }
     case VW_MSG_CAPTION_SEGMENT: {
       const vw_caption_segment_t* p = (const vw_caption_segment_t*)payload;
-      ENC_BYTES(p->session_id.bytes, 16);
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->segment_id);
       ENC_FIELD(p->start_pts_us);
       ENC_FIELD(p->end_pts_us);
@@ -107,7 +107,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_STATUS: {
       const vw_msg_status_t* p = (const vw_msg_status_t*)payload;
-      ENC_BYTES(p->session_id.bytes, 16);
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->state);
       ENC_FIELD(p->queued_audio_us);
       ENC_FIELD(p->inference_us);
@@ -116,7 +116,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_ERROR: {
       const vw_msg_error_t* p = (const vw_msg_error_t*)payload;
-      ENC_BYTES(p->session_id.bytes, 16);
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->error_code);
       ENC_FIELD(p->recoverable);
       ENC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
@@ -162,7 +162,7 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       vw_msg_hello_t* p = (vw_msg_hello_t*)out_payload;
       DEC_FIELD(p->min_major);
       DEC_FIELD(p->max_major);
-      DEC_BYTES(p->token, VW_AUTH_TOKEN_BYTES);
+      DEC_BYTES(p->auth_token, VW_AUTH_TOKEN_BYTES);
       DEC_FIELD(p->client_version_length);
       DEC_PTR(p->client_version, p->client_version_length);
       break;
@@ -179,7 +179,7 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     case VW_MSG_START_SESSION: {
       vw_msg_start_t* p = (vw_msg_start_t*)out_payload;
       memset(p, 0, sizeof(*p));
-      DEC_BYTES(p->session_id.bytes, 16);
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       DEC_FIELD(p->timeline_origin_pts_us);
       DEC_FIELD(p->sample_rate);
       DEC_FIELD(p->channels);
@@ -199,7 +199,7 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     }
     case VW_MSG_AUDIO_PCM: {
       vw_msg_audio_t* p = (vw_msg_audio_t*)out_payload;
-      DEC_BYTES(p->session_id.bytes, 16);
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       DEC_FIELD(p->start_pts_us);
       DEC_FIELD(p->duration_us);
       DEC_FIELD(p->pcm_bytes);
@@ -210,13 +210,13 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     case VW_MSG_RESUME:
     case VW_MSG_STOP_SESSION: {
       vw_msg_control_t* p = (vw_msg_control_t*)out_payload;
-      DEC_BYTES(p->session_id.bytes, 16);
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       DEC_FIELD(p->reason);
       break;
     }
     case VW_MSG_CAPTION_SEGMENT: {
       vw_caption_segment_t* p = (vw_caption_segment_t*)out_payload;
-      DEC_BYTES(p->session_id.bytes, 16);
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       DEC_FIELD(p->segment_id);
       DEC_FIELD(p->start_pts_us);
       DEC_FIELD(p->end_pts_us);
@@ -227,7 +227,7 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     }
     case VW_MSG_STATUS: {
       vw_msg_status_t* p = (vw_msg_status_t*)out_payload;
-      DEC_BYTES(p->session_id.bytes, 16);
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       DEC_FIELD(p->state);
       DEC_FIELD(p->queued_audio_us);
       DEC_FIELD(p->inference_us);
@@ -236,7 +236,7 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     }
     case VW_MSG_ERROR: {
       vw_msg_error_t* p = (vw_msg_error_t*)out_payload;
-      DEC_BYTES(p->session_id.bytes, 16);
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       DEC_FIELD(p->error_code);
       DEC_FIELD(p->recoverable);
       DEC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);

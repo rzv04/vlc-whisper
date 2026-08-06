@@ -6,6 +6,7 @@ add_library(vlc_whisper_plugin SHARED
     src/vw_worker_client.c
     src/vw_queue.c
     src/vw_platform_win32.c
+    src/vw_platform_linux.c
 )
 
 target_compile_definitions(vlc_whisper_plugin PRIVATE
@@ -24,6 +25,9 @@ target_include_directories(vlc_whisper_plugin PRIVATE
 target_link_libraries(vlc_whisper_plugin PRIVATE
     vw_protocol
 )
+if(UNIX AND NOT APPLE)
+  target_link_libraries(vlc_whisper_plugin PRIVATE dl)
+endif()
 
 if(WIN32)
     # Windows DLLs require an import library to resolve external symbols.
@@ -35,7 +39,7 @@ if(WIN32)
     )
     add_custom_target(vlc_core_import DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libvlccore.dll.a)
     add_dependencies(vlc_whisper_plugin vlc_core_import)
-    target_link_libraries(vlc_whisper_plugin PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/libvlccore.dll.a)
+    target_link_libraries(vlc_whisper_plugin PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/libvlccore.dll.a bcrypt)
 endif()
 
 target_compile_options(vlc_whisper_plugin PRIVATE

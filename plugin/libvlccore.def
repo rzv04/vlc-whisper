@@ -9,4 +9,5 @@ vlc_list_release
 vout_OSDText
 var_Inherit
 var_Get
+config_GetPsz
 input_Control

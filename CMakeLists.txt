@@ -37,6 +37,7 @@ add_subdirectory(plugin)
 
 # Automated unit & integration tests
 if(BUILD_TESTING)
+    set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=all")
     include(CTest)
     enable_testing()
     add_subdirectory(tests)

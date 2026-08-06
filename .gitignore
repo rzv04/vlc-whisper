@@ -191,3 +191,5 @@ review.md
 .agents/mcp_config.json
 opencode.jsonc
 opencode.json
+
+.commandcode/

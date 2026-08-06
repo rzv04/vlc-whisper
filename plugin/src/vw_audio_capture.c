@@ -9,8 +9,7 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
     return false;
   }
 
-  // Guard against division by zero
-  if (input->sample_rate == 0) {
+  if (input->sample_rate == 0 || input->channels == 0) {
     return false;
   }
 

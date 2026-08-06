@@ -10,7 +10,7 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 
 - **Accept Connection Timeout**: 10 seconds (`vw_ipc_listen()` waits up to 10,000 ms for plugin connection, returning `NULL` on timeout).
 - **Frame Read / Write Timeout**: 3 seconds (`vw_ipc_receive()` and `vw_ipc_send()` enforce 3,000 ms timeout per I/O call on both POSIX and Win32).
-- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` for 3-second read timeout (connection remains open during video pause, receiver continues waiting), and `-1` for fatal error or peer disconnect (EOF / broken pipe).
+- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `-1` (`VW_IPC_RECV_TIMEOUT`) for a 3-second read timeout (connection remains open during video pause; the receiver should retry/keep waiting), and `-2` (`VW_IPC_RECV_FATAL`) for a fatal error or peer disconnect (EOF / broken pipe), after which the handle must be treated as dead.
 
 ## Terminology & Abbreviations
 
@@ -81,6 +81,7 @@ Worker to plugin. Payload: Empty (header only). Confirms session initialization 
 ### CONTROL MESSAGES (`PAUSE`, `RESUME`, `STOP`)
 
 Plugin to worker. Payload: session ID, `u16 reason`.
+
 - `PAUSE`: Suspends active transcription processing while preserving audio buffer timeline. Reason codes: `USER_PAUSE=1`.
 - `RESUME`: Resumes active transcription processing after pause. Reason codes: `USER_RESUME=1`.
 - `STOP`: Terminates active captioning session, clears buffers, and resets VAD state. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2`, `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
@@ -96,6 +97,7 @@ Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 
 ### ERROR
 
 Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_code`, `u8 recoverable`, `char message[256]` (safe redacted UTF-8 message).
+
 - If `recoverable == 0`: Fatal failure. Plugin disables captions for item, closes transport; VLC media playback continues uninterrupted.
 - If `recoverable == 1`: Non-fatal warning (e.g. `E_BACKPRESSURE`); plugin logs diagnostic, session continues.
 

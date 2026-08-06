@@ -16,21 +16,24 @@ capture module (C, non-blocking producer)
   | bounded in-process SPSC queue
   v
 IPC sender thread ---- local named pipe ---- worker.exe (C application)
-                                                  |
-                                             whisper.cpp C API
-                                                  |
+                                                   |
+                                            worker IPC reader thread (ADR-013)
+                                                   |
+                                              whisper.cpp C API (Model-once ADR-015)
+                                                   |
 caption receiver thread -- timed segments --> caption presenter (C)
-                                                  |
-                                             VLC subtitle/OSD path
+                                                   |
+                                              VLC subtitle/SPU/OSD path
 ```
 
-| Component                  | Owns                                                            | Must not do                                                  |
-| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
-| Capture module             | Audio-format validation, PTS mapping, bounded PCM enqueue       | Wait for worker, infer, write pipe, allocate per audio block |
-| IPC sender                 | Session handshake, PCM framing, queue drain, backpressure       | Call VLC presentation API                                    |
-| Worker                     | Model lifetime, VAD/windowing, inference, segment deduplication | Read arbitrary paths, expose network service, control VLC    |
-| Caption receiver/presenter | Validate worker messages, schedule/show/clear captions          | Trust malformed text/timestamps or block VLC playback        |
-| Supervisor                 | Worker start/stop/restart policy and status                     | Restart endlessly or conceal a fatal compatibility error     |
+| Component                     | Owns                                                           | Must not do                                                  |
+| ----------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
+| Capture module                | Audio-format validation, PTS mapping, bounded PCM enqueue      | Wait for worker, infer, write pipe, allocate per audio block |
+| IPC sender                    | Session handshake, PCM framing, queue drain, backpressure      | Call VLC presentation API                                    |
+| Worker IPC Reader (`ADR-013`) | Pipe frame reading, protocol validation, worker queue enqueue  | Block on whisper.cpp inference or delay transport reading    |
+| Worker Engine (`ADR-015`)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder | Read arbitrary paths, expose network service, control VLC    |
+| Caption receiver/presenter    | Validate worker messages, schedule/show/clear captions         | Trust malformed text/timestamps or block VLC playback        |
+| Supervisor                    | Worker start/stop/restart policy and status                    | Restart endlessly or conceal a fatal compatibility error     |
 
 ## Time and buffering
 
@@ -67,13 +70,13 @@ MVP seeking & discontinuity policy: when a non-monotonic PTS, seek event (`BLOCK
 
 ## IPC protocol
 
-Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit capability token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
+Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit authentication token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
 
 ### Transport Timeouts & Return Semantics
 
 - **Connection Accept Timeout**: 10 seconds. `vw_ipc_listen()` waits up to 10s (`poll()` on POSIX, `WaitForSingleObject` on Win32) for an incoming plugin connection before closing the socket/pipe and self-terminating (returns `NULL`).
 - **I/O Read/Write Timeout**: 3 seconds. `vw_ipc_receive()` and `vw_ipc_send()` enforce a 3-second timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO` on POSIX, overlapped `WaitForSingleObject(3000)` on Win32).
-- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` on 3s read timeout (allowing worker loop to continue waiting during long video pauses), and `-1` on fatal error or peer disconnect (EOF / broken pipe).
+- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `VW_IPC_RECV_TIMEOUT` (`-1`) on 3s read timeout (connection stays open; callers retry / keep waiting, e.g. during long video pauses), and `VW_IPC_RECV_FATAL` (`-2`) on fatal error or peer disconnect (EOF / broken pipe) — the handle is dead and the caller must abort.
 
 Each frame is binary and little-endian:
 
@@ -90,7 +93,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 
 | Type                      | Direction                | Required payload                                                                       |
 | ------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| `HELLO` / `HELLO_ACK`     | both                     | version range, session ID, 32-byte token, capabilities                                 |
+| `HELLO` / `HELLO_ACK`     | both                     | version range, 32-byte token, capabilities                                             |
 | `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin |
 | `AUDIO`                   | plugin -> worker         | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes                   |
 | `PAUSE`, `RESUME`, `STOP` | plugin -> worker         | session ID, reason where applicable                                                    |
@@ -103,6 +106,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 The worker manages models; the plugin knows only a model ID string (`tiny.en`).
 
 Incoming audio frames carry:
+
 - `pcm_data`: Raw sample bytes (S16LE, FL32, or S32LE)
 - `frame_count`: Number of audio frames in the block
 - `pts_us`: Signed 64-bit microsecond PTS
@@ -110,6 +114,7 @@ Incoming audio frames carry:
 - `channels`: e.g., 1 or 2
 
 Converted SPSC queue chunks carry:
+
 - `start_pts_us`: Signed 64-bit microsecond PTS
 - `duration_us`: Duration of the chunk in microseconds
 - `sample_rate`: 16000 Hz
@@ -118,6 +123,7 @@ Converted SPSC queue chunks carry:
 - `pcm_data`: `int16_t` inline sample array (zero allocation)
 
 Transcribed segments carry:
+
 - `segment_id`: Monotonic 64-bit integer per session
 - `start_pts_us` / `end_pts_us`: microsecond media timeline bounds
 - `is_final`: Boolean flag

@@ -164,6 +164,10 @@ To install and verify the VLC plugin manually on Windows:
 1. **Install DLL**: Copy the compiled `libvlc_whisper_plugin.dll` to your VLC installation's plugin directory:
    - Example path: `C:\Program Files\VideoLAN\VLC\plugins\misc\libvlc_whisper_plugin.dll`
 
+2. **Install Worker**: Copy the compiled `vlc-whisper-worker.exe` to your VLC installation's root directory:
+   - Example path: `C:\Program Files\VideoLAN\VLC\vlc-whisper-worker.exe`
+   - The plugin looks for the worker next to the plugin, up to three ancestor directories, and next to the VLC executable. If your layout places it elsewhere, set the module option `--vlc-whisper-worker-path` (a.k.a. `worker-path`) to its full path.
+
 2. **Reset Plugin Cache & Verify Registration**:
    Open Command Prompt or PowerShell and run:
 
