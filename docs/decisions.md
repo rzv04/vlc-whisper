@@ -126,3 +126,13 @@ Consequences:
 1. **Single Model Load**: Worker process loads the whisper engine once at startup (`shared->engine`) and reuses it across all seek epochs (`START_SESSION`).
 2. **Resource Ownership**: The engine is owned by the worker process and released only at worker process exit. Seeks reset audio buffers and builders without reloading model parameters from disk.
 
+## ADR-016: Native VLC SPU Subpicture Pipeline for Timed Captions
+
+**Status:** Accepted.
+
+In look-ahead transcription mode, the worker generates caption segments ahead of VLC's current playback position. Rather than building a custom caption queue and timing thread inside the plugin, the plugin delegates subpicture queuing and PTS-based display scheduling entirely to VLC's native SPU (Subpicture Subsystem) pipeline.
+
+Consequences:
+1. **No Plugin Caption Queue**: The plugin does not maintain an internal queue or timer loop for future captions.
+2. **Native Scheduling**: Transcribed segments received from IPC are converted directly to native VLC subpictures (`vout_RegisterSubpictureChannel` + `vout_PutSubpicture`) carrying exact `i_start` and `i_stop` media PTS timestamps. VLC handles precise frame-accurate rendering automatically.
+3. **Flushing on Discontinuity**: On seeking or rate changes, the plugin issues `vout_FlushSubpictureChannel` / `spu_ClearChannel` to purge all pre-rendered look-ahead captions from VLC's queue.

@@ -51,4 +51,18 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   return ret == 0;
 }
 
+bool vw_platform_thread_create(vw_thread_t* thread, void* (*func)(void*), void* arg) {
+  if (!thread || !func) return false;
+  return pthread_create(thread, NULL, func, arg) == 0;
+}
+
+void vw_platform_thread_join(vw_thread_t thread) { pthread_join(thread, NULL); }
+
+void vw_platform_sleep_ms(uint32_t ms) {
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (ms % 1000) * 1000000L;
+  nanosleep(&ts, NULL);
+}
+
 #endif

@@ -89,6 +89,8 @@ vlc-whisper/
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
+│   │   ├── test_audio_buffer.c                # PCM ring buffer float32 conversion & overflow tests
+│   │   ├── test_whisper_engine.c              # whisper.cpp model init & transcription unit tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion tests

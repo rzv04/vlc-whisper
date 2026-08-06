@@ -145,3 +145,4 @@ Transcribed segments carry:
 - Resource limits: worker memory capped by single model model allocation (~39 MB for `tiny.en`). Worker CPU thread count capped by configuration (default 2 threads).
 - Audio buffer limit: plugin drops audio chunks when the queue reaches 16 chunks (8 s capacity) rather than consuming unbounded memory.
 - Input bounds: header payload length strictly capped at 1 MB. Malformed UTF-8 text or impossible PTS values are rejected.
+- Caption queueing: plugin maintains no internal caption queue (ADR-016). Timed subpictures are submitted directly to VLC's native SPU pipeline (`vout_PutSubpicture`), which manages PTS display scheduling.

@@ -33,7 +33,9 @@ typedef struct vw_audio_chunk {
   uint32_t sample_rate;
   uint32_t channels;
   uint32_t bytes;                                  // actual PCM byte count
-  uint8_t pcm_data[VW_AUDIO_CHUNK_MAX_PCM_BYTES];  // fixed-size inline buffer
+  uint8_t pcm_data[VW_AUDIO_CHUNK_MAX_PCM_BYTES];  // fixed-size inline buffer, approximately 512ms of 16kHz Mono S16LE
+                                                   // audio, VLC usually provides ~20-40ms blocks (excepting the
+                                                   // first/last blocks which may be longer or shorter)
 } vw_audio_chunk_t;
 
 // Supported raw audio formats provided by VLC

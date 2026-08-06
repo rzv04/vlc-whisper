@@ -66,7 +66,12 @@ typedef struct __attribute__((packed)) {
 } vw_chunk_header_t;
 
 typedef struct vw_audio_buffer {
-  size_t max_samples;
+  float* samples;            // Ring buffer array of float32 samples [-1.0, 1.0]
+  size_t max_samples;        // Maximum capacity in samples (e.g., 160000 for 10s at 16kHz)
+  size_t head;               // Write index in ring buffer
+  size_t count;              // Current sample count in buffer
+  int64_t start_pts_us;      // Media presentation timestamp of the oldest sample
+  uint64_t dropped_samples;  // Cumulative count of dropped samples due to ring buffer overflow
 } vw_audio_buffer_t;
 
 // Allocates a new audio buffer capable of holding the specified maximum number of PCM samples.
@@ -80,5 +85,19 @@ void vw_audio_buffer_free(vw_audio_buffer_t* buf);
 // Appends 16-bit integer PCM samples (S16LE) received from IPC to the worker's internal buffer.
 // Implicitly converts the compact 16-bit IPC integer format into 32-bit floats required by whisper.cpp.
 bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, size_t sample_count, int64_t pts_us);
+
+// Returns current sample count stored in the audio buffer.
+size_t vw_audio_buffer_get_count(const vw_audio_buffer_t* buf);
+
+// Copies up to max_out float32 samples from the buffer into out_samples starting from the oldest sample.
+// Returns the number of samples copied and sets out_pts_us to the timestamp of the first copied sample.
+size_t vw_audio_buffer_get_samples(const vw_audio_buffer_t* buf, float* out_samples, size_t max_out,
+                                   int64_t* out_pts_us);
+
+// Drains/discards sample_count oldest samples from the buffer, advancing start_pts_us accordingly.
+void vw_audio_buffer_drain(vw_audio_buffer_t* buf, size_t sample_count);
+
+// Clears all stored samples and resets buffer state to empty.
+void vw_audio_buffer_clear(vw_audio_buffer_t* buf);
 
 #endif  // VW_AUDIO_BUFFER_H_

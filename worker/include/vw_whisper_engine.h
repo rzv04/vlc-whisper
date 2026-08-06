@@ -6,11 +6,22 @@
 #include <stdint.h>
 
 typedef struct vw_whisper_engine {
-  void* ctx;
+  struct whisper_context* ctx;  // Opaque whisper.cpp context
+  char* last_text;              // Concatenated UTF-8 output of last transcribe run
+  size_t last_text_bytes;       // Capacity of last_text buffer
 } vw_whisper_engine_t;
 
+// Initializes whisper.cpp engine instance from the specified model file path (ADR-015: model-once lifetime).
+// Runs a silent warmup inference pass on load. Returns NULL if model file is missing or invalid.
 vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path);
+
+// Safely destroys whisper.cpp engine instance and frees associated model memory.
 void vw_whisper_engine_free(vw_whisper_engine_t* engine);
+
+// Runs whisper.cpp transcription on normalized float32 PCM samples at 16kHz.
 bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm32, size_t sample_count);
+
+// Returns pointer to concatenated UTF-8 text from the last transcribe run, or "" if empty/NULL.
+const char* vw_whisper_engine_get_text(const vw_whisper_engine_t* engine);
 
 #endif  // VW_WHISPER_ENGINE_H_
