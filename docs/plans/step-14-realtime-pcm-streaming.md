@@ -114,13 +114,13 @@ Manual (14b): `vlc -vvv --audio-filter=vlc_whisper <video>` → logs show START/
 
 ## Execution order (14a, this branch)
 
-1. Persist this plan to `docs/plans/step14_plan.md` (AGENTS.md rule 9) and split roadmap item 14 into 14a/14b.
-2. Platform thread helpers (`vw_platform.h` + linux/win32) + unit tests.
-3. Real `vw_audio_buffer` + tests.
-4. Segment builder `pop` accessor + tests.
-5. Real `vw_whisper_engine` + model-gated tests.
-6. Worker session pipeline: START/STARTED, AUDIO ingest, reader/inference threads, windowing + VAD, SEGMENT emission, ERROR/STATUS paths.
-7. Integration tests (START/AUDIO/STOP/SHUTDOWN; model-gated vs ERROR paths).
-8. Docs (architecture, decisions, source-layout, roadmap checkbox), full verification, commit, push.
+0. Plan bookkeeping — done: this plan is persisted in-project at `docs/plans/step-14-realtime-pcm-streaming.md` (commit `7aa66cf`); the roadmap `14` → `14a`/`14b` split is restored in the working tree (uncommitted, to be folded into the first 14a commit).
+1. Platform thread helpers (`vw_platform.h` + linux/win32) + unit tests.
+2. Real `vw_audio_buffer` + tests.
+3. Segment builder `pop` accessor + tests.
+4. Real `vw_whisper_engine` + model-gated tests.
+5. Worker session pipeline: START/STARTED, AUDIO ingest, reader/inference threads, windowing + VAD, SEGMENT emission, ERROR/STATUS paths.
+6. Integration tests (START/AUDIO/STOP/SHUTDOWN; model-gated vs ERROR paths).
+7. Docs (architecture, decisions, source-layout, roadmap checkbox), full verification, commit, push.
 
 Then open/merge 14a before starting 14b on `gemini/milestone-3-step-14b`.
