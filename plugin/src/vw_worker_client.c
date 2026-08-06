@@ -3,6 +3,7 @@
 
 #include "vw_worker_client.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -118,19 +119,26 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (!vw_protocol_decode_header(ack_hdr_buf, sizeof(ack_hdr_buf), &ack_hdr)) goto fail;  // validates header too
   if (ack_hdr.type != VW_MSG_HELLO_ACK) goto fail;
 
-  if (ack_hdr.payload_length > 0 && ack_hdr.payload_length <= 1024) {
-    uint8_t* ack_payload = (uint8_t*)malloc(ack_hdr.payload_length);
-    if (!ack_payload) goto fail;
-    bool decoded = receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us);
-    if (decoded) {
-      vw_msg_hello_ack_t ack;
-      decoded = vw_protocol_decode_payload(VW_MSG_HELLO_ACK, ack_payload, ack_hdr.payload_length, &ack);
-    }
-    free(ack_payload);
-    if (!decoded) goto fail;
+  if (ack_hdr.payload_length == 0 || ack_hdr.payload_length > 1024) {
+    goto fail;
   }
+  uint8_t* ack_payload = (uint8_t*)malloc(ack_hdr.payload_length);
+  if (!ack_payload) goto fail;
+  bool ack_ok = receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us);
+  vw_msg_hello_ack_t ack = {0};
+  if (ack_ok) {
+    ack_ok = vw_protocol_decode_payload(VW_MSG_HELLO_ACK, ack_payload, ack_hdr.payload_length, &ack);
+  }
+  if (ack_ok) {
+    ack_ok = vw_protocol_validate_payload(VW_MSG_HELLO_ACK, &ack);
+  }
+  if (ack_ok) {
+    if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
+    if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
+  }
+  free(ack_payload);
+  if (!ack_ok) goto fail;
 
-  // validate the version major
   if (ack_hdr.major != VW_PROTOCOL_VERSION_MAJOR) {
     goto fail;
   }

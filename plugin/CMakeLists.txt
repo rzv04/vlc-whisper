@@ -25,6 +25,9 @@ target_include_directories(vlc_whisper_plugin PRIVATE
 target_link_libraries(vlc_whisper_plugin PRIVATE
     vw_protocol
 )
+if(UNIX AND NOT APPLE)
+  target_link_libraries(vlc_whisper_plugin PRIVATE dl)
+endif()
 
 if(WIN32)
     # Windows DLLs require an import library to resolve external symbols.

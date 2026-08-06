@@ -40,6 +40,7 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 #include <process.h>
 #include <windows.h>
 #else
+#include <dlfcn.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -49,6 +50,153 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 #include "vw_platform.h"
 #include "vw_queue.h"
 #include "vw_worker_client.h"
+
+static int vw_plugin_open(vlc_object_t* obj);
+static void vw_plugin_close(vlc_object_t* obj);
+
+static char vw_plugin_dl_anchor;
+
+static bool vw_plugin_path_exists(const char* path) {
+#ifdef _WIN32
+  DWORD attr = GetFileAttributesA(path);
+  return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
+  return access(path, F_OK) == 0;
+#endif
+}
+
+static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
+#ifdef _WIN32
+  const char* worker_name = "vlc-whisper-worker.exe";
+  char plugin_path[MAX_PATH];
+  HMODULE hmod = NULL;
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         (LPCSTR)(void*)vw_plugin_open, &hmod) &&
+      hmod) {
+    DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
+    if (len > 0 && len < sizeof(plugin_path)) {
+      char* slash = strrchr(plugin_path, '\\');
+      char* slash2 = strrchr(plugin_path, '/');
+      if (slash2 && (!slash || slash2 > slash)) slash = slash2;
+      size_t dir_len = slash ? (size_t)(slash - plugin_path) : 0;
+      if (dir_len > 0) {
+        for (int up = 0; up <= 3; ++up) {
+          size_t try_len = dir_len;
+          for (int k = 0; k < up; ++k) {
+            if (try_len == 0) break;
+            char* last = NULL;
+            for (size_t i = 0; i < try_len; ++i) {
+              if (plugin_path[i] == '\\' || plugin_path[i] == '/') last = plugin_path + i;
+            }
+            if (!last) {
+              try_len = 0;
+              break;
+            }
+            try_len = (size_t)(last - plugin_path);
+          }
+          if (up > 0 && try_len == 0) continue;
+          size_t need = try_len + 1 + strlen(worker_name) + 1;
+          if (need > out_size) continue;
+          char candidate[MAX_PATH];
+          memcpy(candidate, plugin_path, try_len);
+          candidate[try_len] = '\\';
+          strcpy(candidate + try_len + 1, worker_name);
+          if (vw_plugin_path_exists(candidate)) {
+            strcpy(out, candidate);
+            return true;
+          }
+        }
+      }
+    }
+  }
+  char exe_path[MAX_PATH];
+  DWORD elen = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
+  if (elen > 0 && elen < sizeof(exe_path)) {
+    char* slash = strrchr(exe_path, '\\');
+    char* slash2 = strrchr(exe_path, '/');
+    if (slash2 && (!slash || slash2 > slash)) slash = slash2;
+    if (slash) {
+      size_t dir_len = (size_t)(slash - exe_path);
+      size_t need = dir_len + 1 + strlen(worker_name) + 1;
+      if (need <= out_size) {
+        char candidate[MAX_PATH];
+        memcpy(candidate, exe_path, dir_len);
+        candidate[dir_len] = '\\';
+        strcpy(candidate + dir_len + 1, worker_name);
+        if (vw_plugin_path_exists(candidate)) {
+          strcpy(out, candidate);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+#else
+  const char* worker_name = "vlc-whisper-worker";
+  Dl_info info;
+  if (dladdr((void*)&vw_plugin_dl_anchor, &info) && info.dli_fname && info.dli_fname[0]) {
+    const char* fname = info.dli_fname;
+    const char* slash = strrchr(fname, '/');
+    size_t dir_len = slash ? (size_t)(slash - fname) : 0;
+    for (int up = 0; up <= 4; ++up) {
+      size_t try_len = dir_len;
+      for (int k = 0; k < up; ++k) {
+        if (try_len == 0) break;
+        const char* last = NULL;
+        for (size_t i = 0; i < try_len; ++i) {
+          if (fname[i] == '/') last = fname + i;
+        }
+        if (!last) {
+          try_len = 0;
+          break;
+        }
+        try_len = (size_t)(last - fname);
+      }
+      char candidate[1024];
+      if (try_len == 0) {
+        if (up != 0) continue;
+        snprintf(candidate, sizeof(candidate), "%s", worker_name);
+      } else {
+        size_t need = try_len + 1 + strlen(worker_name) + 1;
+        if (need > sizeof(candidate)) continue;
+        memcpy(candidate, fname, try_len);
+        candidate[try_len] = '/';
+        strcpy(candidate + try_len + 1, worker_name);
+      }
+      if (vw_plugin_path_exists(candidate)) {
+        if (strlen(candidate) + 1 > out_size) return false;
+        strcpy(out, candidate);
+        return true;
+      }
+    }
+  }
+#ifdef __linux__
+  char exe_path[4096];
+  ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (n > 0) {
+    exe_path[n] = '\0';
+    char* slash = strrchr(exe_path, '/');
+    if (slash) {
+      size_t dir_len = (size_t)(slash - exe_path);
+      char candidate[4096];
+      size_t need = dir_len + 1 + strlen(worker_name) + 1;
+      if (need <= sizeof(candidate)) {
+        memcpy(candidate, exe_path, dir_len);
+        candidate[dir_len] = '/';
+        strcpy(candidate + dir_len + 1, worker_name);
+        if (vw_plugin_path_exists(candidate)) {
+          if (strlen(candidate) + 1 <= out_size) {
+            strcpy(out, candidate);
+            return true;
+          }
+        }
+      }
+    }
+  }
+#endif
+  return false;
+#endif
+}
 
 // Plugin instance state
 typedef struct {
@@ -123,11 +271,16 @@ static int vw_plugin_open(vlc_object_t* obj) {
 
 #ifdef _WIN32
   snprintf(sys->pipe_name, sizeof(sys->pipe_name), "\\\\.\\pipe\\vlc-whisper-%lu", (unsigned long)_getpid());
-  snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker.exe");
 #else
   snprintf(sys->pipe_name, sizeof(sys->pipe_name), "/tmp/vlc-whisper-%ld.sock", (long)getpid());
-  snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker");
 #endif
+  if (!vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
+#ifdef _WIN32
+    snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker.exe");
+#else
+    snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker");
+#endif
+  }
 
   if (!vw_platform_get_random_bytes(sys->auth_token, VW_AUTH_TOKEN_BYTES)) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_RNG_FAIL", "failed to generate random auth_token");

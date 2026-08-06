@@ -19,8 +19,7 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size) {
   // memset(buffer, 0x42, size);
 
   // generate a random size-byte (32) token for authentication
-  NTSTATUS status =
-      BCryptGenRandom(BCRYPT_RNG_ALG_HANDLE, (PUCHAR)buffer, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
   if (status != CMC_STATUS_SUCCESS) {
     return false;
   }
@@ -89,7 +88,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   si.cb = sizeof(si);
   ZeroMemory(&pi, sizeof(pi));
 
-  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
   free(wcmd);
 
   if (!success) {

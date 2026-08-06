@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, "gemini/*"]
   pull_request:
-    branches: [main]
+    branches: [main, "gemini/*"]
 
 permissions:
   contents: read
