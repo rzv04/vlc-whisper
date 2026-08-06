@@ -154,4 +154,8 @@ typedef struct vw_caption_segment {  // worker to plugin
   uint16_t text_bytes;
 } vw_caption_segment_t;
 
+// Wire size of vw_caption_segment_t's fixed fields (session 16 + id 8 + start 8 + end 8 + is_final 1 + text_bytes 2),
+// used by emitters to size the encode buffer for a max-length caption segment.
+#define VW_CAPTION_SEGMENT_FIXED_BYTES 43
+
 #endif  // VW_PROTOCOL_TYPES_H_

@@ -51,7 +51,7 @@ Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capa
 
 ### START
 
-Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), and source-kind enum (`LOCAL_FILE=1`). `STARTED` either confirms effective settings or responds with `ERROR`.
+Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), and source-kind enum (`LOCAL_FILE=1`). `STARTED` either confirms effective settings or responds with `ERROR`. The worker rejects a `START` whose `sample_rate` is not 16000 with an `E_AUDIO_FORMAT` `ERROR`; a duplicate `START` without a preceding `STOP` is ignored.
 
 ### AUDIO
 

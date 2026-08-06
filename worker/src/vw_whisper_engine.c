@@ -82,7 +82,7 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
     if (written + len + 2 >= engine->last_text_bytes) {
       size_t new_cap = engine->last_text_bytes * 2 + len + 2;
       char* new_buf = (char*)realloc(engine->last_text, new_cap);
-      if (!new_buf) break;
+      if (!new_buf) return false;  // return false instead of shipping truncated text
       engine->last_text = new_buf;
       engine->last_text_bytes = new_cap;
     }
