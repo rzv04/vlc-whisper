@@ -27,7 +27,11 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size) {
 }
 
 int64_t vw_platform_get_time_us(void) {
-  return (int64_t)time(NULL) * 1000000;  // Return seconds since epoch in microseconds
+  struct timespec ts;
+  if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+    return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
+  }
+  return (int64_t)time(NULL) * 1000000LL;
 }
 
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
@@ -75,6 +79,8 @@ bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
   }
   return false;
 }
+
+void vw_platform_close_process(vw_process_t process) { (void)process; }
 
 bool vw_platform_thread_create(vw_thread_t* thread, void* (*func)(void*), void* arg) {
   if (!thread || !func) return false;

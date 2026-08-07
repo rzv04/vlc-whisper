@@ -29,6 +29,9 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
 // Returns true if the process terminated within the timeout, false if it timed out or an error occurred.
 bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms);
 
+// Closes and releases any OS process handle resources associated with the process handle.
+void vw_platform_close_process(vw_process_t process);
+
 // Platform thread handle type
 #if defined(_WIN32)
 typedef void* vw_thread_t;

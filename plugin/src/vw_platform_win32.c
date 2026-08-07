@@ -114,6 +114,12 @@ bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
   return result == WAIT_OBJECT_0;
 }
 
+void vw_platform_close_process(vw_process_t process) {
+  if (process && process != INVALID_HANDLE_VALUE) {
+    CloseHandle((HANDLE)process);
+  }
+}
+
 typedef struct {
   void* (*func)(void*);
   void* arg;

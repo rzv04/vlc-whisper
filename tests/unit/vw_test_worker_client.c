@@ -17,7 +17,7 @@
 // 3. Receives START_SESSION and replies with STARTED after 100ms delay.
 // 4. Receives AUDIO_PCM message using custom transport receive timeout.
 // 5. Receives STOP_SESSION and SHUTDOWN control frames.
-static void* fake_server_thread(void* arg) {
+static void* vw_fake_server_thread(void* arg) {
   const char* endpoint = (const char*)arg;
   vw_ipc_handle_t* server = vw_ipc_listen(endpoint);
   if (!server) return (void*)1;
@@ -137,7 +137,7 @@ int main(void) {
 
   // Start in-process mock IPC server
   pthread_t thread;
-  int err = pthread_create(&thread, NULL, fake_server_thread, (void*)pipe_name);
+  int err = pthread_create(&thread, NULL, vw_fake_server_thread, (void*)pipe_name);
   EXPECT(err == 0);
 
   vw_platform_sleep_ms(100);

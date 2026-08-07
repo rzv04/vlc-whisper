@@ -25,7 +25,12 @@
 static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
   size_t got = 0;
   while (got < len) {
-    int32_t res = vw_ipc_receive(ipc, buf + got, len - got);
+    int64_t now_us = vw_platform_get_time_us();
+    if (now_us >= deadline_us) return false;
+    uint32_t remaining_us = (uint32_t)(deadline_us - now_us);
+    uint32_t timeout_us = (remaining_us < 3000000U) ? remaining_us : 3000000U;
+
+    int32_t res = vw_ipc_receive_timeout(ipc, buf + got, len - got, timeout_us);
     if (res < 0) {
       if (res == VW_IPC_RECV_TIMEOUT) {  // timeout — keep waiting, bounded by the deadline
         if (vw_platform_get_time_us() >= deadline_us) return false;
@@ -75,7 +80,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   }
   if (!ipc) {
     if (worker_process) {
-      vw_platform_wait_process(worker_process, 100);
+      vw_platform_wait_process(worker_process, 1000);
+      vw_platform_close_process(worker_process);
     }
     return NULL;
   }
@@ -83,6 +89,10 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   vw_worker_client_t* client = (vw_worker_client_t*)calloc(1, sizeof(vw_worker_client_t));
   if (!client) {
     vw_ipc_close(ipc);
+    if (worker_process) {
+      vw_platform_wait_process(worker_process, 1000);
+      vw_platform_close_process(worker_process);
+    }
     return NULL;
   }
   client->pipe_handle = ipc;
@@ -165,6 +175,7 @@ void vw_worker_client_disconnect(vw_worker_client_t* client) {
     }
     if (client->worker_process) {
       vw_platform_wait_process(client->worker_process, 5000);
+      vw_platform_close_process(client->worker_process);
     }
     free(client);
   }
@@ -277,11 +288,13 @@ void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason) 
                              .sequence = ++client->sequence};
     uint8_t hdr_buf[sizeof(vw_frame_header_t)];
     if (vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) {
-      vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf));
-      vw_ipc_send(client->pipe_handle, payload_buf, payload_len);
+      bool ok1 = vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf));
+      bool ok2 = vw_ipc_send(client->pipe_handle, payload_buf, payload_len);
+      if (ok1 && ok2) {
+        client->session_active = false;
+      }
     }
   }
-  client->session_active = false;
 }
 
 void vw_worker_client_shutdown(vw_worker_client_t* client) {
