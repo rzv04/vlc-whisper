@@ -30,7 +30,9 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk);
 
 // Sends a STOP control frame over IPC to request the worker to stop processing the current caption session.
-// The 'reason' argument can include in the future, SEEK_DISCONTINUITY
+// The 'reason' argument can include in the future, SEEK_DISCONTINUITY.
+// If either frame write fails, the transport is dropped: the client's pipe becomes unusable and a new client
+// must be created (the worker may be mid-frame and the stream can never be reframed).
 void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason);
 
 // Sends a SHUTDOWN frame over IPC instructing the worker process to cleanly terminate its main event loop.

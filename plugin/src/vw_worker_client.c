@@ -50,6 +50,19 @@ static void token_to_hex(const uint8_t tok[VW_AUTH_TOKEN_BYTES], char out[VW_AUT
   }
 }
 
+// A frame send that fails part-way leaves the byte stream dead or desynced
+// (e.g. header written but payload not: the worker waits for the declared
+// payload and would consume the next frame as it). Such a connection can
+// never be reframed, so close it and mark the client unusable: every later
+// API call fails fast instead of mis-framing the next message.
+static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
+  if (client && client->pipe_handle) {
+    vw_ipc_close((vw_ipc_handle_t*)client->pipe_handle);
+    client->pipe_handle = NULL;
+    client->session_active = false;
+  }
+}
+
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES]) {
   if (!endpoint_name || !auth_token) {
@@ -218,8 +231,10 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   uint8_t hdr_buf[sizeof(vw_frame_header_t)];
   if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
   if (!vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf)) ||
-      !vw_ipc_send(client->pipe_handle, payload_buf, payload_len))
+      !vw_ipc_send(client->pipe_handle, payload_buf, payload_len)) {
+    vw_worker_client_drop_transport(client);
     return false;
+  }
 
   const int64_t deadline_us =
       vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the HELLO/HELLO_ACK handshake reads
@@ -277,8 +292,14 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
   uint8_t hdr_buf[sizeof(vw_frame_header_t)];
   if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
 
-  if (!vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf))) return false;
-  if (!vw_ipc_send(client->pipe_handle, payload_buf, payload_len)) return false;
+  if (!vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf))) {
+    vw_worker_client_drop_transport(client);
+    return false;
+  }
+  if (!vw_ipc_send(client->pipe_handle, payload_buf, payload_len)) {
+    vw_worker_client_drop_transport(client);
+    return false;
+  }
 
   return true;
 }
@@ -301,6 +322,12 @@ void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason) 
       bool ok2 = vw_ipc_send(client->pipe_handle, payload_buf, payload_len);
       if (ok1 && ok2) {
         client->session_active = false;
+      } else {
+        // Header-only or no-op write: the stream is desynced (worker waits
+        // for the declared STOP payload) or dead. Never leave session_active
+        // set against a mis-framed connection — drop it so a replacement
+        // session cannot be started on a stream that will eat its frames.
+        vw_worker_client_drop_transport(client);
       }
     }
   }

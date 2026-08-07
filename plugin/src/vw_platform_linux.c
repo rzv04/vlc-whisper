@@ -93,8 +93,11 @@ void vw_platform_terminate_process(vw_process_t process) {
   if (process > 0) {
     pid_t pid = (pid_t)process;
     kill(pid, SIGKILL);
-    int status;
-    waitpid(pid, &status, WNOHANG);
+    // SIGKILL delivery is asynchronous: a single nonblocking waitpid can
+    // observe the child before it becomes waitable and leave a zombie until
+    // the parent exits. Wait (bounded) for the reap; a D-state child may
+    // never die, so cap the wait like vw_platform_wait_process.
+    (void)vw_platform_wait_process(process, 1000);
   }
 }
 
