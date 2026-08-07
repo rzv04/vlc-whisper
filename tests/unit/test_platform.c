@@ -49,22 +49,26 @@ int main(void) {
   EXPECT(llabs(t1 - now_us) < 5000000);
 
   // --- vw_platform_spawn_process ---
-  EXPECT(!vw_platform_spawn_process(NULL, NULL));
+  EXPECT(!vw_platform_spawn_process(NULL, NULL, NULL));
 
   const char* argv_ok[] = {kSpawnOk, NULL};
-  EXPECT(vw_platform_spawn_process(kSpawnOk, argv_ok));
+  EXPECT(vw_platform_spawn_process(kSpawnOk, argv_ok, NULL));
+
+  vw_process_t proc = 0;
+  EXPECT(vw_platform_spawn_process(kSpawnOk, argv_ok, &proc));
+  EXPECT(vw_platform_wait_process(proc, 2000));
 
   // Failure paths: partial-NULL arguments must be rejected
-  EXPECT(!vw_platform_spawn_process(NULL, argv_ok));   // NULL executable
-  EXPECT(!vw_platform_spawn_process(kSpawnOk, NULL));  // NULL argv
+  EXPECT(!vw_platform_spawn_process(NULL, argv_ok, NULL));   // NULL executable
+  EXPECT(!vw_platform_spawn_process(kSpawnOk, NULL, NULL));  // NULL argv
 
   const char* argv_missing[] = {kSpawnMissing, NULL};
-  EXPECT(!vw_platform_spawn_process(kSpawnMissing, argv_missing));  // non-existent executable
+  EXPECT(!vw_platform_spawn_process(kSpawnMissing, argv_missing, NULL));  // non-existent executable
 
 #ifndef _WIN32
   // Bare-name spawn must use PATH search (posix_spawnp), independent of CWD.
   const char* argv_bare[] = {kSpawnBarePath, NULL};
-  EXPECT(vw_platform_spawn_process(kSpawnBarePath, argv_bare));
+  EXPECT(vw_platform_spawn_process(kSpawnBarePath, argv_bare, NULL));
 #endif
 
   return 0;

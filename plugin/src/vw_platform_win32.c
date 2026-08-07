@@ -37,7 +37,7 @@ int64_t vw_platform_get_time_us(void) {
   return (int64_t)((uli.QuadPart - 116444736000000000ULL) / 10);
 }
 
-bool vw_platform_spawn_process(const char* executable_path, const char* const argv[]) {
+bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
   if (!executable_path || !argv) {
     return false;
   }
@@ -98,9 +98,20 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   // Close thread handle immediately as it's not needed
   CloseHandle(pi.hThread);
 
-  // Close process handle when finished
-  CloseHandle(pi.hProcess);
+  // Close process handle if not requested, otherwise return it
+  if (out_process) {
+    *out_process = pi.hProcess;
+  } else {
+    CloseHandle(pi.hProcess);
+  }
   return true;
+}
+
+bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
+  if (!process || process == INVALID_HANDLE_VALUE) return false;
+  HANDLE hProcess = (HANDLE)process;
+  DWORD result = WaitForSingleObject(hProcess, timeout_ms);
+  return result == WAIT_OBJECT_0;
 }
 
 typedef struct {

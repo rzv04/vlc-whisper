@@ -7,6 +7,13 @@
 
 // Platform abstraction layer for random bytes and time functions
 
+// Platform process handle type
+#if defined(_WIN32)
+typedef void* vw_process_t;
+#else
+typedef int vw_process_t;
+#endif
+
 // Generates cryptographically secure random bytes and fills the provided buffer with them.
 bool vw_platform_get_random_bytes(void* buffer, size_t size);
 
@@ -14,8 +21,13 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size);
 int64_t vw_platform_get_time_us(void);
 
 // Spawns a new process with the given executable path and arguments. Returns true on success, false on failure.
+// If out_process is not NULL, the handle/PID of the spawned process is stored in it.
 // `argv` must be NULL-terminated (like main/execve); argv[0] is the program name and is not passed as an argument.
-bool vw_platform_spawn_process(const char* executable_path, const char* const argv[]);
+bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process);
+
+// Waits for the specified process to terminate, up to timeout_ms milliseconds.
+// Returns true if the process terminated within the timeout, false if it timed out or an error occurred.
+bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms);
 
 // Platform thread handle type
 #if defined(_WIN32)

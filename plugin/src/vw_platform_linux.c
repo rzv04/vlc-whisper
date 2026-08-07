@@ -1,8 +1,10 @@
 #if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -28,7 +30,7 @@ int64_t vw_platform_get_time_us(void) {
   return (int64_t)time(NULL) * 1000000;  // Return seconds since epoch in microseconds
 }
 
-bool vw_platform_spawn_process(const char* executable_path, const char* const argv[]) {
+bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
   if (!executable_path || !argv) {
     return false;
   }
@@ -38,6 +40,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   if (!strchr(executable_path, '/')) {
     pid_t pid;
     int ret = posix_spawnp(&pid, executable_path, NULL, NULL, (char* const*)argv, NULL);
+    if (ret == 0 && out_process) *out_process = pid;
     return ret == 0;
   }
 
@@ -48,7 +51,29 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   pid_t pid;
   // NULL envp: child inherits the parent environment
   int ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, NULL);
+  if (ret == 0 && out_process) *out_process = pid;
   return ret == 0;
+}
+
+bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
+  pid_t pid = process;
+  uint32_t elapsed_ms = 0;
+  uint32_t sleep_ms = 10;
+
+  while (elapsed_ms <= timeout_ms) {
+    int status;
+    pid_t ret = waitpid(pid, &status, WNOHANG);
+    if (ret == pid) {
+      return true;
+    } else if (ret == -1) {
+      if (errno == ECHILD) return true;
+    }
+
+    if (elapsed_ms >= timeout_ms) break;
+    vw_platform_sleep_ms(sleep_ms);
+    elapsed_ms += sleep_ms;
+  }
+  return false;
 }
 
 bool vw_platform_thread_create(vw_thread_t* thread, void* (*func)(void*), void* arg) {

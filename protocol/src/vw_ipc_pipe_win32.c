@@ -95,6 +95,10 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
 }
 
 int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) {
+  return vw_ipc_receive_timeout(handle, buffer, buffer_size, 3000000);
+}
+
+int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size, uint32_t timeout_us) {
   if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE) return VW_IPC_RECV_FATAL;
   HANDLE pipe = (HANDLE)handle->pipe_handle;
 
@@ -108,7 +112,7 @@ int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size
   if (!res) {
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
-      if (WaitForSingleObject(ov.hEvent, 3000) == WAIT_OBJECT_0) {
+      if (WaitForSingleObject(ov.hEvent, timeout_us / 1000) == WAIT_OBJECT_0) {
         GetOverlappedResult(pipe, &ov, &bytes_read, FALSE);
         res = TRUE;
       } else {
