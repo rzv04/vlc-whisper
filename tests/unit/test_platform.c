@@ -6,6 +6,11 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef _WIN32
+#include <errno.h>
+#include <signal.h>
+#endif
+
 #include "vw_platform.h"
 #include "vw_test.h"
 
@@ -75,6 +80,20 @@ int main(void) {
   // Bare-name spawn must use PATH search (posix_spawnp), independent of CWD.
   const char* argv_bare[] = {kSpawnBarePath, NULL};
   EXPECT(vw_platform_spawn_process(kSpawnBarePath, argv_bare, NULL));
+#endif
+
+  // --- vw_platform_terminate_process reaps the child ---
+  // A SIGKILLed child must be fully reaped (no zombie): wait_process after
+  // terminate must succeed, and the pid must no longer exist. This exercises
+  // the SIGKILL + bounded-reap path in terminate_process.
+#ifndef _WIN32
+  const char* argv_sleep[] = {"/bin/sleep", "30", NULL};
+  vw_process_t sleeper = 0;
+  EXPECT(vw_platform_spawn_process("/bin/sleep", argv_sleep, &sleeper));
+  EXPECT(sleeper > 0);
+  vw_platform_terminate_process(sleeper);
+  EXPECT(vw_platform_wait_process(sleeper, 2000));          // reaped, not left a zombie
+  EXPECT(kill((pid_t)sleeper, 0) == -1 && errno == ESRCH);  // process fully gone
 #endif
 
   return 0;

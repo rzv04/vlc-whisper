@@ -10,6 +10,33 @@
 #include <unistd.h>
 
 #include "vw_platform.h"
+
+// PIDs of children that were SIGKILLed but did not become waitable within the
+// termination grace period (e.g. stuck in D-state). They are reaped
+// opportunistically at every platform process call once they become waitable;
+// a pid is never discarded while its child is still unreaped.
+#define VW_MAX_UNREAPED_PIDS 16
+static pid_t vw_unreaped_pids[VW_MAX_UNREAPED_PIDS];
+static size_t vw_unreaped_count = 0;
+
+// Reap any previously-unkillable children that have since become waitable.
+// Called from every process entry point; WNOHANG never blocks, and the plugin
+// is single-threaded so no locking is required. ECHILD (reaped elsewhere, e.g.
+// a SIGCHLD handler) also removes the entry.
+static void vw_platform_reap_unreaped(void) {
+  size_t i = 0;
+  while (i < vw_unreaped_count) {
+    int status;
+    pid_t ret = waitpid(vw_unreaped_pids[i], &status, WNOHANG);
+    if (ret == vw_unreaped_pids[i] || (ret == -1 && errno == ECHILD)) {
+      vw_unreaped_pids[i] = vw_unreaped_pids[vw_unreaped_count - 1];
+      vw_unreaped_count--;
+    } else {
+      i++;
+    }
+  }
+}
+
 bool vw_platform_get_random_bytes(void* buffer, size_t size) {
   if (!buffer || size == 0) {
     return false;
@@ -44,6 +71,7 @@ int64_t vw_platform_get_monotonic_time_us(void) {
 }
 
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
+  vw_platform_reap_unreaped();
   if (!executable_path || !argv) {
     return false;
   }
@@ -69,6 +97,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
 }
 
 bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
+  vw_platform_reap_unreaped();
   pid_t pid = process;
   uint32_t elapsed_ms = 0;
   uint32_t sleep_ms = 10;
@@ -92,12 +121,19 @@ bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
 void vw_platform_terminate_process(vw_process_t process) {
   if (process > 0) {
     pid_t pid = (pid_t)process;
+    vw_platform_reap_unreaped();
     kill(pid, SIGKILL);
     // SIGKILL delivery is asynchronous: a single nonblocking waitpid can
     // observe the child before it becomes waitable and leave a zombie until
-    // the parent exits. Wait (bounded) for the reap; a D-state child may
-    // never die, so cap the wait like vw_platform_wait_process.
-    (void)vw_platform_wait_process(process, 1000);
+    // the parent exits. Wait (bounded) for the reap; a D-state child may not
+    // die within the grace period. Never discard the pid in that case — keep
+    // it registered so vw_platform_reap_unreaped reaps it once it becomes
+    // waitable (a pending SIGKILL kills it as soon as it leaves D-state).
+    if (!vw_platform_wait_process(process, 1000)) {
+      if (vw_unreaped_count < VW_MAX_UNREAPED_PIDS) {
+        vw_unreaped_pids[vw_unreaped_count++] = pid;
+      }
+    }
   }
 }
 
