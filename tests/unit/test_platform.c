@@ -48,6 +48,12 @@ int main(void) {
   int64_t now_us = (int64_t)time(NULL) * 1000000;
   EXPECT(llabs(t1 - now_us) < 5000000);
 
+  // --- vw_platform_get_monotonic_time_us ---
+  int64_t mt1 = vw_platform_get_monotonic_time_us();
+  EXPECT(mt1 > 0);
+  int64_t mt2 = vw_platform_get_monotonic_time_us();
+  EXPECT(mt2 >= mt1);
+
   // --- vw_platform_spawn_process ---
   EXPECT(!vw_platform_spawn_process(NULL, NULL, NULL));
 

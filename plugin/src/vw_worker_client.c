@@ -25,7 +25,7 @@
 static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
   size_t got = 0;
   while (got < len) {
-    int64_t now_us = vw_platform_get_time_us();
+    int64_t now_us = vw_platform_get_monotonic_time_us();
     if (now_us >= deadline_us) return false;
     uint32_t remaining_us = (uint32_t)(deadline_us - now_us);
     uint32_t timeout_us = (remaining_us < 3000000U) ? remaining_us : 3000000U;
@@ -33,7 +33,7 @@ static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t 
     int32_t res = vw_ipc_receive_timeout(ipc, buf + got, len - got, timeout_us);
     if (res < 0) {
       if (res == VW_IPC_RECV_TIMEOUT) {  // timeout — keep waiting, bounded by the deadline
-        if (vw_platform_get_time_us() >= deadline_us) return false;
+        if (vw_platform_get_monotonic_time_us() >= deadline_us) return false;
         continue;
       }
       return false;  // fatal (VW_IPC_RECV_FATAL): EOF / broken pipe / closed
@@ -80,8 +80,11 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   }
   if (!ipc) {
     if (worker_process) {
-      vw_platform_wait_process(worker_process, 1000);
-      vw_platform_close_process(worker_process);
+      if (!vw_platform_wait_process(worker_process, 1000)) {
+        vw_platform_terminate_process(worker_process);
+      } else {
+        vw_platform_close_process(worker_process);
+      }
     }
     return NULL;
   }
@@ -90,8 +93,11 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (!client) {
     vw_ipc_close(ipc);
     if (worker_process) {
-      vw_platform_wait_process(worker_process, 1000);
-      vw_platform_close_process(worker_process);
+      if (!vw_platform_wait_process(worker_process, 1000)) {
+        vw_platform_terminate_process(worker_process);
+      } else {
+        vw_platform_close_process(worker_process);
+      }
     }
     return NULL;
   }
@@ -127,7 +133,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
 
   // Total budget for the HELLO/HELLO_ACK reads: a silently-dead worker must not
   // hang module open forever (each vw_ipc_receive can block up to 3s on timeout).
-  const int64_t handshake_deadline_us = vw_platform_get_time_us() + VW_HANDSHAKE_TIMEOUT_US;
+  const int64_t handshake_deadline_us = vw_platform_get_monotonic_time_us() + VW_HANDSHAKE_TIMEOUT_US;
 
   // Wait for HELLO_ACK (header, then payload)
   uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
@@ -174,8 +180,11 @@ void vw_worker_client_disconnect(vw_worker_client_t* client) {
       vw_ipc_close((vw_ipc_handle_t*)client->pipe_handle);
     }
     if (client->worker_process) {
-      vw_platform_wait_process(client->worker_process, 5000);
-      vw_platform_close_process(client->worker_process);
+      if (!vw_platform_wait_process(client->worker_process, 5000)) {
+        vw_platform_terminate_process(client->worker_process);
+      } else {
+        vw_platform_close_process(client->worker_process);
+      }
     }
     free(client);
   }
@@ -213,8 +222,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     return false;
 
   const int64_t deadline_us =
-      vw_platform_get_time_us() + 5000000;  // 5s total budget for the HELLO/HELLO_ACK handshake reads
-  while (vw_platform_get_time_us() < deadline_us) {
+      vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the HELLO/HELLO_ACK handshake reads
+  while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t resp_hdr_buf[sizeof(vw_frame_header_t)];
     if (!receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us)) return false;
 

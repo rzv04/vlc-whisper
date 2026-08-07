@@ -1,6 +1,7 @@
 #if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,14 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size) {
 int64_t vw_platform_get_time_us(void) {
   struct timespec ts;
   if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+    return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
+  }
+  return (int64_t)time(NULL) * 1000000LL;
+}
+
+int64_t vw_platform_get_monotonic_time_us(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
     return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
   }
   return (int64_t)time(NULL) * 1000000LL;
@@ -78,6 +87,15 @@ bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
     elapsed_ms += sleep_ms;
   }
   return false;
+}
+
+void vw_platform_terminate_process(vw_process_t process) {
+  if (process > 0) {
+    pid_t pid = (pid_t)process;
+    kill(pid, SIGKILL);
+    int status;
+    waitpid(pid, &status, WNOHANG);
+  }
 }
 
 void vw_platform_close_process(vw_process_t process) { (void)process; }

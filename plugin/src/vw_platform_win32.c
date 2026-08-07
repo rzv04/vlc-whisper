@@ -37,6 +37,8 @@ int64_t vw_platform_get_time_us(void) {
   return (int64_t)((uli.QuadPart - 116444736000000000ULL) / 10);
 }
 
+int64_t vw_platform_get_monotonic_time_us(void) { return (int64_t)GetTickCount64() * 1000LL; }
+
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
   if (!executable_path || !argv) {
     return false;
@@ -112,6 +114,14 @@ bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
   HANDLE hProcess = (HANDLE)process;
   DWORD result = WaitForSingleObject(hProcess, timeout_ms);
   return result == WAIT_OBJECT_0;
+}
+
+void vw_platform_terminate_process(vw_process_t process) {
+  if (process && process != INVALID_HANDLE_VALUE) {
+    HANDLE hProcess = (HANDLE)process;
+    TerminateProcess(hProcess, 1);
+    CloseHandle(hProcess);
+  }
 }
 
 void vw_platform_close_process(vw_process_t process) {
