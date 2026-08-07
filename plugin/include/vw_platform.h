@@ -33,12 +33,15 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
 // Returns true if the process terminated within the timeout, false if it timed out or an error occurred.
 bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms);
 
-// Forcefully terminates the specified process if it fails to exit gracefully within its deadline. The child is
-// reaped; if it cannot be reaped within the grace period (e.g. D-state), the pid is retained and reaped on a later
-// platform process call instead of being abandoned.
+// Forcefully terminates the specified process if it fails to exit gracefully within its deadline.
+// Consumes the handle/pid: on Win32 the process handle is closed, on POSIX the child is reaped, so
+// vw_platform_close_process MUST NOT be called afterwards for the same process. If the child cannot be
+// reaped within the grace period (e.g. D-state), the pid is retained in a bounded registry and reaped on
+// a later platform process call instead of being abandoned.
 void vw_platform_terminate_process(vw_process_t process);
 
 // Closes and releases any OS process handle resources associated with the process handle.
+// Only valid for a process that has not been consumed by vw_platform_terminate_process.
 void vw_platform_close_process(vw_process_t process);
 
 // Platform thread handle type

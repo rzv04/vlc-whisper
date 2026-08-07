@@ -13,8 +13,10 @@
 
 // PIDs of children that were SIGKILLed but did not become waitable within the
 // termination grace period (e.g. stuck in D-state). They are reaped
-// opportunistically at every platform process call once they become waitable;
-// a pid is never discarded while its child is still unreaped.
+// opportunistically at every platform process call once they become waitable.
+// The registry is bounded (VW_MAX_UNREAPED_PIDS): reaching the bound requires
+// 16 concurrent unkillable children, in which case the pid is dropped with no
+// further cleanup path — pathological and intentionally unsupported.
 #define VW_MAX_UNREAPED_PIDS 16
 static pid_t vw_unreaped_pids[VW_MAX_UNREAPED_PIDS];
 static size_t vw_unreaped_count = 0;
@@ -67,6 +69,10 @@ int64_t vw_platform_get_monotonic_time_us(void) {
   if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
     return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
   }
+  // clock_gettime(CLOCK_MONOTONIC) is always supported on Linux >= 2.6, so
+  // this path is unreachable in practice. The wall-clock fallback degrades the
+  // monotonic guarantee if it ever triggers (clock adjustments could move the
+  // value backward); kept only to avoid returning garbage.
   return (int64_t)time(NULL) * 1000000LL;
 }
 
@@ -97,6 +103,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
 }
 
 bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
+  if (process <= 0) return false;  // waitpid(0) would reap any process-group child
   vw_platform_reap_unreaped();
   pid_t pid = process;
   uint32_t elapsed_ms = 0;

@@ -94,6 +94,10 @@ static void* vw_fake_server_thread(void* arg) {
     return (void*)8;
   }
   uint8_t* big_payload = (uint8_t*)malloc(hdr.payload_length);
+  if (!big_payload) {
+    vw_ipc_close(server);
+    return (void*)9;
+  }
   if (vw_ipc_receive_timeout(server, big_payload, hdr.payload_length, 3000000) != (int32_t)hdr.payload_length) {
     free(big_payload);
     vw_ipc_close(server);
@@ -132,7 +136,12 @@ static void* vw_fake_server_thread(void* arg) {
 }
 
 int main(void) {
+#ifdef _WIN32
+  // Named pipes require the \\\\.\\pipe\\ prefix on Windows.
+  const char* pipe_name = "\\\\.\\pipe\\test_worker_client_socket";
+#else
   const char* pipe_name = "test_worker_client_socket";
+#endif
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES] = {0};
 
   // Start in-process mock IPC server
@@ -149,7 +158,14 @@ int main(void) {
   // Test 2: Start session and wait for STARTED confirmation
   EXPECT(vw_worker_client_start_session(client, 1000, "ggml-tiny.en.bin"));
 
-  // Test 3: Frame and send PCM audio chunk
+  // Test 3: Transport receive timeout — the socket is idle between frames (the
+  // server waits for AUDIO), so a short probe must time out, exercising the
+  // VW_IPC_RECV_TIMEOUT path of vw_ipc_receive_timeout.
+  uint8_t probe[1];
+  EXPECT(vw_ipc_receive_timeout((vw_ipc_handle_t*)client->pipe_handle, probe, sizeof(probe), 1000) ==
+         VW_IPC_RECV_TIMEOUT);
+
+  // Test 4: Frame and send PCM audio chunk
   uint8_t pcm_data[320] = {0};  // 10ms of 16kHz Mono S16LE audio (320 bytes)
   vw_audio_chunk_t chunk = {
       .start_pts_us = 1000,
@@ -161,16 +177,16 @@ int main(void) {
   memcpy(chunk.pcm_data, pcm_data, 320);
   EXPECT(vw_worker_client_send_audio(client, &chunk));
 
-  // Test 4: Send STOP_SESSION and SHUTDOWN control frames
+  // Test 5: Send STOP_SESSION and SHUTDOWN control frames
   vw_worker_client_stop_session(client, 0);
   vw_worker_client_shutdown(client);
 
-  // Test 5: Verify server thread cleanly received all expected protocol frames
+  // Test 6: Verify server thread cleanly received all expected protocol frames
   void* ret_val;
   pthread_join(thread, &ret_val);
   EXPECT((int)(intptr_t)ret_val == 0);
 
-  // Test 6: Disconnect IPC pipe and release client resources
+  // Test 7: Disconnect IPC pipe and release client resources
   vw_worker_client_disconnect(client);
 
   return 0;

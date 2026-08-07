@@ -237,13 +237,22 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   }
 
   const int64_t deadline_us =
-      vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the HELLO/HELLO_ACK handshake reads
+      vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the STARTED/ERROR confirmation wait
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t resp_hdr_buf[sizeof(vw_frame_header_t)];
-    if (!receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us)) return false;
+    if (!receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us)) {
+      // Deadline expired or fatal EOF, possibly mid-frame: the next frame
+      // boundary is unknowable and a late STARTED from this attempt could be
+      // mistaken for a retry's confirmation. Drop so a retry cannot desync.
+      vw_worker_client_drop_transport(client);
+      return false;
+    }
 
     vw_frame_header_t resp_hdr;
-    if (!vw_protocol_decode_header(resp_hdr_buf, sizeof(resp_hdr_buf), &resp_hdr)) return false;
+    if (!vw_protocol_decode_header(resp_hdr_buf, sizeof(resp_hdr_buf), &resp_hdr)) {
+      vw_worker_client_drop_transport(client);
+      return false;
+    }
 
     if (resp_hdr.type == VW_MSG_STARTED) {
       client->session_active = true;
@@ -251,21 +260,39 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     } else if (resp_hdr.type == VW_MSG_ERROR) {
       if (resp_hdr.payload_length > 0) {
         uint8_t* resp_payload = (uint8_t*)malloc(resp_hdr.payload_length);
-        if (resp_payload) {
-          receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
-          free(resp_payload);
+        if (!resp_payload) {
+          // Declared payload cannot be drained; framing is lost.
+          vw_worker_client_drop_transport(client);
+          return false;
+        }
+        bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+        free(resp_payload);
+        if (!drained) {
+          vw_worker_client_drop_transport(client);
+          return false;
         }
       }
       return false;
     }
     if (resp_hdr.payload_length > 0) {
       uint8_t* resp_payload = (uint8_t*)malloc(resp_hdr.payload_length);
-      if (resp_payload) {
-        receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
-        free(resp_payload);
+      if (!resp_payload) {
+        // Declared payload cannot be drained; framing is lost.
+        vw_worker_client_drop_transport(client);
+        return false;
+      }
+      bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+      free(resp_payload);
+      if (!drained) {
+        vw_worker_client_drop_transport(client);
+        return false;
       }
     }
   }
+  // Deadline expired between frames: any late response can no longer be
+  // trusted to belong to this session_id. Drop rather than risk a stale
+  // STARTED confirming a session the worker never accepted.
+  vw_worker_client_drop_transport(client);
   return false;
 }
 

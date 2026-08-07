@@ -112,7 +112,7 @@ int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buf
   if (!res) {
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
-      if (WaitForSingleObject(ov.hEvent, timeout_us / 1000) == WAIT_OBJECT_0) {
+      if (WaitForSingleObject(ov.hEvent, (DWORD)(((uint64_t)timeout_us + 999) / 1000)) == WAIT_OBJECT_0) {
         GetOverlappedResult(pipe, &ov, &bytes_read, FALSE);
         res = TRUE;
       } else {

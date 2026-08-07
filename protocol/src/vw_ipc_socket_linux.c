@@ -114,7 +114,11 @@ int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buf
   int fd = (int)(intptr_t)handle->pipe_handle;
 
   struct pollfd pfd = {.fd = fd, .events = POLLIN};
-  int ret = poll(&pfd, 1, timeout_us / 1000);
+  int timeout_ms = (int)(((uint64_t)timeout_us + 999) / 1000);  // round up: >=1us must not poll 0ms
+  int ret;
+  do {
+    ret = poll(&pfd, 1, timeout_ms);
+  } while (ret < 0 && errno == EINTR);  // signal interrupted the wait; connection is intact, retry
   if (ret == 0) return VW_IPC_RECV_TIMEOUT;
   if (ret < 0) return VW_IPC_RECV_FATAL;
 

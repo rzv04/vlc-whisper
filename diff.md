@@ -1,13 +1,13 @@
-# Diff Analysis: milestone-3-step-14b (client-API slice, uncommitted)
+# Diff Analysis: milestone-3-step-14b (client-API slice)
 
-**11 files changed, +352 / -13 lines** (10 tracked: +239/−13; 1 new untracked: `tests/unit/test_worker_client.c`, +113)
-**Base**: `HEAD` = `520f182` (`gemini/milestone-3-step-14b`)
-**Scope**: The first slice of roadmap 14b — the `vw_worker_client` session send API, process supervision, and a transport receive-timeout API. The module background sender thread and the ADR-013 worker thread split are **not** part of this diff.
+**15 files changed, +764 / -440 lines** (14 tracked + 1 new: `tests/unit/vw_test_worker_client.c`, +177)
+**Base**: merge-base `6af3fc6` (`gemini/milestone-3`) → tip `efe7033` (`gemini/milestone-3-step-14b`), 5 commits `2aaa920..efe7033`
+**Scope**: Roadmap 14b — the `vw_worker_client` session send API (START/AUDIO/STOP/SHUTDOWN), process supervision (spawn out-handle, wait, terminate with reap, monotonic-clock deadlines), a transport receive-timeout API, and the hermetic client test. Includes the four Greptile review-fix rounds (monotonic deadlines, terminate-on-timeout, transport drop on partial send, unreaped-pid registry). The module background sender thread and the ADR-013 worker thread split are **not** part of this diff.
 
-**Verification state (run 2026-08-06, linux-x64-debug)**:
+**Verification state (run 2026-08-07, linux-x64-debug)**:
 - Build: ✅ pass
 - ctest: ✅ 15/15 (`test_worker_client` 0.20s)
-- Valgrind memcheck: ✅ 14/14 (test_whisper_engine skipped, code 77, model-gated as designed)
+- Valgrind memcheck: ✅ clean (test_worker_client, test_platform, test_worker_lifecycle)
 - clang-format `--dry-run --Werror`: ✅ **PASS — 0 violations**
 - Windows MinGW cross-build of `test_worker_client`: ✅ **PASS — bcrypt target dependency resolved**
 
@@ -47,7 +47,7 @@ stateDiagram-v2
 
 **Responsibility before**: Declared `vw_platform_spawn_process(exec, argv)` (fire-and-forget) plus random/time/thread helpers. **After**: Adds `vw_process_t` (`void*` on Win32, `int` pid on POSIX), an `out_process` out-param on `vw_platform_spawn_process`, and new `vw_platform_wait_process(process, timeout_ms)`. Doc comments updated/added on all touched functions (Rule 11 satisfied here).
 
-**Callers**: `vw_worker_client.c` (spawn/wait), `test_platform.c`, `test_worker_client.c`. **Callees**: none new — pure declarations.
+**Callers**: `vw_worker_client.c` (spawn/wait), `test_platform.c`, `vw_test_worker_client.c`. **Callees**: none new — pure declarations.
 
 **Happy path**: `launch_and_connect` spawns the worker with `&worker_process`, stores the pid/handle; `disconnect` later calls `vw_platform_wait_process(worker_process, 5000)` to reap it.
 
@@ -74,7 +74,7 @@ stateDiagram-v2
 
 **Responsibility before**: Single `launch_and_connect` + `disconnect`. **After**: Adds `vw_worker_client_start_session`, `vw_worker_client_send_audio`, `vw_worker_client_stop_session`, `vw_worker_client_shutdown`; struct gains `worker_process`, `session_id[16]`, `sequence`, `session_active`. Adds `#include "vw_audio_capture.h"` and `#include "vw_platform.h"`. Doc comments added for all public functions per Rule 11.
 
-**Callers**: future `vlc_whisper_module.c` sender thread (not yet present), `test_worker_client.c`. **Callees**: `vw_platform.h`, `vw_protocol_types.h`, `vw_audio_capture.h`.
+**Callers**: future `vlc_whisper_module.c` sender thread (not yet present), `vw_test_worker_client.c`. **Callees**: `vw_platform.h`, `vw_protocol_types.h`, `vw_audio_capture.h`.
 
 **Happy path**: `launch_and_connect` → `start_session` → `send_audio`×n → `stop_session` → `shutdown` → `disconnect`.
 
@@ -89,7 +89,7 @@ stateDiagram-v2
 
 | # | Criterion | Code | Test | Status |
 | --- | --- | --- | --- | --- |
-| 4 | session send API declared | `vw_worker_client.h:22-38` | `test_worker_client.c` | ✅ |
+| 4 | session send API declared | `vw_worker_client.h:22-38` | `vw_test_worker_client.c` | ✅ |
 | 5 | Rule 11 doc comments on new functions | `vw_worker_client.h:22-38` | — | ✅ |
 
 ### 2.3 `plugin/src/vw_platform_linux.c`
@@ -141,7 +141,7 @@ stateDiagram-v2
 
 **Responsibility before**: launch+connect+handshake, plain disconnect. **After**: adds `start_session` (random session id, START payload, STARTED wait ≤5 s, ERROR ⇒ failure), `send_audio` (AUDIO frame), `stop_session` (STOP control frame), `shutdown` (SHUTDOWN frame), `disconnect` waits up to 5 s for the worker process, and connect-failure path reaps spawned worker handle.
 
-**Callers**: future module sender thread, `test_worker_client.c`. **Callees**: `vw_ipc_*`, `vw_protocol_*`, `vw_platform_get_random_bytes`, `vw_platform_get_time_us`, `vw_platform_wait_process`, `vw_platform_spawn_process`, `vw_ipc_send`.
+**Callers**: future module sender thread, `vw_test_worker_client.c`. **Callees**: `vw_ipc_*`, `vw_protocol_*`, `vw_platform_get_random_bytes`, `vw_platform_get_time_us`, `vw_platform_wait_process`, `vw_platform_spawn_process`, `vw_ipc_send`.
 
 **Happy path** (`start_session`): validate client → random 16-byte `session_id` → build `vw_msg_start_t` (16000/1/S16/`en`/`VW_SOURCE_LOCAL_FILE`) → encode → send header+payload (`sequence=2`) → loop reading response headers via `receive_all` under a 5 s deadline → `VW_MSG_STARTED` ⇒ `session_active=true`, return true. `send_audio`: `pcm_bytes=chunk->bytes`, `pcm_data=chunk->pcm_data`, encode into 32 KB stack buffer, send header+payload, return true.
 
@@ -157,10 +157,10 @@ stateDiagram-v2
 
 | # | Criterion | Code | Test | Status |
 | --- | --- | --- | --- | --- |
-| 8 | `start_session` START→STARTED ≤5 s, ERROR⇒fail | `vw_worker_client.c:174-226` | `test_worker_client.c` | ✅ |
-| 9 | `send_audio` frames chunk | `vw_worker_client.c:228-254` | `test_worker_client.c` | ✅ |
-| 10 | `stop_session`/`shutdown` control frames | `vw_worker_client.c:256-281` | `test_worker_client.c` | ✅ |
-| 11 | disconnect reaps worker | `vw_worker_client.c:158-169` | `test_platform.c` | ✅ |
+| 8 | `start_session` START→STARTED ≤5 s, ERROR⇒fail | `vw_worker_client.c:206-270` | `vw_test_worker_client.c` | ✅ |
+| 9 | `send_audio` frames chunk | `vw_worker_client.c:272-305` | `vw_test_worker_client.c` | ✅ |
+| 10 | `stop_session`/`shutdown` control frames | `vw_worker_client.c:307-348` | `vw_test_worker_client.c` | ✅ |
+| 11 | disconnect reaps worker | `vw_worker_client.c:190-204` | `test_platform.c` | ✅ |
 | 12 | connect-failure path reaps worker | `vw_worker_client.c:76-81` | — | ✅ |
 
 ### 2.6 `protocol/include/vw_ipc_transport.h`
@@ -173,7 +173,7 @@ stateDiagram-v2
 
 | # | Criterion | Code | Test | Status |
 | --- | --- | --- | --- | --- |
-| 13 | timeout-param receive API declared | `vw_ipc_transport.h:38-41` | `test_worker_client.c:54` | ✅ |
+| 13 | timeout-param receive API declared | `vw_ipc_transport.h:38-41` | `vw_test_worker_client.c:54` | ✅ |
 
 ### 2.7 `protocol/src/vw_ipc_pipe_win32.c`
 
@@ -191,7 +191,7 @@ stateDiagram-v2
 
 **Why change**: Adapt to spawn signature and exercise `vw_platform_wait_process`.
 
-### 2.11 `tests/unit/test_worker_client.c` (new, +113)
+### 2.11 `tests/unit/vw_test_worker_client.c` (new, +177)
 
 **Why change**: Hermetic unit coverage of the 14b client session API against an in-process fake server thread. Uses protocol constants and clean formatting.
 
@@ -235,8 +235,8 @@ sequenceDiagram
 | Priority | Component / Location | Description | Impact | Proposed Fix |
 | --- | --- | --- | --- | --- |
 | **Medium** | `plugin/src/vw_worker_client.c` (all new fns) | Session API is not thread-safe: `sequence`, `session_active`, and the pipe handle are mutated without a mutex. The roadmap requires a background sender thread (`send_audio`) concurrent with `stop_session`/`shutdown` from the main thread. | Data race on `sequence`/pipe writes when the 14c sender thread is added | Add a mutex (or serialize pipe writes on one writer thread) before wiring the 14c sender thread |
-| **Low** | `plugin/src/vw_worker_client.c:158-169` | `disconnect` waits up to 5 s for the worker but never sends SHUTDOWN itself; relies on caller to call `shutdown()` first. | Up-to-5 s stall on module close if ordering is wrong | Document/assert the shutdown→wait→disconnect sequence, or send best-effort SHUTDOWN before waiting |
-| **Low** | `plugin/src/vw_worker_client.c:229` | `uint8_t payload_buf[32768]` stack buffer per `send_audio` call. | Wasteful stack frame size | Reuse buffer or reduce stack footprint in step 14c |
+| **Low** | `plugin/src/vw_worker_client.c:190-204` | `disconnect` waits up to 5 s for the worker but never sends SHUTDOWN itself; relies on caller to call `shutdown()` first. | Up-to-5 s stall on module close if ordering is wrong | Document/assert the shutdown→wait→disconnect sequence, or send best-effort SHUTDOWN before waiting |
+| **Low** | `plugin/src/vw_worker_client.c:275` | `uint8_t payload_buf[32768]` stack buffer per `send_audio` call. | Wasteful stack frame size | Reuse buffer or reduce stack footprint in step 14c |
 
 ### Code Style & Quality Nitpicks
 
