@@ -193,3 +193,6 @@ opencode.jsonc
 opencode.json
 
 .commandcode/
+
+graphify-out/
+.graphifyignore
