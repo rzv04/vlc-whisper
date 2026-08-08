@@ -1,11 +1,12 @@
-# Step 14: Real-Time PCM Streaming (split into 14a + 14b)
+# Step 14: Real-Time PCM Streaming (split into 14a, 14b, 14c)
 
 ## Goal
 
 Roadmap step 14 — "Feed captured PCM chunks from SPSC queue across IPC transport to worker process in real time." Because the worker audio core is currently **all stubs** (`vw_whisper_engine.c`, `vw_audio_buffer.c`, START/AUDIO handlers), step 14 is split per the 17a–d precedent:
 
 - **14a — Worker audio pipeline** (branch `gemini/milestone-3-step-14`, current branch): worker consumes AUDIO frames over IPC and emits CAPTION_SEGMENT frames. Verifiable without plugin changes.
-- **14b — Plugin real-time streaming** (branch `gemini/milestone-3-step-14b` after 14a merges): plugin drains the SPSC queue on a background sender thread and streams AUDIO frames with a session lifecycle.
+- **14b — Plugin client API and transport** (branch `gemini/milestone-3-step-14b` after 14a merges): adds receive timeouts, process wait handles, and the worker client state machine.
+- **14c — Plugin real-time streaming** (branch `gemini/milestone-3-step-14c` after 14b merges): plugin drains the SPSC queue on a background sender thread and implements model discovery.
 
 Both must satisfy the postmortem rule: one step per dedicated branch, merged before the next (docs/plans/milestone3_postmortem.md:230).
 
@@ -40,9 +41,9 @@ In scope:
    - `test_segment_builder`: extend with pop/drain tests.
    - `test_whisper_engine` (new, unit, **skip if model absent**): init on `models/ggml-tiny.en.bin`, transcribe deterministic sine/silence fixture → expect success + empty/no-crash output; NULL path for bad model path.
    - Extend `tests/integration/test_worker_lifecycle.c` (or new `test_worker_streaming`): START→STARTED with model, START→ERROR(E_MODEL_MISSING) without; send AUDIO chunks → no crash → STOP → SHUTDOWN exit 0. SEGMENT emission proven at codec+builder level; speech E2E is step 18 acceptance.
-7. **Docs**: roadmap entry `14.` → `14a`/`14b` (17-style lettering) with 14a checked on completion; `docs/decisions.md` (window-size discrepancy note); `docs/architecture.md` (worker threads now implemented); `docs/source-layout.md` if files added.
+7. **Docs**: roadmap entry `14.` → `14a`/`14b`/`14c` (17-style lettering) with 14a checked on completion; `docs/decisions.md` (window-size discrepancy note); `docs/architecture.md` (worker threads now implemented); `docs/source-layout.md` if files added.
 
-### 14b — Plugin real-time streaming (after 14a merges; branch `gemini/milestone-3-step-14b`)
+### 14b — Plugin client API and transport (after 14a merges; branch `gemini/milestone-3-step-14b`)
 
 In scope:
 1. **`plugin/src/vw_worker_client.c` API**:
@@ -52,20 +53,27 @@ In scope:
    - `vw_worker_client_stop_session(client, reason)`, `vw_worker_client_shutdown(client)`.
    - Transport: add `vw_ipc_receive_timeout(handle, buf, len, timeout_us)` to `protocol/` (both `vw_ipc_socket_linux.c` and `vw_ipc_pipe_win32.c`); existing `vw_ipc_receive` keeps the 3 s default. Protocol change: **none** (transport-internal API).
    - Process lifecycle: `vw_platform_spawn_process` gains an out handle (pid / `HANDLE`); add `vw_platform_wait_process(handle, timeout_ms)`; disconnect waits the worker after SHUTDOWN (kills the fire-and-forget zombie/leak).
-2. **`plugin/src/vlc_whisper_module.c`** sender thread:
+2. **Tests**: client-API unit tests against a fake server socket (START/STARTED, AUDIO framing + sequence, STOP, receive-timeout path); memcheck clean.
+3. **Docs**: roadmap 14b checked; `docs/api-contracts.md` (if transport API noted), `docs/source-layout.md`.
+
+### 14c — Plugin real-time streaming (after 14b merges; branch `gemini/milestone-3-step-14c`)
+
+In scope:
+1. **`plugin/src/vlc_whisper_module.c`** sender thread:
    - sys gains thread handle, `_Atomic bool running`, `_Atomic bool worker_dead`, counters.
    - Loop (~20 ms cadence when queue empty): pop chunk → `send_audio`; failure → `worker_dead=true` + one rate-limited `PLUGIN_WORKER_UNAVAILABLE`-style log, stop sending (playback untouched). Same loop drains worker frames via `receive_timeout(50 ms)`: SEGMENT counted + discarded (step 15 wires the presenter), STATUS/ERROR logged, FATAL → `worker_dead`.
    - Open: launch+connect → `start_session` → start thread; any failure → passthrough-only (existing behavior).
    - Close: `running=false` → join → best-effort STOP + SHUTDOWN → wait process → disconnect.
    - Model discovery: resolve `ggml-tiny.en.bin` (probe plugin-dir ancestors ≤4, VLC exe dir, `models/` subdir of each) and pass `--model <abs>` in spawn argv; plus `add_loadfile("model-path", …)` module option override, same pattern as `worker-path`.
-3. **Tests**: client-API unit tests against a fake server socket (START/STARTED, AUDIO framing + sequence, STOP, receive-timeout path); integration: full connect→START→stream→teardown, and worker-death-mid-stream detach test; memcheck clean.
-4. **Docs**: roadmap 14b checked; `docs/architecture.md` (plugin sender thread), `docs/api-contracts.md` (if transport API noted), `docs/source-layout.md`, README usage section (model placement, `--vlc-whisper-model-path`).
+2. **Tests**: integration: full connect→START→stream→teardown, and worker-death-mid-stream detach test; memcheck clean.
+3. **Docs**: roadmap 14c checked; `docs/architecture.md` (plugin sender thread), README usage section (model placement, `--vlc-whisper-model-path`).
 
-Out of scope (both): PAUSE/RESUME (16), seek/discontinuity (17), SPU/GPU/source (17a–c), presenter display (15), VAD model-based gating (energy only), partial segments capability.
+Out of scope (all): PAUSE/RESUME (16), seek/discontinuity (17), SPU/GPU/source (17a–c), presenter display (15), VAD model-based gating (energy only), partial segments capability.
 
 Files expected to change:
 - 14a: `worker/src/vw_whisper_engine.c`, `worker/src/vw_audio_buffer.c`, `worker/src/vw_worker.c`, `worker/src/vw_segment_builder.c`, `worker/include/*.h`, `plugin/include/vw_platform.h`, `plugin/src/vw_platform_linux.c`, `plugin/src/vw_platform_win32.c`, `tests/**`, docs.
-- 14b: `plugin/src/vw_worker_client.c`, `plugin/include/vw_worker_client.h`, `plugin/src/vlc_whisper_module.c`, `protocol/include/vw_ipc_transport.h`, `protocol/src/vw_ipc_socket_linux.c`, `protocol/src/vw_ipc_pipe_win32.c`, `plugin/libvlccore.def` (if new VLC symbols needed), `tests/**`, docs.
+- 14b: `plugin/src/vw_worker_client.c`, `plugin/include/vw_worker_client.h`, `protocol/include/vw_ipc_transport.h`, `protocol/src/vw_ipc_socket_linux.c`, `protocol/src/vw_ipc_pipe_win32.c`, `tests/**`, docs.
+- 14c: `plugin/src/vlc_whisper_module.c`, `plugin/libvlccore.def` (if new VLC symbols needed), `tests/**`, docs.
 
 ## Design
 
@@ -78,7 +86,8 @@ Files expected to change:
 ## Acceptance criteria
 
 - [ ] 14a: START→STARTED round-trip over IPC; AUDIO chunks accepted and transcribed with real model; CAPTION_SEGMENT frames emitted for speech windows; ERROR(E_MODEL_MISSING) without model; SHUTDOWN exit 0.
-- [ ] 14b: playback of a local file with model streams AUDIO continuously (logs), no queue-full drops in steady state, worker death ⇒ clean passthrough, close leaves no zombie worker.
+- [ ] 14b: client API unit tests pass (socket mocking); timeouts and process lifecycle behave correctly.
+- [ ] 14c: playback of a local file with model streams AUDIO continuously (logs), no queue-full drops in steady state, worker death ⇒ clean passthrough, close leaves no zombie worker.
 - [ ] Failure behavior preserves VLC playback in every path.
 - [ ] Automated tests cover success and failure; model-gated tests skip (77) when model absent.
 - [ ] Docs/roadmap/decisions updated in the same change.
@@ -102,7 +111,7 @@ Manual (14b): `vlc -vvv --audio-filter=vlc_whisper <video>` → logs show START/
 - [ ] All queues/windows/retries bounded; drop counters observable
 - [ ] Unit + integration tests pass; Valgrind memcheck 100% clean
 - [ ] clang-format clean; conventional commits with co-author trailer
-- [ ] Roadmap (14a/14b), architecture, decisions, source-layout, test-strategy updated
+- [ ] Roadmap (14a/14b/14c), architecture, decisions, source-layout, test-strategy updated
 - [ ] Reproducible from clean checkout
 
 ## Evidence
@@ -123,4 +132,4 @@ Manual (14b): `vlc -vvv --audio-filter=vlc_whisper <video>` → logs show START/
 6. Integration tests (START/AUDIO/STOP/SHUTDOWN; model-gated vs ERROR paths).
 7. Docs (architecture, decisions, source-layout, roadmap checkbox), full verification, commit, push.
 
-Then open/merge 14a before starting 14b on `gemini/milestone-3-step-14b`.
+Then open/merge 14a before starting 14b on `gemini/milestone-3-step-14b`, and 14b before 14c.

@@ -95,6 +95,7 @@ vlc-whisper/
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
+│   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
 │   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model) parsing tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test

@@ -9,8 +9,8 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 ## Transport Timeouts & Guarantees
 
 - **Accept Connection Timeout**: 10 seconds (`vw_ipc_listen()` waits up to 10,000 ms for plugin connection, returning `NULL` on timeout).
-- **Frame Read / Write Timeout**: 3 seconds (`vw_ipc_receive()` and `vw_ipc_send()` enforce 3,000 ms timeout per I/O call on both POSIX and Win32).
-- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `-1` (`VW_IPC_RECV_TIMEOUT`) for a 3-second read timeout (connection remains open during video pause; the receiver should retry/keep waiting), and `-2` (`VW_IPC_RECV_FATAL`) for a fatal error or peer disconnect (EOF / broken pipe), after which the handle must be treated as dead.
+- **Frame Read / Write Timeout**: 3 seconds (`vw_ipc_receive()` and `vw_ipc_send()` enforce 3,000 ms timeout per I/O call on both POSIX and Win32). Custom read timeouts can be specified via `vw_ipc_receive_timeout(handle, buffer, size, timeout_us)`.
+- **Receive Return Semantics**: `vw_ipc_receive()` and `vw_ipc_receive_timeout()` return `> 0` for bytes read, `-1` (`VW_IPC_RECV_TIMEOUT`) for a read timeout (connection remains open during video pause; the receiver should retry/keep waiting), and `-2` (`VW_IPC_RECV_FATAL`) for a fatal error or peer disconnect (EOF / broken pipe), after which the handle must be treated as dead.
 
 ## Terminology & Abbreviations
 

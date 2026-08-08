@@ -37,7 +37,25 @@ int64_t vw_platform_get_time_us(void) {
   return (int64_t)((uli.QuadPart - 116444736000000000ULL) / 10);
 }
 
-bool vw_platform_spawn_process(const char* executable_path, const char* const argv[]) {
+int64_t vw_platform_get_monotonic_time_us(void) {
+  // QueryPerformanceCounter: microsecond-resolution monotonic clock that keeps
+  // advancing across system sleep on modern hardware. GetTickCount64 would be
+  // only ~15.6 ms granularity and frozen during S3/S4 suspension, which can
+  // stall the client's handshake/terminate deadlines for a whole sleep.
+  static LARGE_INTEGER freq = {0};
+  if (freq.QuadPart == 0) {
+    QueryPerformanceFrequency(&freq);
+  }
+  LARGE_INTEGER counter;
+  QueryPerformanceCounter(&counter);
+  // Split into whole seconds + remainder to keep the multiplication from
+  // overflowing int64: (count/freq)*1e6 + ((count%freq)*1e6)/freq.
+  LONGLONG sec = counter.QuadPart / freq.QuadPart;
+  LONGLONG rem = counter.QuadPart % freq.QuadPart;
+  return sec * 1000000LL + (rem * 1000000LL) / freq.QuadPart;
+}
+
+bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
   if (!executable_path || !argv) {
     return false;
   }
@@ -98,9 +116,34 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   // Close thread handle immediately as it's not needed
   CloseHandle(pi.hThread);
 
-  // Close process handle when finished
-  CloseHandle(pi.hProcess);
+  // Close process handle if not requested, otherwise return it
+  if (out_process) {
+    *out_process = pi.hProcess;
+  } else {
+    CloseHandle(pi.hProcess);
+  }
   return true;
+}
+
+bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
+  if (!process || process == INVALID_HANDLE_VALUE) return false;
+  HANDLE hProcess = (HANDLE)process;
+  DWORD result = WaitForSingleObject(hProcess, timeout_ms);
+  return result == WAIT_OBJECT_0;
+}
+
+void vw_platform_terminate_process(vw_process_t process) {
+  if (process && process != INVALID_HANDLE_VALUE) {
+    HANDLE hProcess = (HANDLE)process;
+    TerminateProcess(hProcess, 1);
+    CloseHandle(hProcess);
+  }
+}
+
+void vw_platform_close_process(vw_process_t process) {
+  if (process && process != INVALID_HANDLE_VALUE) {
+    CloseHandle((HANDLE)process);
+  }
 }
 
 typedef struct {

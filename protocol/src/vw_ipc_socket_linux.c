@@ -109,6 +109,26 @@ int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size
   return VW_IPC_RECV_FATAL;                                                 // real error (fatal)
 }
 
+int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size, uint32_t timeout_us) {
+  if (!handle) return VW_IPC_RECV_FATAL;
+  int fd = (int)(intptr_t)handle->pipe_handle;
+
+  struct pollfd pfd = {.fd = fd, .events = POLLIN};
+  int timeout_ms = (int)(((uint64_t)timeout_us + 999) / 1000);  // round up: >=1us must not poll 0ms
+  int ret;
+  do {
+    ret = poll(&pfd, 1, timeout_ms);
+  } while (ret < 0 && errno == EINTR);  // signal interrupted the wait; connection is intact, retry
+  if (ret == 0) return VW_IPC_RECV_TIMEOUT;
+  if (ret < 0) return VW_IPC_RECV_FATAL;
+
+  ssize_t bytes = recv(fd, buffer, buffer_size, 0);
+  if (bytes > 0) return (int32_t)bytes;
+  if (bytes == 0) return VW_IPC_RECV_FATAL;
+  if (errno == EAGAIN || errno == EWOULDBLOCK) return VW_IPC_RECV_TIMEOUT;
+  return VW_IPC_RECV_FATAL;
+}
+
 void vw_ipc_close(vw_ipc_handle_t* handle) {
   if (handle) {
     int fd = (int)(intptr_t)handle->pipe_handle;

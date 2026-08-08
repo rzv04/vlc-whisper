@@ -38,6 +38,8 @@ target_link_libraries(test_worker_ipc PRIVATE whisper)
 add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_worker_lifecycle PRIVATE whisper)
 
+add_vw_test(test_worker_client unit/vw_test_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+
 if(WIN32)
     add_vw_test(test_platform unit/test_platform.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 else()
@@ -48,6 +50,7 @@ if(WIN32)
     # vw_platform_win32.c uses BCryptGenRandom for the auth token
     target_link_libraries(test_worker_ipc PRIVATE bcrypt)
     target_link_libraries(test_worker_lifecycle PRIVATE bcrypt)
+    target_link_libraries(test_worker_client PRIVATE bcrypt)
     target_link_libraries(test_platform PRIVATE bcrypt)
 endif()
 

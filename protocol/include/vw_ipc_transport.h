@@ -34,6 +34,10 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size);
 //   (EOF / broken pipe); the handle must be treated as dead and the caller abort.
 int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size);
 
+// Receives raw frame bytes over transport handle with a specific timeout in microseconds.
+// Returns > 0 on success, VW_IPC_RECV_TIMEOUT on timeout, VW_IPC_RECV_FATAL on error.
+int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size, uint32_t timeout_us);
+
 // Closes IPC transport handle and frees resources.
 void vw_ipc_close(vw_ipc_handle_t* handle);
 
