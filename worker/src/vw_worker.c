@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "vw_ipc_transport.h"
+#include "vw_log.h"
 #include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
@@ -118,6 +119,7 @@ static void* vw_worker_reader_main(void* arg) {
 fatal:
   free(payload_buf);
   atomic_store(a->running, false);
+  vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_READER", "fatal pipe read (peer closed); waking main loop");
   // Wake the main loop with a synthetic SHUTDOWN so it exits instead of polling an empty queue.
   vw_worker_queue_push(a->queue, VW_MSG_SHUTDOWN, NULL, 0);
   return NULL;
@@ -128,10 +130,14 @@ int vw_worker_run(const vw_worker_config_t* config) {
     return 1;
   }
 
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker started (pid %d)", (int)getpid());
   vw_ipc_handle_t* handle = vw_ipc_listen(config->pipe_name);
   if (!handle) {
+    vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_LIFECYCLE", "vw_ipc_listen FAILED for %s; worker exiting",
+                 config->pipe_name);
     return 1;
   }
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "listening on %s", config->pipe_name);
 
   _Atomic bool running = true;
   bool authenticated = false;
@@ -144,6 +150,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
   }
 
   vw_whisper_engine_t* engine = vw_whisper_engine_init(config->model_path);
+  vw_log_event(engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
+               engine ? "whisper engine loaded" : "whisper engine init FAILED (model missing/invalid)");
   vw_audio_buffer_t* audio_buf = vw_audio_buffer_create(160000);  // 10s at 16kHz
   vw_segment_builder_t* builder = vw_segment_builder_create();
   vw_session_id_t session_id;
@@ -165,6 +173,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   vw_thread_t reader_thread;
   if (!vw_platform_thread_create(&reader_thread, vw_worker_reader_main, &reader_arg)) {
     // Reader spawn failure: fail closed rather than starve the pipe.
+    vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_READER", "reader thread creation FAILED; worker exiting");
     vw_worker_queue_destroy(queue);
     free(window_samples);
     if (audio_buf) vw_audio_buffer_free(audio_buf);
@@ -261,6 +270,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
         }
         if (!engine) {
           // Model absent or invalid: reply with ERROR frame (recoverable = 0)
+          vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_MODEL_MISSING");
           send_error(handle, payload_decoded.start.session_id.bytes, E_MODEL_MISSING, 0,
                      "Whisper model file missing or invalid", &sequence);
           break;
@@ -268,6 +278,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
         memcpy(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
         session_active = true;
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent)");
 
         // Reply STARTED (header-only)
         vw_frame_header_t started_hdr = {.magic = VW_PROTOCOL_MAGIC,
@@ -301,6 +312,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
             if (read_cnt > 0 && engine) {
               if (vw_vad_detect_speech_energy(window_samples, read_cnt, VW_VAD_ENERGY_THRESHOLD)) {
+                vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE", "speech window @%lldus; transcribing",
+                             (long long)window_pts_us);
                 if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
                   const char* text = vw_whisper_engine_get_text(engine);
                   if (text && text[0] != '\0' && builder) {
@@ -308,6 +321,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
                     int64_t duration_us = (int64_t)(((double)read_cnt / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
                     vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
                   }
+                } else {
+                  vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_INFERENCE", "whisper_full FAILED @%lldus",
+                               (long long)window_pts_us);
                 }
               }
             }
@@ -319,11 +335,13 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
       case VW_MSG_STOP_SESSION: {
         session_active = false;
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped");
         if (audio_buf) vw_audio_buffer_clear(audio_buf);
         break;
       }
 
       case VW_MSG_SHUTDOWN:
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "shutdown requested; exiting");
         atomic_store(&running, false);
         break;
 
@@ -369,5 +387,6 @@ int vw_worker_run(const vw_worker_config_t* config) {
   if (engine) vw_whisper_engine_free(engine);
 
   vw_ipc_close(handle);
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker exiting (rc=%d)", authenticated ? 0 : 1);
   return authenticated ? 0 : 1;
 }

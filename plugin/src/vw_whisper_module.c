@@ -235,6 +235,9 @@ static void* vw_plugin_sender_main(void* arg) {
       sys->chunks_sent++;
       if (!vw_worker_client_send_audio(sys->client, &chunk)) {
         atomic_store(&sys->worker_dead, true);
+        vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_DEAD",
+                     "send_audio failed after %llu chunks; captions disabled, passthrough only",
+                     (unsigned long long)sys->chunks_sent);
         break;
       }
       sent_any = true;
@@ -245,6 +248,8 @@ static void* vw_plugin_sender_main(void* arg) {
     int r = vw_worker_client_receive_frame(sys->client, sent_any ? 5000 : 20000, &recv);
     if (r < 0) {
       atomic_store(&sys->worker_dead, true);
+      vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_DEAD",
+                   "receive_frame fatal (transport dead); captions disabled, passthrough only");
       break;
     }
     if (r == 1) {
@@ -376,8 +381,11 @@ static int vw_plugin_open(vlc_object_t* obj) {
   if (!vw_platform_get_random_bytes(sys->auth_token, VW_AUTH_TOKEN_BYTES)) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_RNG_FAIL", "failed to generate random auth_token");
   } else {
+    vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_WORKER_LAUNCH", "spawning worker: %s", sys->worker_path);
     sys->client = vw_worker_client_launch_and_connect(sys->worker_path, sys->pipe_name, sys->auth_token,
                                                       sys->model_path[0] ? sys->model_path : NULL);
+    vw_log_event(sys->client ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_CONNECT",
+                 sys->client ? "worker connected (HELLO handshake ok)" : "worker connect failed");
   }
 
   if (!sys->client) {
@@ -443,7 +451,7 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
                          "Explicit location of vlc-whisper-worker[.exe] for installs where it is "
                          "not co-located with the plugin; defaults to discovery",
                          false)
-            add_loadfile("model-path", NULL, "Path to ggml-tiny.en.bin model file (optional)",
-                         "Explicit location of the whisper model; defaults to discovery next to the plugin", false)
-                set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
+                add_loadfile("model-path", NULL, "Path to ggml-tiny.en.bin model file (optional)",
+                             "Explicit location of the whisper model; defaults to discovery next to the plugin", false)
+                    set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
 #pragma GCC diagnostic pop

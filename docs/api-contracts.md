@@ -55,7 +55,7 @@ Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample
 
 ### AUDIO
 
-Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal `duration_us * 16000 / 1_000_000 * 2`, subject only to explicitly documented whole-sample rounding. The worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
+Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal `duration_us * 16000 / 1_000_000 * 2`, subject only to explicitly documented whole-sample rounding: the receiver accepts ±1 byte of the computed value (half a sample at 16 kHz S16LE = 1 byte), since producers may round the duration up or down for odd-length partial blocks. The worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
 
 ### SEGMENT
 
