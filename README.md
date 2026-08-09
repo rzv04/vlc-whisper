@@ -166,18 +166,23 @@ To install and verify the VLC plugin manually on Windows:
 
 2. **Install Worker**: Copy the compiled `vlc-whisper-worker.exe` to your VLC installation's root directory:
    - Example path: `C:\Program Files\VideoLAN\VLC\vlc-whisper-worker.exe`
+   - The worker is self-contained: all MinGW runtime (incl. OpenMP) is statically linked — no extra DLLs to copy (ADR-010).
    - The plugin looks for the worker next to the plugin, up to three ancestor directories, and next to the VLC executable. If your layout places it elsewhere, set the module option `--vlc-whisper-worker-path` (a.k.a. `worker-path`) to its full path.
 
-2. **Reset Plugin Cache & Verify Registration**:
+3. **Install the Model**: Copy `ggml-tiny.en.bin` next to the worker (VLC root), into a `models\` subdirectory of any ancestor of the plugin, or next to the VLC executable — the plugin probes `<dir>\ggml-tiny.en.bin` and `<dir>\models\ggml-tiny.en.bin` during module open. If the model lives elsewhere, set the module option `--vlc-whisper-model-path` (a.k.a. `model-path`) to its full path. Without a model, captions are disabled cleanly (`E_MODEL_MISSING`) and playback is unaffected.
+
+3. **Reset Plugin Cache & Verify Registration**:
    Open Command Prompt or PowerShell and run:
 
    ```cmd
    "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
    ```
 
-   _Expected Output_: You should see the `VLC-Whisper` audio filter module listed.
+   _Expected Output_: You should see the `VLC-Whisper` audio filter module listed. (Always re-run `--reset-plugins-cache` after copying a new plugin DLL — VLC caches module metadata and may otherwise keep using the old one.)
 
-3. **Inspect Debug Logs**:
+   **Listed ≠ active.** The module being listed (or shown as "enabled" in Tools → Preferences) does not mean it runs: an audio filter is only instantiated when it is actually in the audio chain. Either (a) pass `--audio-filter=vlc_whisper` on the command line, or (b) enable it in Preferences → All → Audio → Filters (it appears there because the module declares the audio-filter subcategory). If you toggle it in the GUI, restart VLC before playing.
+
+4. **Inspect Debug Logs**:
    Audio filters only instantiate when audio media is playing and the filter is explicitly selected in the audio chain. To trigger `vw_plugin_open` and write debug output to a file:
 
    ```cmd
@@ -187,3 +192,5 @@ To install and verify the VLC plugin manually on Windows:
    _(Note: For `.mp4` video files in Virtual Machines or dual-GPU laptops, add `--avcodec-hw=none` to avoid D3D11 hardware acceleration crashes)._
 
    _Expected Output_: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.
+
+   **Success signal**: while the audio plays, `vlc-whisper-worker.exe` must appear in Task Manager (it is a long-lived process, not a flash). If it appears, the plugin spawned it; if `PLUGIN_OPEN` is logged but no worker appears, check `PLUGIN_WORKER_UNAVAILABLE`/`PLUGIN_SESSION_START_FAIL` in the log (worker path, model path, or spawn failure). If `PLUGIN_OPEN` itself is missing, the filter is not in the chain — re-check `--audio-filter=vlc_whisper` and the module cache.

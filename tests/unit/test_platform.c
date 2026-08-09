@@ -15,10 +15,14 @@
 #include "vw_test.h"
 
 #if defined(_WIN32) || defined(__MINGW32__)
+// Bare cmd.exe with no args is an interactive shell that never exits; /c exit terminates it so
+// vw_platform_wait_process(proc, 2000) can observe a clean completion (mirrors /bin/true).
 static const char* kSpawnOk = "cmd.exe";
+static const char* kSpawnOkArg[] = {"cmd.exe", "/c", "exit", NULL};
 static const char* kSpawnMissing = "Z:\\definitely_missing_vw.exe";
 #else
 static const char* kSpawnOk = "/bin/true";
+static const char* kSpawnOkArg[] = {"/bin/true", NULL};
 static const char* kSpawnMissing = "/nonexistent/vw_missing_binary";
 #endif
 
@@ -63,10 +67,10 @@ int main(void) {
   EXPECT(!vw_platform_spawn_process(NULL, NULL, NULL));
 
   const char* argv_ok[] = {kSpawnOk, NULL};
-  EXPECT(vw_platform_spawn_process(kSpawnOk, argv_ok, NULL));
+  EXPECT(vw_platform_spawn_process(kSpawnOk, kSpawnOkArg, NULL));
 
   vw_process_t proc = 0;
-  EXPECT(vw_platform_spawn_process(kSpawnOk, argv_ok, &proc));
+  EXPECT(vw_platform_spawn_process(kSpawnOk, kSpawnOkArg, &proc));
   EXPECT(vw_platform_wait_process(proc, 2000));
 
   // Failure paths: partial-NULL arguments must be rejected

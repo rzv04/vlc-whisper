@@ -15,6 +15,7 @@
 
 #include "vw_audio_capture.h"
 #include "vw_ipc_transport.h"
+#include "vw_log.h"
 #include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
@@ -64,7 +65,8 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
 }
 
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
-                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES]) {
+                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                        const char* model_path) {
   if (!endpoint_name || !auth_token) {
     return NULL;
   }
@@ -74,7 +76,20 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (executable_path) {
     char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
     token_to_hex(auth_token, token_hex);
-    const char* argv[] = {executable_path, "--pipe", endpoint_name, "--token", token_hex, NULL};
+    // Exactly two argv shapes: with and without --model. NULL model_path omits the flag so the
+    // worker's CWD-relative default stays the fallback.
+    const char* argv[8];
+    size_t argc = 0;
+    argv[argc++] = executable_path;
+    argv[argc++] = "--pipe";
+    argv[argc++] = endpoint_name;
+    argv[argc++] = "--token";
+    argv[argc++] = token_hex;
+    if (model_path) {
+      argv[argc++] = "--model";
+      argv[argc++] = model_path;
+    }
+    argv[argc] = NULL;
     if (!vw_platform_spawn_process(executable_path, argv, &worker_process)) {
       return NULL;
     }
@@ -266,6 +281,13 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
           return false;
         }
         bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+        vw_msg_error_t err;
+        memset(&err, 0, sizeof(err));
+        if (drained && vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err)) {
+          // Surface the worker's rejection (e.g. E_MODEL_MISSING) so the model-absent path is diagnosable.
+          vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_START_ERROR", "code=%u recoverable=%u msg=%.*s", err.error_code,
+                       err.recoverable, (int)strnlen(err.message, VW_MAX_ERROR_MSG_BYTES), err.message);
+        }
         free(resp_payload);
         if (!drained) {
           vw_worker_client_drop_transport(client);
@@ -371,4 +393,103 @@ void vw_worker_client_shutdown(vw_worker_client_t* client) {
   if (vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) {
     vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf));
   }
+}
+
+int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_us, vw_worker_recv_t* out) {
+  if (!client || !client->pipe_handle || !out) {
+    return -1;
+  }
+  memset(out, 0, sizeof(*out));
+
+  // One per-call deadline for the whole frame (header + payload + any skipped frames). A timeout
+  // mid-frame is treated as no-frame (return 0) rather than a transport failure: the stream is
+  // still framed because the deadline expired between messages.
+  const int64_t deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)timeout_us;
+
+  while (vw_platform_get_monotonic_time_us() < deadline_us) {
+    uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+    if (!receive_all(client->pipe_handle, hdr_buf, sizeof(hdr_buf), deadline_us)) {
+      // Either the deadline expired (no frame arrived) or the transport died. Distinguish by clock.
+      if (vw_platform_get_monotonic_time_us() < deadline_us) {
+        vw_worker_client_drop_transport(client);
+        return -1;  // fatal: transport dead, caller must stop using the client
+      }
+      return 0;  // timeout: no frame within timeout_us
+    }
+
+    vw_frame_header_t hdr;
+    if (!vw_protocol_decode_header(hdr_buf, sizeof(hdr_buf), &hdr)) {
+      vw_worker_client_drop_transport(client);
+      return -1;
+    }
+    if (!vw_protocol_validate_header(&hdr)) {
+      vw_worker_client_drop_transport(client);
+      return -1;
+    }
+
+    // Read the declared payload, if any.
+    uint8_t* payload = NULL;
+    if (hdr.payload_length > 0) {
+      payload = (uint8_t*)malloc(hdr.payload_length);
+      if (!payload) {
+        vw_worker_client_drop_transport(client);
+        return -1;
+      }
+      if (!receive_all(client->pipe_handle, payload, hdr.payload_length, deadline_us)) {
+        free(payload);
+        if (vw_platform_get_monotonic_time_us() < deadline_us) {
+          vw_worker_client_drop_transport(client);
+          return -1;
+        }
+        return 0;  // timeout mid-payload: no complete frame
+      }
+    }
+
+    // Decode the three worker->plugin types; anything else is drained and skipped.
+    bool decoded = false;
+    switch (hdr.type) {
+      case VW_MSG_CAPTION_SEGMENT: {
+        vw_caption_segment_t* seg = &out->segment;
+        if (vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, payload, hdr.payload_length, seg) &&
+            vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, seg)) {
+          // Copy segment text into owned storage so the caller's zero-heap path never aliases
+          // the freed wire payload.
+          uint16_t n = seg->text_bytes;
+          if (n >= VW_MAX_TEXT_BYTES) {
+            n = VW_MAX_TEXT_BYTES - 1;
+          }
+          memcpy(out->text_buf, seg->text_utf8, n);
+          out->text_buf[n] = '\0';
+          seg->text_utf8 = out->text_buf;
+          seg->text_bytes = n;
+          out->type = VW_MSG_CAPTION_SEGMENT;
+          decoded = true;
+        }
+        break;
+      }
+      case VW_MSG_STATUS:
+        if (vw_protocol_decode_payload(VW_MSG_STATUS, payload, hdr.payload_length, &out->status) &&
+            vw_protocol_validate_payload(VW_MSG_STATUS, &out->status)) {
+          out->type = VW_MSG_STATUS;
+          decoded = true;
+        }
+        break;
+      case VW_MSG_ERROR:
+        if (vw_protocol_decode_payload(VW_MSG_ERROR, payload, hdr.payload_length, &out->error) &&
+            vw_protocol_validate_payload(VW_MSG_ERROR, &out->error)) {
+          out->type = VW_MSG_ERROR;
+          decoded = true;
+        }
+        break;
+      default:
+        // Unknown type (e.g. PAUSE/RESUME/STARTED arriving late): consume and skip.
+        break;
+    }
+    free(payload);
+    if (decoded) {
+      return 1;
+    }
+    // Malformed or unsupported frame: keep draining within the same deadline.
+  }
+  return 0;  // deadline expired
 }

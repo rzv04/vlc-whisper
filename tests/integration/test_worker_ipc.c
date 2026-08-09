@@ -22,7 +22,12 @@ static void* worker_thread(void* arg) {
 int main(void) {
   vw_worker_config_t config;
   memset(&config, 0, sizeof(config));
+#ifdef _WIN32
+  // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
+  strncpy(config.pipe_name, "\\\\.\\pipe\\test_ipc_socket", sizeof(config.pipe_name) - 1);
+#else
   strncpy(config.pipe_name, "test_ipc_socket", sizeof(config.pipe_name) - 1);
+#endif
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 
   pthread_t thread;
@@ -33,7 +38,7 @@ int main(void) {
   // Give listener time to bind
   usleep(100000);
 
-  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.auth_token);
+  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.auth_token, NULL);
   EXPECT(client != NULL);  // HELLO handshake completed inside
 
   // START with an unsupported sample rate must be rejected with an E_AUDIO_FORMAT ERROR reply

@@ -35,7 +35,7 @@ vlc-whisper/
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
 │   │   └── vw_platform.h                      # OS abstraction: CSPRNG, timing, process spawning
 │   └── src/
-│       ├── vlc_whisper_module.c               # Entry point: VLC module descriptor, open/close hooks
+│       ├── vw_whisper_module.c               # Entry point: VLC module descriptor, open/close hooks
 │       ├── vw_session.c                       # Session lifecycle logic (start, pause, resume, seek reset)
 │       ├── vw_audio_capture.c                 # Audio callback handler & PCM format normalization
 │       ├── vw_caption_presenter.c             # Schedules and renders timed text captions in VLC
@@ -47,6 +47,7 @@ vlc-whisper/
 │   ├── CMakeLists.txt                         # Builds vlc-whisper-worker executable and links whisper.cpp
 │   ├── include/
 │   │   ├── vw_worker.h                        # Main worker event loop and IPC message dispatcher
+│   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
 │   │   ├── vw_whisper_engine.h                # C wrapper around third-party whisper.cpp API
 │   │   ├── vw_vad.h                           # Voice activity detection state and windowing logic
 │   │   ├── vw_segment_builder.h               # Deduplication and time-ordered segment builder
@@ -55,6 +56,7 @@ vlc-whisper/
 │   ├── src/
 │   │   ├── main.c                             # Worker executable entry point: CLI parsing & signal handling
 │   │   ├── vw_worker.c                        # Worker IPC state machine & message processing loop
+│   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
 │   │   ├── vw_whisper_engine.c                # Model loading & whisper_full inference execution
 │   │   ├── vw_vad.c                           # Speech boundary detection & active window calculation
 │   │   ├── vw_segment_builder.c               # Segment deduplication & confidence scoring logic
@@ -132,7 +134,7 @@ The `models/` directory serves as the local offline store for GGML model files a
 
 | File                     | Responsibility                                                            |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `vlc_whisper_module.c`   | VLC module registration, activation/deactivation, module setup            |
+| `vw_whisper_module.c`   | VLC module registration, activation/deactivation, module setup; since 14c also hosts the sender thread (SPSC drain + worker frame drain, 5/20 ms cadence) and model-path discovery (`model-path` option) |
 | `vw_session.c`           | Caption session state: start, pause, resume, stop, discontinuity, failure |
 | `vw_audio_capture.c`     | Receive/normalize PCM and associate monotonic media PTS                   |
 | `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |

@@ -49,6 +49,10 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/integration/test_worker_ipc.c`: `START` with an unsupported sample rate rejected with an `E_AUDIO_FORMAT` error reply; clean `SHUTDOWN` exit.
 - `tests/unit/test_worker_config.c`: worker CLI arg parsing — valid `--token`/`--pipe`/`--model` success, and startup failure paths returning exit code 2 (bad `--token` length, non-hex `--token`, unknown option, dangling `--token`, NULL config).
 - `tests/unit/vw_test_worker_client.c`: client-API session state machine (`vw_worker_client_start_session`, `vw_worker_client_send_audio`, `vw_worker_client_stop_session`, `vw_worker_client_shutdown`), transport receive timeout (`vw_ipc_receive_timeout`), and protocol framing verification against an in-process mock server.
+- `tests/unit/test_worker_queue.c` (14c): bounded worker frame queue FIFO order with mixed types, payload ownership transfer, full-queue eviction dropping only the oldest `AUDIO` frame while control frames survive, `dropped_audio_us` equal to the decoded `duration_us` sum, zero-payload frames, and destroy freeing queued payloads (valgrind).
+- `tests/unit/vw_test_worker_client.c` (14c receive-frame block): `vw_worker_client_receive_frame` decodes `CAPTION_SEGMENT`/`STATUS`/`ERROR` in order, drains and skips an unknown `PAUSE` frame, times out with 0 against a silent server (transport stays usable), and returns -1 at EOF; segment text is copied into caller-owned storage.
+- `tests/integration/test_worker_lifecycle.c` (14c additions): worker with zeroed `model_path` rejects `START` through the client API (E_MODEL_MISSING error path); model-gated section (when `models/ggml-tiny.en.bin` exists and not under Valgrind) streams four 512 ms silence chunks through `STARTED`/`AUDIO`/`STOP`/`SHUTDOWN` and exits 0.
+- `tests/integration/test_worker_ipc.c` (14c): unchanged asserts re-run against the worker reader-thread split, proving the split preserves lifecycle semantics.
 
 ## Performance contract
 

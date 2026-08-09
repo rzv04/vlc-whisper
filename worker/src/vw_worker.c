@@ -1,12 +1,22 @@
 #include "vw_worker.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "vw_ipc_transport.h"
+#include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
+#include "vw_worker_queue.h"
+
+// Argument bundle passed to the worker IPC reader thread.
+typedef struct vw_worker_reader_arg {
+  vw_ipc_handle_t* handle;
+  vw_worker_queue_t* queue;
+  _Atomic bool* running;
+} vw_worker_reader_arg_t;
 
 // Constant-time comparison of two 32-byte tokens to prevent timing attacks
 static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES],
@@ -45,6 +55,74 @@ static bool send_error(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESS
   return true;
 }
 
+// Dedicated IPC reader thread (ADR-013): the only thread that reads from the pipe. Continuously
+// drains frames into the bounded worker frame queue so inference on the main loop never stalls
+// transport reads. Never sends; all replies stay single-writer in vw_worker_run's main loop.
+static void* vw_worker_reader_main(void* arg) {
+  vw_worker_reader_arg_t* a = (vw_worker_reader_arg_t*)arg;
+  uint8_t header_buf[sizeof(vw_frame_header_t)];
+  uint8_t* payload_buf = NULL;
+
+  while (atomic_load(a->running)) {
+    // Receive the 20-byte header, retrying on timeout but leaving promptly when shutting down.
+    int32_t bytes_read = 0;
+    while (bytes_read < (int32_t)sizeof(vw_frame_header_t)) {
+      int32_t res = vw_ipc_receive(a->handle, header_buf + bytes_read, sizeof(vw_frame_header_t) - bytes_read);
+      if (res < 0) {
+        if (res == VW_IPC_RECV_TIMEOUT) {
+          if (!atomic_load(a->running)) return NULL;  // bounded join: exit on shutdown
+          continue;                                   // timeout — keep waiting (video pause)
+        }
+        goto fatal;  // VW_IPC_RECV_FATAL: peer closed / broken pipe
+      }
+      bytes_read += res;
+    }
+
+    vw_frame_header_t header;
+    if (!vw_protocol_decode_header(header_buf, sizeof(vw_frame_header_t), &header)) {
+      goto fatal;
+    }
+    if (!vw_protocol_validate_header(&header)) {
+      goto fatal;
+    }
+
+    payload_buf = NULL;
+    if (header.payload_length > 0) {
+      payload_buf = (uint8_t*)malloc(header.payload_length);
+      if (!payload_buf) {
+        goto fatal;
+      }
+      uint32_t payload_read = 0;
+      while (payload_read < header.payload_length) {
+        int32_t res = vw_ipc_receive(a->handle, payload_buf + payload_read, header.payload_length - payload_read);
+        if (res < 0) {
+          if (res == VW_IPC_RECV_TIMEOUT) {
+            if (!atomic_load(a->running)) {
+              free(payload_buf);
+              return NULL;
+            }
+            continue;
+          }
+          goto fatal;
+        }
+        payload_read += (uint32_t)res;
+      }
+    }
+
+    // The queue takes ownership of payload and frees it if the frame is dropped on overflow.
+    vw_worker_queue_push(a->queue, header.type, payload_buf, header.payload_length);
+    payload_buf = NULL;
+  }
+  return NULL;
+
+fatal:
+  free(payload_buf);
+  atomic_store(a->running, false);
+  // Wake the main loop with a synthetic SHUTDOWN so it exits instead of polling an empty queue.
+  vw_worker_queue_push(a->queue, VW_MSG_SHUTDOWN, NULL, 0);
+  return NULL;
+}
+
 int vw_worker_run(const vw_worker_config_t* config) {
   if (!config) {
     return 1;
@@ -55,9 +133,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
     return 1;
   }
 
-  bool running = true;
+  _Atomic bool running = true;
   bool authenticated = false;
-  uint8_t header_buf[sizeof(vw_frame_header_t)];
 
   // Heap-allocate the 8s analysis window once (128k floats) rather than a 512KB stack frame per message.
   float* window_samples = (float*)malloc(VW_WINDOW_SAMPLES * sizeof(float));
@@ -74,48 +151,38 @@ int vw_worker_run(const vw_worker_config_t* config) {
   bool session_active = false;
   uint32_t sequence = 1;
 
-  while (running) {
-    int32_t bytes_read = 0;
-    while (bytes_read < (int32_t)sizeof(vw_frame_header_t)) {
-      int32_t res = vw_ipc_receive(handle, header_buf + bytes_read, sizeof(vw_frame_header_t) - bytes_read);
-      if (res < 0) {
-        if (res == VW_IPC_RECV_TIMEOUT) continue;  // timeout — keep waiting (video pause)
-        running = false;                           // fatal (VW_IPC_RECV_FATAL): peer closed / broken pipe
+  vw_worker_queue_t* queue = vw_worker_queue_create(32);
+  if (!queue) {
+    free(window_samples);
+    if (audio_buf) vw_audio_buffer_free(audio_buf);
+    if (builder) vw_segment_builder_free(builder);
+    if (engine) vw_whisper_engine_free(engine);
+    vw_ipc_close(handle);
+    return 1;
+  }
+
+  vw_worker_reader_arg_t reader_arg = {.handle = handle, .queue = queue, .running = &running};
+  vw_thread_t reader_thread;
+  if (!vw_platform_thread_create(&reader_thread, vw_worker_reader_main, &reader_arg)) {
+    // Reader spawn failure: fail closed rather than starve the pipe.
+    vw_worker_queue_destroy(queue);
+    free(window_samples);
+    if (audio_buf) vw_audio_buffer_free(audio_buf);
+    if (builder) vw_segment_builder_free(builder);
+    if (engine) vw_whisper_engine_free(engine);
+    vw_ipc_close(handle);
+    return 1;
+  }
+
+  while (atomic_load(&running)) {
+    vw_worker_frame_t frame;
+    while (atomic_load(&running)) {
+      if (vw_worker_queue_pop(queue, &frame)) {
         break;
       }
-      bytes_read += res;
+      vw_platform_sleep_ms(5);
     }
-    if (!running) break;
-
-    vw_frame_header_t header;
-    if (!vw_protocol_decode_header(header_buf, sizeof(vw_frame_header_t), &header)) {
-      break;
-    }
-
-    if (!vw_protocol_validate_header(&header)) {
-      break;
-    }
-
-    uint8_t* payload_buf = NULL;
-    if (header.payload_length > 0) {
-      payload_buf = (uint8_t*)malloc(header.payload_length);
-      if (!payload_buf) break;
-
-      // receive the payload in a loop to handle partial reads
-      uint32_t payload_read = 0;
-      while (payload_read < header.payload_length) {
-        int32_t res = vw_ipc_receive(handle, payload_buf + payload_read, header.payload_length - payload_read);
-        if (res < 0) {
-          if (res == VW_IPC_RECV_TIMEOUT) continue;  // timeout — keep waiting (video pause)
-          running = false;                           // fatal (VW_IPC_RECV_FATAL): peer closed / broken pipe
-          break;
-        }
-        payload_read += res;
-      }
-    }
-
-    if (!running) {
-      free(payload_buf);
+    if (!atomic_load(&running)) {
       break;
     }
 
@@ -130,25 +197,25 @@ int vw_worker_run(const vw_worker_config_t* config) {
     memset(&payload_decoded, 0, sizeof(payload_decoded));
 
     bool valid_payload = false;
-    if (vw_protocol_decode_payload(header.type, payload_buf, header.payload_length, &payload_decoded)) {
-      if (vw_protocol_validate_payload(header.type, &payload_decoded)) {
+    if (vw_protocol_decode_payload(frame.type, frame.payload, frame.payload_len, &payload_decoded)) {
+      if (vw_protocol_validate_payload(frame.type, &payload_decoded)) {
         valid_payload = true;
       }
     }
 
     // also enforce after receiving
-    if (!valid_payload && header.payload_length > 0) {
-      free(payload_buf);
+    if (!valid_payload && frame.payload_len > 0) {
+      free(frame.payload);
       break;  // Invalid payload
     }
 
     if (!authenticated) {
-      if (header.type != VW_MSG_HELLO) {
-        free(payload_buf);
+      if (frame.type != VW_MSG_HELLO) {
+        free(frame.payload);
         break;  // First message must be HELLO
       }
       if (!verify_token_constant_time(config->auth_token, payload_decoded.hello.auth_token)) {
-        free(payload_buf);
+        free(frame.payload);
         break;  // Auth failed
       }
       authenticated = true;
@@ -162,7 +229,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
       uint8_t ack_payload[256];
       size_t ack_len = 0;
       if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, ack_payload, sizeof(ack_payload), &ack_len)) {
-        free(payload_buf);
+        free(frame.payload);
         break;
       }
       vw_frame_header_t ack_hdr = {.magic = VW_PROTOCOL_MAGIC,
@@ -172,17 +239,17 @@ int vw_worker_run(const vw_worker_config_t* config) {
                                    .sequence = 1};
       uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
       if (!vw_protocol_encode_header(&ack_hdr, ack_hdr_buf, sizeof(ack_hdr_buf))) {
-        free(payload_buf);
+        free(frame.payload);
         break;
       }
       vw_ipc_send(handle, ack_hdr_buf, sizeof(ack_hdr_buf));
       vw_ipc_send(handle, ack_payload, ack_len);
 
-      free(payload_buf);
+      free(frame.payload);
       continue;
     }
 
-    switch (header.type) {
+    switch (frame.type) {
       case VW_MSG_START_SESSION: {
         if (session_active) {
           break;  // Duplicate START without STOP — ignore
@@ -257,7 +324,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
 
       case VW_MSG_SHUTDOWN:
-        running = false;
+        atomic_store(&running, false);
         break;
 
       default:
@@ -286,8 +353,15 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
     }
 
-    free(payload_buf);
+    free(frame.payload);
   }
+
+  // Shutdown order (review-corrected): stop the reader first, join it (bounded by its 3s receive
+  // timeout), and only then close the handle. Closing an fd another thread is blocked recv()-ing on
+  // is a POSIX portability trap, so the timeout — not the close — is what unblocks the reader.
+  atomic_store(&running, false);
+  vw_platform_thread_join(reader_thread);
+  vw_worker_queue_destroy(queue);
 
   free(window_samples);
   if (audio_buf) vw_audio_buffer_free(audio_buf);

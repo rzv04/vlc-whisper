@@ -28,7 +28,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 
 ## Milestone 2: VLC feasibility spike (Complete)
 
-- [x] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vlc_whisper_module.c`).
+- [x] 9. Build the smallest C VLC module against the pinned target and verify load/unload with `-vvv` logs (`plugin/src/vw_whisper_module.c`).
 - [x] 10. Capture decoded PCM plus PTS without blocking the audio callback; prove canonical conversion path and queue behavior (`vw_audio_capture.c`, `vw_queue.c`).
 - [x] 11. Independently prove caption display: OSD overlay route implemented and verified (`vw_caption_presenter.c`); native SPU deferred.
 - [x] 12. Decide in-tree/pinned-VLC build versus supported out-of-tree packaging using observed Windows behavior (ADR-012).
@@ -45,7 +45,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [x] 13. Connect VLC plugin IPC client (`vw_worker_client.c`) to worker process during module `Open`.
 - [x] 14a. Worker audio pipeline: implement real `vw_whisper_engine` (model load, warmup, transcription) and `vw_audio_buffer` (S16LE→float32 append, bounded drop-oldest), handle `START`/`AUDIO`/`STOP` in `vw_worker.c` (single-threaded session loop), 8 s window / 2 s hop windowing and energy-VAD gating, and emit `CAPTION_SEGMENT` frames.
 - [x] 14b. Plugin client API and transport: extend `vw_worker_client` with session send API (`START`/`AUDIO`/`STOP`, session and sequence tracking), add `vw_ipc_receive_timeout` transport API, and update process supervision (`vw_platform_wait_process` / out-handle).
-- [ ] 14c. Plugin real-time streaming & worker thread split: drain SPSC queue on background sender thread to feed `AUDIO` frames across IPC in real time, drain worker frames, degrade to passthrough on pipe death; split `vw_worker.c` into decoupled IPC reader thread + inference worker thread (ADR-013).
+- [x] 14c. Plugin real-time streaming & worker thread split: drain SPSC queue on background sender thread to feed `AUDIO` frames across IPC in real time, drain worker frames, degrade to passthrough on pipe death; split `vw_worker.c` into decoupled IPC reader thread + inference worker thread (ADR-013). Shipped: `vw_worker_queue` (bounded frame queue, drop-oldest-AUDIO), worker reader thread + frame-queue main loop, `vw_worker_client_receive_frame` (SEGMENT/STATUS/ERROR drain), `--model` spawn argv + plugin model discovery (`model-path` option), sender thread with 5/20 ms send/receive cadence; SEGMENT frames counted and discarded until step 15.
 - [ ] 15. Receive incoming `SEGMENT` frames on plugin background thread and trigger `vw_caption_presenter_display()`.
 - [ ] 16. Implement Play/Pause lifecycle: send `PAUSE`/`RESUME` IPC control frames, suspend PCM queue forwarding on pause, and resume timeline PTS sync on resume.
 - [ ] 17. Implement Seeking & Discontinuity support: detect `BLOCK_FLAG_DISCONTINUITY` / non-monotonic PTS, clear active presenter captions, send `STOP` (`SEEK_DISCONTINUITY`), reset SPSC queue/VAD state, and start new session epoch without interrupting playback.

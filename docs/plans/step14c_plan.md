@@ -38,7 +38,7 @@ One externally verifiable outcome: with `--audio-filter=vlc_whisper` on a local 
    Push takes ownership of `payload` and frees it if dropped. Drop policy: on full, evict the OLDEST frame whose `type == VW_MSG_AUDIO_PCM`, decode its payload via `vw_protocol_decode_payload` to read `duration_us` (fall back to 0 on decode failure), add it to `dropped_audio_us`; control frames are NEVER dropped. If no AUDIO frame is evictable (all-control queue, impossible in practice), drop the incoming frame instead (counted only if AUDIO). Every header function gets the required 20–30 word comment (AGENTS.md rule 11).
 
 2. **Worker reader thread + frame-queue main loop (ADR-013)** — `worker/src/vw_worker.c`: keep all session logic byte-for-byte; move only the receive path.
-   - New static `void* vw_worker_reader_main(void* arg)` (arg = `struct { vw_ipc_handle_t* handle; vw_worker_queue_t* queue; _Atomic bool* running; }`): loop while `*running` — receive the 20-byte header via `vw_ipc_receive` (retry on `VW_IPC_RECV_TIMEOUT`), decode+validate header, `malloc(payload_len)`, receive payload in a loop; push `{type, len, payload}` (queue owns it). On `VW_IPC_RECV_FATAL`: free partial payload, `*running = false`, push a synthetic zero-payload `VW_MSG_SHUTDOWN` frame (wakes the main loop), return NULL. The reader never sends — replies stay single-writer in the main loop.
+   - New static `void* vw_worker_reader_main(void* arg)` (arg = `struct { vw_ipc_handle_t* handle; vw_worker_queue_t* queue; _Atomic bool* running; }`): loop while `*running` — receive the 20-byte header via `vw_ipc_receive` (on `VW_IPC_RECV_TIMEOUT` `continue` so the top-of-loop `while (*running)` re-check bounds the join to ≤3 s after shutdown; an unconditional retry would hang it), decode+validate header, `malloc(payload_len)`, receive payload in a loop; push `{type, len, payload}` (queue owns it). On `VW_IPC_RECV_FATAL`: free partial payload, `*running = false`, push a synthetic zero-payload `VW_MSG_SHUTDOWN` frame (wakes the main loop), return NULL. The reader never sends — replies stay single-writer in the main loop.
    - `vw_worker_run`: create `vw_worker_queue_create(32)`; `_Atomic bool running = true` replaces the local `bool running`; spawn the reader via `vw_platform_thread_create` (spawn failure → destroy queue, close handle, return 1 — worker fails closed). Replace the receive section with: `vw_worker_frame_t frame; while (running) { if (vw_worker_queue_pop(&frame)) break; vw_platform_sleep_ms(5); }` then `if (!running) break;`. Decode/validate the payload with the existing union + `vw_protocol_decode_payload`/`validate_payload`; on invalid payload `free(frame.payload)` before the existing `break`. Dispatch the existing switch unchanged (the synthetic SHUTDOWN hits the existing `case VW_MSG_SHUTDOWN: running = false;`). `free(frame.payload)` exactly once per frame, after the segment-drain block; remove the scattered `free(payload_buf)` calls that belonged to the old receive path. After the loop: `running = false`, `vw_ipc_close(handle)` (unblocks the reader's blocked receive), `vw_platform_thread_join(reader_thread)`, `vw_worker_queue_destroy`, then existing cleanup and `return authenticated ? 0 : 1;`.
    - Behavior preserved: wrong-token HELLO → exit 1; first-frame-not-HELLO → exit 1; STARTED/ERROR replies, AUDIO session-id rejection, windowing, segment emission.
 
@@ -65,10 +65,10 @@ One externally verifiable outcome: with `--audio-filter=vlc_whisper` on a local 
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path);  // NULL → omit --model
    ```
-   Build argv `{executable_path, "--pipe", endpoint_name, "--token", token_hex, "--model", model_path, NULL}` when `model_path` non-NULL; exactly two argv shapes. Callsites to update (grep `vw_worker_client_launch_and_connect(` returns exactly these): `plugin/src/vlc_whisper_module.c:294` (pass resolved model path), `tests/unit/vw_test_worker_client.c:155` (add `NULL`), `tests/integration/test_worker_lifecycle.c:36,50,93,94,96` (add `NULL` to all five), `tests/integration/test_worker_ipc.c:36` (add `NULL`). Worker already parses `--model` (`vw_worker_config_parse_args`, vw_worker_config.c:57-60); its CWD-relative default stays as the no-flag fallback.
+   Build argv `{executable_path, "--pipe", endpoint_name, "--token", token_hex, "--model", model_path, NULL}` when `model_path` non-NULL; exactly two argv shapes. Callsites to update (grep `vw_worker_client_launch_and_connect(` returns exactly these): `plugin/src/vw_whisper_module.c:294` (pass resolved model path), `tests/unit/vw_test_worker_client.c:155` (add `NULL`), `tests/integration/test_worker_lifecycle.c:36,50,93,94,96` (add `NULL` to all five), `tests/integration/test_worker_ipc.c:36` (add `NULL`). Worker already parses `--model` (`vw_worker_config_parse_args`, vw_worker_config.c:57-60); its CWD-relative default stays as the no-flag fallback.
 
-5. **Plugin sender thread + model discovery** — `plugin/src/vlc_whisper_module.c`:
-   - `vw_plugin_sys_t` additions: `vw_thread_t sender_thread; _Atomic bool sender_running; _Atomic bool worker_dead; uint64_t chunks_sent; uint32_t frames_received, segments_received, status_received, errors_received; char model_path[1024];`
+5. **Plugin sender thread + model discovery** — `plugin/src/vw_whisper_module.c`:
+   - `vw_plugin_sys_t` additions: `vw_thread_t sender_thread; _Atomic bool sender_running; _Atomic bool worker_dead; uint64_t chunks_sent; uint32_t frames_received, segments_received, status_received, errors_received; char model_path[256];` — buffer sized to match `vw_worker_config.model_path[256]` (worker truncates an over-long `--model` → spurious `E_MODEL_MISSING`; cap resolution output at 255 chars).
    - New `static bool vw_plugin_resolve_model_path(char* out, size_t out_size)`: copy the structure of `vw_plugin_resolve_worker_path` (same ancestor-loop bounds: ≤4 up on POSIX, ≤3 on Win32; same exe-dir fallback via `/proc/self/exe` / `GetModuleFileNameA(NULL, …)`), probing two files per candidate dir: `<dir>/ggml-tiny.en.bin` and `<dir>/models/ggml-tiny.en.bin`. First hit wins.
    - `vw_plugin_open`: after the `worker-path` option block — `config_GetPsz(obj, "model-path")` non-empty → copy verbatim into `sys->model_path` (a bad configured path surfaces as `E_MODEL_MISSING` at session start; do NOT pre-check existence); else `vw_plugin_resolve_model_path`; else leave empty (pass NULL). Register in `vlc_module_begin()` next to `worker-path`: `add_loadfile("model-path", NULL, "Path to ggml-tiny.en.bin model file (optional)", "Explicit location of the whisper model; defaults to discovery next to the plugin", false)`.
    - New `static void* vw_plugin_sender_main(void* arg)` (arg = `vw_plugin_sys_t*`):
@@ -87,7 +87,7 @@ One externally verifiable outcome: with `--audio-filter=vlc_whisper` on a local 
    - Extend `tests/integration/test_worker_lifecycle.c`: keep every existing assert (proves the split preserves lifecycle semantics). Append: worker with zeroed `model_path` (engine NULL) → `vw_worker_client_start_session` returns false (ERROR path through the client API); then, ONLY if `models/ggml-tiny.en.bin` exists (else print a skip notice), a model worker: `start_session` true → `send_audio` 4 synthetic silence chunks (`bytes = 32000`, `duration_us = 1000000`, staggered `start_pts_us`) → `stop_session(client, 0)` → `shutdown(client)` → join expects exit 0.
    - `test_plugin_load` unchanged (ABI surface untouched). No new model-gated unit test: transcription is unchanged by the split; existing `SKIP_RETURN_CODE 77` wiring stays.
 
-8. **Docs** (same change, AGENTS.md rule 14): `docs/roadmap.md` 14c → `[x]` with a short shipped-summary suffix; `docs/architecture.md` threading diagram region (lines ~17–27) — worker reader thread + session/inference loop now real (ADR-013 implemented), plugin sender thread with 5/20 ms cadence, single-writer per direction; `docs/source-layout.md` — add `vw_worker_queue.c/h`, note sender thread in `vlc_whisper_module.c`; `docs/test-strategy.md` — add the new tests; `README.md` — model placement (`models/ggml-tiny.en.bin` next to plugin / `models/` subdir / VLC exe dir, or `--model-path=/abs/path`; `--worker-path` for the binary). No `docs/api-contracts.md` change: no wire change; the session_id-in-every-payload rule is already documented (api-contracts.md:40).
+8. **Docs** (same change, AGENTS.md rule 14): `docs/roadmap.md` 14c → `[x]` with a short shipped-summary suffix; `docs/architecture.md` threading diagram region (lines ~17–27) — worker reader thread + session/inference loop now real (ADR-013 implemented), plugin sender thread with 5/20 ms cadence, single-writer per direction; `docs/source-layout.md` — add `vw_worker_queue.c/h`, note sender thread in `vw_whisper_module.c`; `docs/test-strategy.md` — add the new tests; `README.md` — model placement (`models/ggml-tiny.en.bin` next to plugin / `models/` subdir / VLC exe dir, or `--model-path=/abs/path`; `--worker-path` for the binary). No `docs/api-contracts.md` change: no wire change; the session_id-in-every-payload rule is already documented (api-contracts.md:40).
 
 ### Out of scope
 
@@ -96,7 +96,7 @@ GPU whisper (17a), look-ahead/source decoding (17b–d), PAUSE/RESUME (16), seek
 ### Files/components expected to change
 
 - New: `worker/src/vw_worker_queue.c`, `worker/include/vw_worker_queue.h`, `tests/unit/test_worker_queue.c`, `docs/plans/step14c_plan.md`.
-- `worker/src/vw_worker.c`, `worker/CMakeLists.txt`, `plugin/src/vw_worker_client.c`, `plugin/include/vw_worker_client.h`, `plugin/src/vlc_whisper_module.c`, `plugin/CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/unit/vw_test_worker_client.c`, `tests/integration/test_worker_lifecycle.c`, `tests/integration/test_worker_ipc.c` (single-line NULL arg), `docs/roadmap.md`, `docs/architecture.md`, `docs/source-layout.md`, `docs/test-strategy.md`, `README.md`.
+- `worker/src/vw_worker.c`, `worker/CMakeLists.txt`, `plugin/src/vw_worker_client.c`, `plugin/include/vw_worker_client.h`, `plugin/src/vw_whisper_module.c`, `plugin/CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/unit/vw_test_worker_client.c`, `tests/integration/test_worker_lifecycle.c`, `tests/integration/test_worker_ipc.c` (single-line NULL arg), `docs/roadmap.md`, `docs/architecture.md`, `docs/source-layout.md`, `docs/test-strategy.md`, `README.md`.
 
 ## Design
 
@@ -105,46 +105,74 @@ GPU whisper (17a), look-ahead/source decoding (17b–d), PAUSE/RESUME (16), seek
   - **Session token role**: two distinct tokens. The 32-byte `auth_token` is a transport credential — sent once in `VW_MSG_HELLO`, constant-time verified by the worker (`verify_token_constant_time`, vw_worker.c), never re-sent per chunk. The 16-byte `session_id` is the per-session correlation token — generated fresh per session (`vw_platform_get_random_bytes` in `vw_worker_client_start_session`), carried in the payload of every post-HELLO frame (START, AUDIO, STOP) and echoed by the worker in SEGMENT/STATUS/ERROR (vw_msg_* structs, protocol/include/vw_protocol_types.h).
   - **Is it applied to audio chunks?** Yes — already implemented in 14b: `vw_worker_client_send_audio` stamps every AUDIO frame with `client->session_id`; the worker `memcmp`s it against the active session and drops mismatches (vw_worker.c, `VW_MSG_AUDIO_PCM` case). 14c adds nothing.
   - **Worker thread split**: reader thread = only reader (pipe drained continuously, ADR-013); main loop = session+inference, only writer (HELLO_ACK/STARTED/ERROR/SEGMENT replies). Frames flow reader → bounded SPSC frame queue → main loop; control frames never dropped, audio drop-oldest with `dropped_audio_us` counter.
-- Ownership/threading model: plugin — VLC callback enqueues only (Rule 4, lock-free); sender thread is the only consumer of the SPSC queue and the only user of the client (send + receive + session calls, no locking needed); close joins the sender before touching the client/queue. Worker — reader thread owns all reads; main loop owns all writes; queue slots own their payload until pop transfers it. Join ordering: main loop sets `running=false` and closes the handle first (unblocks the reader's receive), then joins; reader join is bounded by the 3 s `vw_ipc_receive` timeout.
+- Ownership/threading model: plugin — VLC callback enqueues only (Rule 4, lock-free); sender thread is the only consumer of the SPSC queue and the only user of the client (send + receive + session calls, no locking needed); close joins the sender before touching the client/queue. Worker — reader thread owns all reads; main loop owns all writes; queue slots own their payload until pop transfers it. Join ordering (corrected per review): main loop sets `running=false` FIRST, then joins the reader thread (bounded ≤3 s by the reader's `vw_ipc_receive` timeout), and ONLY THEN closes the handle. Do NOT close the handle before joining to "unblock" the reader: closing an fd another thread is blocked in `recv()` on is a POSIX portability trap (the blocked call may not wake, and the fd number can be reused) — the 3 s receive timeout is the bound, not the close.
 - Bounds, time units, and failure behavior: SPSC queue 16 chunks (8 s, drop-newest, existing); worker frame queue 32 slots (~512 KB worst case, drop-oldest audio); 5 ms / 20 ms receive cadence; 3 s I/O timeouts (existing); 5 s process-wait + terminate fallback (existing); join bounded ≤ ~3.02 s. Failure: any fatal read/send, non-recoverable ERROR, or START rejection → `worker_dead` → sender stops, one rate-limited log; playback untouched (callback never blocks; overflow drops).
 - Privacy/security implications: unchanged — no network, no telemetry, no PCM/transcript persistence; auth token HELLO-only; ERROR messages already redacted (api-contracts error catalog); model path is a local file path.
 - Protocol change: none (all frame types exist; transport gains an internal receive API only).
 
 ### Sequence diagram (14c target end state)
 
+New in 14c: plugin sender thread (S), worker reader thread (R), worker frame queue (FQ), plugin receive/drain path.
+Already implemented and kept (14a/14b): capture+queue, windowing/VAD, whisper_full, segment emission, client framing APIs.
+Nothing from steps 15+ is shown (presenter wiring is only referenced as the step-15 forward note).
+
 ```mermaid
 sequenceDiagram
   autonumber
-  participant CB as VLC audio callback (lock-free)
-  participant Q as Plugin SPSC queue (16 chunks, drop-newest)
-  participant S as Plugin sender thread (14c)
-  participant P as IPC pipe (auth token in HELLO)
-  participant R as Worker reader thread (14c, ADR-013)
-  participant FQ as Worker frame queue (32, drop-oldest audio)
-  participant W as Worker session+inference loop
-  participant E as whisper.cpp engine (model-once)
+  participant CB as VLC audio callback (existing, lock-free)
+  participant Q as Plugin SPSC queue (existing, 16 chunks, drop-newest)
+  participant S as Plugin sender thread (NEW in 14c)
+  participant P as IPC pipe (existing, auth token in HELLO)
+  participant R as Worker reader thread (NEW in 14c, ADR-013)
+  participant FQ as Worker frame queue (NEW in 14c, 32 slots, drop-oldest audio)
+  participant W as Worker session+inference loop (14a, now fed via frame queue)
+  participant E as whisper.cpp engine (14a, model-once)
 
-  Note over S: Open: resolve model path, spawn worker with --pipe --token --model, HELLO handshake
-  S->>W: START_SESSION (session_id[16] + origin + model_id)
-  W-->>S: STARTED | ERROR (session_id echoed)
+  Note over S: Open (14c): resolve model path, spawn worker with --pipe --token --model, HELLO handshake
+  S->>W: START_SESSION (session_id[16] + origin + model_id) (14b API, 14c start path)
+  W-->>S: STARTED | ERROR (session_id echoed) (14b API, 14c sender handles)
   loop playback
-    CB->>Q: enqueue S16 chunk (512 ms)
-    S->>Q: pop
-    S->>P: AUDIO_PCM (session_id + PTS + PCM)
-    P->>R: frame bytes
-    R->>FQ: push {type, payload}
-    FQ->>W: pop frame
-    W->>W: append → 8 s window → VAD gate
-    W->>E: whisper_full (200–500 ms)
-    E-->>W: text
-    W-->>S: CAPTION_SEGMENT (session_id + PTS range)
-    S->>S: count + discard (step 15 wires presenter)
+    CB->>Q: enqueue S16 chunk (512 ms) (existing)
+    S->>Q: pop (14c)
+    S->>P: AUDIO_PCM (session_id + PTS + PCM) (14b framing, 14c sender)
+    P->>R: frame bytes (14c)
+    R->>FQ: push {type, payload} (14c)
+    FQ->>W: pop frame (14c)
+    W->>W: append → 8 s window → VAD gate (14a)
+    W->>E: whisper_full (200–500 ms) (14a)
+    E-->>W: text (14a)
+    W-->>S: CAPTION_SEGMENT (session_id + PTS range) (emit 14a, receive 14c)
+    S->>S: count + discard (14c, step 15 wires presenter)
   end
-  Note over S: fatal read / non-recoverable ERROR / start failure → worker_dead → passthrough only
+  Note over S: fatal read / non-recoverable ERROR / start failure → worker_dead → passthrough only (14c)
   Note over CB: callback never blocks, overflow drops (existing)
-  S-->>W: STOP_SESSION + SHUTDOWN (close)
-  S->>S: join → wait process ≤ 5 s → terminate if needed
+  S-->>W: STOP_SESSION + SHUTDOWN (close, 14c)
+  S->>S: join → wait process ≤ 5 s → terminate if needed (14c)
 ```
+
+## Review findings (2026-08-08, pre-implementation review)
+
+Objections raised against an earlier draft after reading the codebase (AGENTS.md rules 15–16: sources + `graphify-out/` graph consulted). All resolved in the sections above:
+
+1. **Join ordering (fixed in Ownership/threading model)** — draft closed the IPC handle before joining the reader to "unblock" its receive. Closing an fd another thread is blocked in `recv()` on is a POSIX portability trap; the correct bound is the reader's own 3 s `vw_ipc_receive` timeout. Order: `running=false` → join → close.
+2. **Reader timeout retry (fixed in Scope step 2)** — "retry on `VW_IPC_RECV_TIMEOUT`" must be a `continue` so the top-of-loop `while (*running)` re-check exits the thread ≤3 s after shutdown; an unconditional retry would make the join unbounded.
+3. **Model path buffer (fixed in Scope step 5)** — `model_path[1024]` in the plugin vs `model_path[256]` in `vw_worker_config_t`; a longer resolved path would silently truncate in the worker and surface as a spurious `E_MODEL_MISSING`. Sized to 256 and resolution capped at 255.
+4. **START-error logging (confirmed already covered in Scope step 3)** — `vw_worker_client_start_session` currently drains the worker's `ERROR` reply with no log (client.c:244–262); the plan's `WORKER_START_ERROR` WARN is required for the model-absent path to be diagnosable. No change needed beyond what step 3 already specifies.
+5. **5 ms poll latency (accepted tradeoff, noted in Design)** — the main-loop frame-queue poll adds ≤5 ms latency vs today's blocking receive; deliberate in exchange for a lock-free queue, bounded and documented.
+
+## Windows verification findings (2026-08-08, post-implementation)
+
+Found while validating the Windows cross-build and its standalone binaries on a VM host:
+
+1. **Worker exe imported `libgomp-1.dll` (real spawn blocker)** — ggml's OpenMP (`GGML_OPENMP=ON`, default) links `OpenMP::OpenMP_CXX`, which resolves to the explicit path `libgomp.dll.a` on MinGW. An import lib adds a `libgomp-1.dll` runtime dependency that no `-static`/`-static-libgomp` flag can remove (explicit paths beat driver flags). On a host without that MinGW runtime DLL, `CreateProcessW` succeeds but the process dies in the loader before `main` — a sub-100 ms flash Task Manager can miss. Fixed by `GGML_OPENMP=OFF` on `WIN32` (ggml computes graphs with its own pthread-based `ggml_threadpool`, so `n_threads` still works); verified the OpenMP-off whisper path at runtime on Linux. All Windows binaries now import only system DLLs.
+1a. **Release preset picked up `GGML_VULKAN=ON` via host SDK auto-detect** — a fresh configure on a host with a Vulkan SDK (e.g. `/home/razvan/vw-vulkan`) links `ggml-vulkan` + `libvulkan-1.a`, making the worker import `vulkan-1.dll` (non-system on bare/old Windows) and the build host-dependent. GPU whisper is step 17a (out of scope), so `GGML_VULKAN=OFF` is pinned unconditionally: every host builds the same CPU-only binary.
+2. **Integration tests used bare pipe names on Windows** — `test_worker_ipc`/`test_worker_lifecycle` set `pipe_name = "test_*_socket"` without the `\\.\pipe\` prefix that Windows named pipes require; the worker's `CreateNamedPipeA` and the client's `CreateFileA` both failed → `client == NULL`. Added the `_WIN32` prefix (matching `vw_test_worker_client.c`).
+3. **`test_platform` spawned `cmd.exe` with no args** — an interactive shell that never exits, so `vw_platform_wait_process(proc, 2000)` timed out. Fixed to `cmd.exe /c exit` (mirrors `/bin/true` on POSIX).
+4. **Resolver returned forward-slash paths on Win32** — the shared `vw_plugin_probe_ancestors` built candidates with `/`; `CreateProcessW`/`GetFileAttributesA` prefer native `\`. Restored the `\\` separator under `_WIN32`.
+5. **`test_plugin_load` error 126 on a standalone copy** — the plugin DLL legitimately imports `libvlccore.dll` (it is a VLC module); running the test outside the VLC install (no `libvlccore.dll` on `PATH`) is expected to fail with `ERROR_MOD_NOT_FOUND`. Run it from the VLC directory or with VLC on `PATH`.
+6. **Module never instantiated in VLC (worker never spawned via GUI)** — the module declaration lacked `set_category(CAT_AUDIO)` / `set_subcategory(SUBCAT_AUDIO_AFILTER)`. VLC 3.x lists GUI-selectable audio filters by the `SUBCAT_AUDIO_AFILTER` subcategory, so the module could not be enabled from Preferences → All → Audio → Filters — the toggle the user saw wasn't this module, and without it `vw_plugin_open` never ran (no spawn, no logs; `PLUGIN_WORKER_UNAVAILABLE` is `msg_Warn` and its absence confirmed open() was never called). Added both declarations. CLI `--audio-filter=vlc_whisper` selects by capability+shortcut and does not need the category.
+
+No further objections. `vw_worker_client_launch_and_connect` callsites, queue-pop production callers, worker thread split points, and drop-policy mechanics were all verified against source before planning.
 
 ## Acceptance criteria
 

@@ -20,8 +20,10 @@ typedef struct vw_worker_client {
 } vw_worker_client_t;
 
 // Spawns worker process if executable_path is non-NULL, connects over IPC, and performs HELLO/HELLO_ACK handshake.
+// model_path (may be NULL) is appended as --model <path> to the worker argv; NULL omits the flag entirely.
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
-                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES]);
+                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                        const char* model_path);
 
 // Starts a new captioning session by sending a START frame to the worker and waiting up to 5s for STARTED confirmation.
 bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id);
@@ -40,5 +42,22 @@ void vw_worker_client_shutdown(vw_worker_client_t* client);
 
 // Closes IPC connection, frees client resources, and waits up to 5s for spawned worker process to cleanly exit.
 void vw_worker_client_disconnect(vw_worker_client_t* client);
+
+// A worker-to-plugin frame decoded by vw_worker_client_receive_frame. Exactly one field is valid
+// depending on `type`; segment.text_utf8 always points into text_buf (owned storage).
+typedef struct vw_worker_recv {
+  vw_message_type_t type;            // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR; 0 when timeout
+  vw_caption_segment_t segment;      // valid when type == VW_MSG_CAPTION_SEGMENT; text_utf8 points into text_buf
+  vw_msg_status_t status;            // valid when type == VW_MSG_STATUS
+  vw_msg_error_t error;              // valid when type == VW_MSG_ERROR
+  char text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.text_utf8 (NUL-terminated)
+} vw_worker_recv_t;
+
+// Reads one worker-to-plugin frame. Returns 1 = frame decoded into out, 0 = timeout (no frame in
+// timeout_us), -1 = fatal (transport dead; the client is dropped and must not be used again).
+// Frames of any other type are drained (payload consumed) and skipped within the same timeout budget.
+// Caller path is zero-heap: out->text_buf owns segment text. Call from the sender thread only — the
+// client is not thread-safe and the receiver must not race senders.
+int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_us, vw_worker_recv_t* out);
 
 #endif  // VW_WORKER_CLIENT_H_
