@@ -334,7 +334,7 @@ int main(void) {
   memset(&recv, 0, sizeof(recv));
 
   // First receive skips the PAUSE frame and returns the CAPTION_SEGMENT.
-  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == 1);
+  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == VW_IPC_RECV_OK);
   EXPECT(recv.type == VW_MSG_CAPTION_SEGMENT);
   EXPECT(recv.segment.segment_id == 7);
   EXPECT(recv.segment.start_pts_us == 1000000);
@@ -346,7 +346,7 @@ int main(void) {
 
   // Then STATUS.
   memset(&recv, 0, sizeof(recv));
-  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == 1);
+  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == VW_IPC_RECV_OK);
   EXPECT(recv.type == VW_MSG_STATUS);
   EXPECT(recv.status.queued_audio_us == 4000000);
   EXPECT(recv.status.inference_us == 300000);
@@ -354,13 +354,13 @@ int main(void) {
 
   // Then ERROR.
   memset(&recv, 0, sizeof(recv));
-  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == 1);
+  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == VW_IPC_RECV_OK);
   EXPECT(recv.type == VW_MSG_ERROR);
   EXPECT(recv.error.error_code == E_BACKPRESSURE);
   EXPECT(recv.error.recoverable == 1);
 
-  // Server closed: next receive must report the dead transport.
-  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == -1);
+  // Server closed: next receive must report the dead transport (VW_IPC_RECV_FATAL).
+  EXPECT(vw_worker_client_receive_frame(client2, 1000000, &recv) == VW_IPC_RECV_FATAL);
 
   vw_worker_client_disconnect(client2);
   pthread_join(thread2, &ret_val);
@@ -383,8 +383,9 @@ int main(void) {
   EXPECT(client3 != NULL);
   EXPECT(vw_worker_client_start_session(client3, 0, "ggml-tiny.en.bin"));
 
-  // The server waits for AUDIO (idle): a 50ms receive must time out with 0, connection intact.
-  EXPECT(vw_worker_client_receive_frame(client3, 50000, &recv) == 0);
+  // The server waits for AUDIO (idle): a 50ms receive must time out (VW_IPC_RECV_TIMEOUT) with the
+  // connection intact.
+  EXPECT(vw_worker_client_receive_frame(client3, 50000, &recv) == VW_IPC_RECV_TIMEOUT);
 
   // Transport still usable: send audio, then stop+shutdown like the base flow.
   vw_audio_chunk_t chunk2 = {

@@ -12,6 +12,12 @@
 #include "vw_protocol_types.h"
 #include "vw_worker_queue.h"
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 // Argument bundle passed to the worker IPC reader thread.
 typedef struct vw_worker_reader_arg {
   vw_ipc_handle_t* handle;
@@ -111,7 +117,11 @@ static void* vw_worker_reader_main(void* arg) {
     }
 
     // The queue takes ownership of payload and frees it if the frame is dropped on overflow.
-    vw_worker_queue_push(a->queue, header.type, payload_buf, header.payload_length);
+    // A failed push only ever means a counted AUDIO drop (controls are never dropped), so the
+    // frame is safely gone either way; log it to surface queue backpressure.
+    if (!vw_worker_queue_push(a->queue, header.type, payload_buf, header.payload_length)) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_QUEUE", "frame queue push failed (type=%u); frame dropped", header.type);
+    }
     payload_buf = NULL;
   }
   return NULL;

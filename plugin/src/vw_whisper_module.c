@@ -247,13 +247,13 @@ static void* vw_plugin_sender_main(void* arg) {
 
     vw_worker_recv_t recv;
     int recv_status = vw_worker_client_receive_frame(sys->client, sent_any ? 5000 : 20000, &recv);
-    if (recv_status < 0) {
+    if (recv_status == VW_IPC_RECV_FATAL) {
       atomic_store(&sys->worker_dead, true);
       vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_DEAD",
                    "receive_frame fatal (transport dead); captions disabled, passthrough only");
       break;
     }
-    if (recv_status == 1) {
+    if (recv_status == VW_IPC_RECV_OK) {
       sys->frames_received++;
       switch (recv.type) {
         case VW_MSG_CAPTION_SEGMENT:
@@ -355,10 +355,18 @@ static int vw_plugin_open(vlc_object_t* obj) {
   // Explicit per-install override for layouts outside the bounded discovery paths.
   char* configured = config_GetPsz(obj, "worker-path");
   if (configured && configured[0]) {
-    snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", configured);
-  } else if (vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
+    if (strlen(configured) >= sizeof(sys->worker_path)) {
+      vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_CONFIG_PATH",
+                   "worker-path exceeds %zu bytes; ignoring and falling back to discovery",
+                   sizeof(sys->worker_path) - 1);
+    } else {
+      snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", configured);
+    }
+  }
+  if (sys->worker_path[0] == '\0' && vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
     // Resolved to a concrete path next to the plugin or VLC executable.
-  } else {
+  }
+  if (sys->worker_path[0] == '\0') {
     // Fall back to a bare name; the spawn layer resolves it via PATH
     // (posix_spawnp), never relative to VLC's CWD.
 #ifdef _WIN32
@@ -370,10 +378,16 @@ static int vw_plugin_open(vlc_object_t* obj) {
   free(configured);
 
   // Model path: explicit option wins, then discovery next to the plugin/VLC exe. A bad configured
-  // path surfaces as E_MODEL_MISSING at session start — do not pre-check existence here.
+  // path surfaces as E_MODEL_MISSING at session start — do not pre-check existence here. An
+  // oversized configured path is rejected with a log rather than silently truncated.
   char* model_cfg = config_GetPsz(obj, "model-path");
   if (model_cfg && model_cfg[0]) {
-    snprintf(sys->model_path, sizeof(sys->model_path), "%s", model_cfg);
+    if (strlen(model_cfg) >= sizeof(sys->model_path)) {
+      vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_CONFIG_PATH",
+                   "model-path exceeds %zu bytes; ignoring and falling back to discovery", sizeof(sys->model_path) - 1);
+    } else {
+      snprintf(sys->model_path, sizeof(sys->model_path), "%s", model_cfg);
+    }
   } else if (vw_plugin_resolve_model_path(sys->model_path, sizeof(sys->model_path))) {
     // Resolved to a concrete file next to the plugin or VLC executable.
   }

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "vw_audio_capture.h"
+#include "vw_ipc_transport.h"
 #include "vw_platform.h"
 #include "vw_protocol_types.h"
 
@@ -53,11 +54,12 @@ typedef struct vw_worker_recv {
   char text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.text_utf8 (NUL-terminated)
 } vw_worker_recv_t;
 
-// Reads one worker-to-plugin frame. Returns 1 = frame decoded into out, 0 = timeout (no frame in
-// timeout_us), -1 = fatal (transport dead; the client is dropped and must not be used again).
-// Frames of any other type are drained (payload consumed) and skipped within the same timeout budget.
-// Caller path is zero-heap: out->text_buf owns segment text. Call from the sender thread only — the
-// client is not thread-safe and the receiver must not race senders.
+// Reads one worker-to-plugin frame. Returns VW_IPC_RECV_OK (1) = frame decoded into out,
+// VW_IPC_RECV_TIMEOUT (-1) = deadline expired at a frame boundary (no frame arrived; connection
+// intact, keep polling), VW_IPC_RECV_FATAL (-2) = transport dead or desynced (client must not be
+// used again). Frames of any other type are drained (payload consumed) and skipped within the same
+// timeout budget. Caller path is zero-heap: out->text_buf owns segment text. Call from the sender
+// thread only — the client is not thread-safe and the receiver must not race senders.
 int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_us, vw_worker_recv_t* out);
 
 #endif  // VW_WORKER_CLIENT_H_

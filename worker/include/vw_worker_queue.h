@@ -24,7 +24,9 @@ vw_worker_queue_t* vw_worker_queue_create(size_t capacity);
 void vw_worker_queue_destroy(vw_worker_queue_t* q);
 
 // Pushes one frame, taking ownership of payload (freed if the frame is dropped). On overflow, drops
-// the oldest queued audio frame instead; control frames are never dropped. Returns true if accepted.
+// the oldest queued audio frame; control frames are never dropped to make room for audio — on an
+// all-control overflow the oldest control is evicted so the newest control always lands. Returns
+// true if accepted (false only for a counted AUDIO drop on an all-control-full queue).
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len);
 
 // Pops the oldest frame into out, transferring payload ownership to the caller, who must free it

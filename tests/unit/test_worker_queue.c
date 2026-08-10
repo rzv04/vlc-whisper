@@ -125,6 +125,25 @@ int main(void) {
   EXPECT(f.payload == NULL);
   EXPECT(!vw_worker_queue_pop(q, &f));
 
+  // --- All-control full queue: incoming control evicts oldest control, never dropped ---
+  vw_worker_queue_t* q3 = vw_worker_queue_create(3);
+  EXPECT(q3 != NULL);
+  EXPECT(vw_worker_queue_push(q3, VW_MSG_PAUSE, NULL, 0));
+  EXPECT(vw_worker_queue_push(q3, VW_MSG_STOP_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_push(q3, VW_MSG_SHUTDOWN, NULL, 0));  // full (3/3, all controls)
+
+  // Incoming control into the all-control-full queue: oldest control (PAUSE) is evicted,
+  // the newest (RESUME) lands — control traffic is never dropped.
+  EXPECT(vw_worker_queue_push(q3, VW_MSG_RESUME, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q3, &f));
+  EXPECT(f.type == VW_MSG_STOP_SESSION);
+  EXPECT(vw_worker_queue_pop(q3, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(vw_worker_queue_pop(q3, &f));
+  EXPECT(f.type == VW_MSG_RESUME);
+  EXPECT(!vw_worker_queue_pop(q3, &f));
+  vw_worker_queue_destroy(q3);
+
   // --- dropped_audio_us equals decoded duration_us sum; destroy frees queued payloads ---
   vw_worker_queue_destroy(q);
 

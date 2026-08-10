@@ -52,8 +52,10 @@ One externally verifiable outcome: with `--audio-filter=vlc_whisper` on a local 
      char text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.text_utf8
    } vw_worker_recv_t;
 
-   // Reads one worker-to-plugin frame. Returns 1 = frame decoded into out, 0 = timeout (no frame in timeout_us),
-   // -1 = fatal (transport dead; drops the transport — caller must stop using the client).
+   // Reads one worker-to-plugin frame. Returns VW_IPC_RECV_OK (1) = frame decoded into out,
+   // VW_IPC_RECV_TIMEOUT (-1)
+   // = deadline expired at a frame boundary (connection intact, keep polling), VW_IPC_RECV_FATAL (-2)
+   // = transport dead or desynced (drops the transport — caller must stop using the client).
    // Frames of any other type are drained (payload consumed) and skipped within the same timeout budget.
    int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_us, vw_worker_recv_t* out);
    ```

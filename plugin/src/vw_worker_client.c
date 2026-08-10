@@ -21,27 +21,29 @@
 #include "vw_protocol_types.h"
 
 // Receive exactly len bytes, retrying on partial reads and on read timeouts
-// (VW_IPC_RECV_TIMEOUT). Returns false on fatal error (EOF / broken pipe,
-// VW_IPC_RECV_FATAL) or if the total handshake deadline (deadline_us) expires.
-static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
+// (VW_IPC_RECV_TIMEOUT). Returns VW_IPC_RECV_OK (1) on complete read, VW_IPC_RECV_TIMEOUT (-1) when
+// the deadline expires before any byte was consumed (clean frame boundary), and VW_IPC_RECV_FATAL
+// (-2) on a fatal error (EOF / broken pipe) or on a timeout that consumed part of the frame (desynced).
+static int receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
   size_t got = 0;
   while (got < len) {
     int64_t now_us = vw_platform_get_monotonic_time_us();
-    if (now_us >= deadline_us) return false;
+    if (now_us >= deadline_us) return (got == 0) ? VW_IPC_RECV_TIMEOUT : VW_IPC_RECV_FATAL;
     uint32_t remaining_us = (uint32_t)(deadline_us - now_us);
     uint32_t timeout_us = (remaining_us < 3000000U) ? remaining_us : 3000000U;
 
     int32_t res = vw_ipc_receive_timeout(ipc, buf + got, len - got, timeout_us);
     if (res < 0) {
       if (res == VW_IPC_RECV_TIMEOUT) {  // timeout — keep waiting, bounded by the deadline
-        if (vw_platform_get_monotonic_time_us() >= deadline_us) return false;
+        if (vw_platform_get_monotonic_time_us() >= deadline_us)
+          return (got == 0) ? VW_IPC_RECV_TIMEOUT : VW_IPC_RECV_FATAL;
         continue;
       }
-      return false;  // fatal (VW_IPC_RECV_FATAL): EOF / broken pipe / closed
+      return VW_IPC_RECV_FATAL;  // fatal (VW_IPC_RECV_FATAL): EOF / broken pipe / closed
     }
     got += (size_t)res;
   }
-  return true;
+  return VW_IPC_RECV_OK;
 }
 
 // Format 32 raw bytes as a 64-char lowercase hex string.
@@ -165,7 +167,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
 
   // Wait for HELLO_ACK (header, then payload)
   uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
-  if (!receive_all(ipc, ack_hdr_buf, sizeof(ack_hdr_buf), handshake_deadline_us)) goto fail;
+  if (receive_all(ipc, ack_hdr_buf, sizeof(ack_hdr_buf), handshake_deadline_us) != VW_IPC_RECV_OK) goto fail;
   vw_frame_header_t ack_hdr;
   if (!vw_protocol_decode_header(ack_hdr_buf, sizeof(ack_hdr_buf), &ack_hdr)) goto fail;  // validates header too
   if (ack_hdr.type != VW_MSG_HELLO_ACK) goto fail;
@@ -175,7 +177,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   }
   uint8_t* ack_payload = (uint8_t*)malloc(ack_hdr.payload_length);
   if (!ack_payload) goto fail;
-  bool ack_ok = receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us);
+  bool ack_ok = (receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us) == VW_IPC_RECV_OK);
   vw_msg_hello_ack_t ack = {0};
   if (ack_ok) {
     ack_ok = vw_protocol_decode_payload(VW_MSG_HELLO_ACK, ack_payload, ack_hdr.payload_length, &ack);
@@ -255,10 +257,12 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
       vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the STARTED/ERROR confirmation wait
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t resp_hdr_buf[sizeof(vw_frame_header_t)];
-    if (!receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us)) {
-      // Deadline expired or fatal EOF, possibly mid-frame: the next frame
-      // boundary is unknowable and a late STARTED from this attempt could be
-      // mistaken for a retry's confirmation. Drop so a retry cannot desync.
+    if (receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us) != VW_IPC_RECV_OK) {
+      // Fatal EOF, or the 5s handshake deadline expired. This is a one-shot handshake, not a poll:
+      // after a timeout the worker's state is unknowable — it may have accepted the START and sent
+      // a STARTED that is still in the socket buffer. A retry would regenerate session_id and read
+      // that stale STARTED as its own confirmation, then send AUDIO for a session the worker never
+      // accepted. Fail closed: drop so any retry must reconnect on a fresh transport.
       vw_worker_client_drop_transport(client);
       return false;
     }
@@ -280,7 +284,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
           vw_worker_client_drop_transport(client);
           return false;
         }
-        bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+        bool drained =
+            (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) == VW_IPC_RECV_OK);
         vw_msg_error_t err;
         memset(&err, 0, sizeof(err));
         if (drained && vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err)) {
@@ -303,7 +308,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
         vw_worker_client_drop_transport(client);
         return false;
       }
-      bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+      bool drained =
+          (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) == VW_IPC_RECV_OK);
       free(resp_payload);
       if (!drained) {
         vw_worker_client_drop_transport(client);
@@ -401,20 +407,24 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
   }
   memset(out, 0, sizeof(*out));
 
-  // One per-call deadline for the whole frame (header + payload + any skipped frames). A timeout
-  // mid-frame is treated as no-frame (return 0) rather than a transport failure: the stream is
-  // still framed because the deadline expired between messages.
+  // One per-call deadline for waiting for a frame to START (header). The transport is
+  // message-oriented, so a header arrives whole or not at all: a clean header timeout (0 bytes
+  // consumed) is a safe frame boundary and returns 0. Once the header is consumed the stream is
+  // mid-frame — finish it with the transport's own receive bound (3 s) so a transient delay
+  // between the header and payload messages cannot desync the stream. Any payload failure (timeout
+  // or fatal) still drops: the header is gone, so a later call would read the payload as a header.
   const int64_t deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)timeout_us;
+  const int64_t frame_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
 
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t hdr_buf[sizeof(vw_frame_header_t)];
-    if (!receive_all(client->pipe_handle, hdr_buf, sizeof(hdr_buf), deadline_us)) {
-      // Either the deadline expired (no frame arrived) or the transport died. Distinguish by clock.
-      if (vw_platform_get_monotonic_time_us() < deadline_us) {
-        vw_worker_client_drop_transport(client);
-        return -1;  // fatal: transport dead, caller must stop using the client
+    int hdr_rc = receive_all(client->pipe_handle, hdr_buf, sizeof(hdr_buf), deadline_us);
+    if (hdr_rc != VW_IPC_RECV_OK) {
+      if (hdr_rc == VW_IPC_RECV_TIMEOUT) {
+        return VW_IPC_RECV_TIMEOUT;  // clean timeout: no header bytes consumed, still at a frame boundary
       }
-      return 0;  // timeout: no frame within timeout_us
+      vw_worker_client_drop_transport(client);
+      return VW_IPC_RECV_FATAL;  // fatal: transport dead, caller must stop using the client
     }
 
     vw_frame_header_t hdr;
@@ -427,7 +437,9 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
       return -1;
     }
 
-    // Read the declared payload, if any.
+    // Read the declared payload, if any. A failure here (timeout OR fatal) is always a desync:
+    // the header message was already consumed, so a subsequent call would read the payload as a
+    // new header and fail validation. Drop the transport rather than return a false timeout.
     uint8_t* payload = NULL;
     if (hdr.payload_length > 0) {
       payload = (uint8_t*)malloc(hdr.payload_length);
@@ -435,13 +447,10 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
         vw_worker_client_drop_transport(client);
         return -1;
       }
-      if (!receive_all(client->pipe_handle, payload, hdr.payload_length, deadline_us)) {
+      if (receive_all(client->pipe_handle, payload, hdr.payload_length, frame_deadline_us) != VW_IPC_RECV_OK) {
         free(payload);
-        if (vw_platform_get_monotonic_time_us() < deadline_us) {
-          vw_worker_client_drop_transport(client);
-          return -1;
-        }
-        return 0;  // timeout mid-payload: no complete frame
+        vw_worker_client_drop_transport(client);
+        return VW_IPC_RECV_FATAL;  // desync: header consumed but payload incomplete; framing is lost
       }
     }
 
@@ -487,9 +496,9 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
     }
     free(payload);
     if (decoded) {
-      return 1;
+      return VW_IPC_RECV_OK;
     }
     // Malformed or unsupported frame: keep draining within the same deadline.
   }
-  return 0;  // deadline expired
+  return VW_IPC_RECV_TIMEOUT;  // deadline expired at a frame boundary
 }

@@ -49,13 +49,16 @@ void vw_worker_queue_destroy(vw_worker_queue_t* q) {
   }
   // Caller guarantees quiescence: no concurrent push/pop while destroying.
   for (size_t i = q->tail; i < q->head; i++) {
-    free(q->slots[i % q->capacity].payload);
+    if (q->slots[i % q->capacity].payload) {
+      free(q->slots[i % q->capacity].payload);
+    }
   }
   pthread_mutex_destroy(&q->mutex);
   free(q->slots);
   free(q);
 }
 
+// Returns the duration of an audio frame in microseconds, or 0 if the payload is invalid or not an audio frame.
 static uint64_t vw_worker_queue_audio_duration_us(const uint8_t* payload, uint32_t payload_len) {
   vw_msg_audio_t audio;
   if (!payload || !vw_protocol_decode_payload(VW_MSG_AUDIO_PCM, payload, payload_len, &audio)) {
@@ -111,14 +114,34 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
     return true;
   }
 
-  // All-control full queue (impossible in practice): drop the incoming frame, counting audio only.
+  // Full with no evictable AUDIO frame (all-control queue). An incoming AUDIO is dropped (counted)
+  // — never sacrifice a control for audio. An incoming CONTROL evicts the OLDEST control so the
+  // newest one always lands (a STOP/SHUTDOWN supersedes an older control). Reachable only in a
+  // pathological burst of controls; the main loop pops controls immediately.
   if (type == VW_MSG_AUDIO_PCM) {
     atomic_fetch_add_explicit(&q->dropped_audio_us, vw_worker_queue_audio_duration_us(payload, payload_len),
                               memory_order_relaxed);
+    free(payload);
+    pthread_mutex_unlock(&q->mutex);
+    return false;
   }
-  free(payload);
+  size_t evict_ctrl = q->tail;
+  vw_worker_frame_t* victim = &q->slots[evict_ctrl % q->capacity];
+  atomic_fetch_add_explicit(&q->dropped_audio_us,
+                            vw_worker_queue_audio_duration_us(victim->payload, victim->payload_len),
+                            memory_order_relaxed);
+  free(victim->payload);
+  for (size_t i = evict_ctrl; i + 1 < q->head; i++) {
+    q->slots[i % q->capacity] = q->slots[(i + 1) % q->capacity];
+  }
+  q->head--;
+  size_t idx = q->head % q->capacity;
+  q->slots[idx].type = type;
+  q->slots[idx].payload_len = payload_len;
+  q->slots[idx].payload = payload;
+  q->head++;
   pthread_mutex_unlock(&q->mutex);
-  return false;
+  return true;
 }
 
 bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out) {
