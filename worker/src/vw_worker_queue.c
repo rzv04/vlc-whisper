@@ -115,10 +115,11 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   }
 
   // Full with no evictable AUDIO frame (all-control queue). An incoming AUDIO is dropped (counted)
-  // — never sacrifice a control for audio. An incoming CONTROL evicts the OLDEST control so the
-  // newest one always lands, but a queued SHUTDOWN is never evicted by a non-terminal control:
-  // only a newer SHUTDOWN supersedes an older one. Reachable only in a pathological burst of
-  // controls; the main loop pops controls immediately.
+  // — never sacrifice a control for audio. An incoming CONTROL evicts only a control the incoming
+  // supersedes or the worker never needs: PAUSE/RESUME (stateless), a same-type control, or — for
+  // SHUTDOWN — anything. Queued START/STOP/SHUTDOWN transitions are never evicted by an unrelated
+  // control; when nothing safe is evictable the incoming control is dropped instead. Reachable
+  // only in a pathological burst of controls; the main loop pops controls immediately.
   if (type == VW_MSG_AUDIO_PCM) {
     atomic_fetch_add_explicit(&q->dropped_audio_us, vw_worker_queue_audio_duration_us(payload, payload_len),
                               memory_order_relaxed);
@@ -126,17 +127,28 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
     pthread_mutex_unlock(&q->mutex);
     return false;
   }
-  // Evict the oldest control — skipping SHUTDOWN when the incoming frame is not itself a SHUTDOWN
-  // (dropping the only shutdown the worker will see would leave it running until the pipe breaks).
-  // If every queued control is SHUTDOWN, evicting one is harmless: the rest still deliver it.
-  size_t evict_ctrl = q->tail;
-  if (type != VW_MSG_SHUTDOWN) {
+  // Incoming SHUTDOWN supersedes every queued control — evict the oldest, whatever it is (a newer
+  // SHUTDOWN replaces an older one, so at least one SHUTDOWN always survives). Any other incoming
+  // control evicts only the oldest PAUSE/RESUME (stateless no-ops in the worker loop) or the oldest
+  // same-type control it supersedes — a queued START/STOP/SHUTDOWN the worker must observe is never
+  // sacrificed for an unrelated control. If nothing safe is evictable, drop the incoming control
+  // (return false) rather than lose a queued required transition.
+  size_t evict_ctrl = q->capacity;  // sentinel: not found
+  if (type == VW_MSG_SHUTDOWN) {
+    evict_ctrl = q->tail;
+  } else {
     for (size_t i = q->tail; i < q->head; i++) {
-      if (q->slots[i % q->capacity].type != VW_MSG_SHUTDOWN) {
+      uint16_t queued = q->slots[i % q->capacity].type;
+      if (queued == VW_MSG_PAUSE || queued == VW_MSG_RESUME || queued == type) {
         evict_ctrl = i;
         break;
       }
     }
+  }
+  if (evict_ctrl == q->capacity) {
+    free(payload);
+    pthread_mutex_unlock(&q->mutex);
+    return false;  // all-control full and nothing evictable: keep queued transitions, drop incoming
   }
   vw_worker_frame_t* victim = &q->slots[evict_ctrl % q->capacity];
   atomic_fetch_add_explicit(&q->dropped_audio_us,

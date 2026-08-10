@@ -180,6 +180,54 @@ int main(void) {
   EXPECT(!vw_worker_queue_pop(q6, &f));
   vw_worker_queue_destroy(q6);
 
+  // --- Queued required transitions survive an unrelated control overflow ---
+  vw_worker_queue_t* q7 = vw_worker_queue_create(3);
+  EXPECT(q7 != NULL);
+  EXPECT(vw_worker_queue_push(q7, VW_MSG_STOP_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_push(q7, VW_MSG_PAUSE, NULL, 0));
+  EXPECT(vw_worker_queue_push(q7, VW_MSG_RESUME, NULL, 0));  // full (3/3)
+
+  // Incoming START_SESSION: only the soft PAUSE is evictable — STOP_SESSION must survive.
+  EXPECT(vw_worker_queue_push(q7, VW_MSG_START_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q7, &f));
+  EXPECT(f.type == VW_MSG_STOP_SESSION);
+  EXPECT(vw_worker_queue_pop(q7, &f));
+  EXPECT(f.type == VW_MSG_RESUME);
+  EXPECT(vw_worker_queue_pop(q7, &f));
+  EXPECT(f.type == VW_MSG_START_SESSION);
+  EXPECT(!vw_worker_queue_pop(q7, &f));
+  vw_worker_queue_destroy(q7);
+
+  // --- Nothing evictable: the incoming control is dropped, queued transitions kept ---
+  vw_worker_queue_t* q8 = vw_worker_queue_create(2);
+  EXPECT(q8 != NULL);
+  EXPECT(vw_worker_queue_push(q8, VW_MSG_STOP_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_push(q8, VW_MSG_START_SESSION, NULL, 0));  // full (2/2)
+
+  // Incoming RESUME with no soft/same-type queued: dropped (returns false), transitions intact.
+  EXPECT(!vw_worker_queue_push(q8, VW_MSG_RESUME, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q8, &f));
+  EXPECT(f.type == VW_MSG_STOP_SESSION);
+  EXPECT(vw_worker_queue_pop(q8, &f));
+  EXPECT(f.type == VW_MSG_START_SESSION);
+  EXPECT(!vw_worker_queue_pop(q8, &f));
+  vw_worker_queue_destroy(q8);
+
+  // --- Same-type control supersedes an older one ---
+  vw_worker_queue_t* q9 = vw_worker_queue_create(2);
+  EXPECT(q9 != NULL);
+  EXPECT(vw_worker_queue_push(q9, VW_MSG_START_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_push(q9, VW_MSG_SHUTDOWN, NULL, 0));  // full (2/2)
+
+  // Incoming START_SESSION supersedes the older START_SESSION; SHUTDOWN survives.
+  EXPECT(vw_worker_queue_push(q9, VW_MSG_START_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q9, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(vw_worker_queue_pop(q9, &f));
+  EXPECT(f.type == VW_MSG_START_SESSION);
+  EXPECT(!vw_worker_queue_pop(q9, &f));
+  vw_worker_queue_destroy(q9);
+
   // --- dropped_audio_us equals decoded duration_us sum; destroy frees queued payloads ---
   vw_worker_queue_destroy(q);
 

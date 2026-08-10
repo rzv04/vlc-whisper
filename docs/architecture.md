@@ -36,7 +36,7 @@ caption receiver thread (step 15) -- timed segments --> caption presenter (C)
 | Capture module                | Audio-format validation, PTS mapping, bounded PCM enqueue      | Wait for worker, infer, write pipe, allocate per audio block |
 | Plugin sender (14c)           | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR | Call VLC presentation API; block on inference |
 | Worker IPC Reader (14c, `ADR-013`) | Pipe frame reading, protocol validation, worker frame queue enqueue | Block on whisper.cpp inference or delay transport reading; send replies |
-| Worker frame queue (14c)      | Bounded FIFO of `{type, payload}` frames; drop-oldest AUDIO, control frames never dropped | Block; allocate unbounded |
+| Worker frame queue (14c)      | Bounded FIFO of `{type, payload}` frames; drop-oldest AUDIO; controls never evicted for audio, and queued START/STOP/SHUTDOWN transitions survive overflow (only soft PAUSE/RESUME, same-type, or newer-SHUTDOWN evictions) | Block; allocate unbounded |
 | Worker Engine (`ADR-015`)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder | Read arbitrary paths, expose network service, control VLC    |
 | Caption receiver/presenter    | Validate worker messages, schedule/show/clear captions         | Trust malformed text/timestamps or block VLC playback        |
 | Supervisor                    | Worker start/stop/restart policy and status                    | Restart endlessly or conceal a fatal compatibility error     |

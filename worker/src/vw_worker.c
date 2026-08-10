@@ -117,8 +117,9 @@ static void* vw_worker_reader_main(void* arg) {
     }
 
     // The queue takes ownership of payload and frees it if the frame is dropped on overflow.
-    // A failed push only ever means a counted AUDIO drop (controls are never dropped), so the
-    // frame is safely gone either way; log it to surface queue backpressure.
+    // A failed push means a counted AUDIO drop, or a control dropped because the all-control queue
+    // held nothing safe to evict (queued START/STOP/SHUTDOWN transitions win); log it to surface
+    // queue backpressure.
     if (!vw_worker_queue_push(a->queue, header.type, payload_buf, header.payload_length)) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_QUEUE", "frame queue push failed (type=%u); frame dropped", header.type);
     }
