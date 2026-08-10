@@ -194,6 +194,7 @@ typedef struct {
   vw_spsc_queue_t* queue;
   vw_audio_capture_t capture;
   vw_worker_client_t* client;
+  vw_caption_presenter_t presenter;  // p_filter_ctx set in open; used by sender thread only
 
   char pipe_name[256];
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
@@ -258,7 +259,10 @@ static void* vw_plugin_sender_main(void* arg) {
       switch (recv.type) {
         case VW_MSG_CAPTION_SEGMENT:
           sys->segments_received++;
-          break;  // step 15 wires the presenter
+          // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
+          // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
+          vw_caption_presenter_show_segment(&sys->presenter, &recv.segment);
+          break;
         case VW_MSG_STATUS:
           sys->status_received++;
           vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_STATUS", "queued=%lld inference=%lld dropped=%lld",
@@ -343,6 +347,8 @@ static int vw_plugin_open(vlc_object_t* obj) {
   p_filter->p_sys = (filter_sys_t*)sys;
   p_filter->pf_audio_filter = vw_plugin_filter;
   p_filter->fmt_out.audio = p_filter->fmt_in.audio;
+
+  sys->presenter.p_filter_ctx = p_filter;  // sender thread renders SEGMENT frames via this context
 
   vw_log_set_sink(vw_plugin_log_sink, obj);
 
@@ -464,6 +470,7 @@ static void vw_plugin_close(vlc_object_t* obj) {
                    sys->errors_received);
       vw_spsc_queue_destroy(sys->queue);
     }
+    vw_caption_presenter_clear(&sys->presenter);  // remove OSD overlay before releasing p_filter
     free(sys);
   }
 

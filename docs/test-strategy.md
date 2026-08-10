@@ -53,6 +53,7 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/vw_test_worker_client.c` (14c receive-frame block): `vw_worker_client_receive_frame` decodes `CAPTION_SEGMENT`/`STATUS`/`ERROR` in order, drains and skips an unknown `PAUSE` frame, times out with 0 against a silent server (transport stays usable), and returns -1 at EOF; segment text is copied into caller-owned storage.
 - `tests/integration/test_worker_lifecycle.c` (14c additions): worker with zeroed `model_path` rejects `START` through the client API (E_MODEL_MISSING error path); model-gated section (when `models/ggml-tiny.en.bin` exists and not under Valgrind) streams four 512 ms silence chunks through `STARTED`/`AUDIO`/`STOP`/`SHUTDOWN` and exits 0.
 - `tests/integration/test_worker_ipc.c` (14c): unchanged asserts re-run against the worker reader-thread split, proving the split preserves lifecycle semantics.
+- `tests/unit/test_caption_presenter.c` (15): presenter display/show_segment/clear against VLC symbol stubs (NULL-filter standalone mode). Step 15 wiring itself is module-internal (sender-thread dispatch to OSD) and is verified by live-VLC acceptance: captions appear ~8s+ behind audio due to the batch 8s-window inference geometry (documented in the plan); automated suite is regression-only for this path.
 
 ## Performance contract
 
