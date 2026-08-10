@@ -40,6 +40,22 @@ int main(void) {
     }
   }
 
+  // --- success: --log-file override; empty default when flag absent ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_log[] = {"vlc-whisper-worker", "--log-file", "/var/log/vw.log", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_log) == 0);
+    EXPECT_EQ_STR(cfg.log_file, "/var/log/vw.log");
+  }
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_none[] = {"vlc-whisper-worker", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 1, argv_none) == 0);
+    EXPECT(cfg.log_file[0] == '\0');  // empty => default temp-dir log
+  }
+
   // --- failure: --token too short ---
   {
     vw_worker_config_t cfg;

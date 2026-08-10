@@ -327,7 +327,7 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
                           .pcm_data = chunk->pcm_data};
   memcpy(audio.session_id.bytes, client->session_id, 16);
 
-  uint8_t payload_buf[32768];
+  uint8_t payload_buf[2 * VW_AUDIO_CHUNK_MAX_PCM_BYTES];  // oversized
   size_t payload_len = 0;
   if (!vw_protocol_encode_payload(VW_MSG_AUDIO_PCM, &audio, payload_buf, sizeof(payload_buf), &payload_len))
     return false;

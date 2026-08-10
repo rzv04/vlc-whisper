@@ -225,6 +225,7 @@ static void* vw_plugin_sender_main(void* arg) {
                  "worker rejected session; captions disabled, passthrough only");
     return NULL;
   }
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED", "caption session started (STARTED confirmed)");
 
   while (atomic_load(&sys->sender_running) && !atomic_load(&sys->worker_dead)) {
     // Drain the SPSC queue (send burst), then one receive: 5ms after sends (audio latency
@@ -397,6 +398,7 @@ static int vw_plugin_open(vlc_object_t* obj) {
     atomic_init(&sys->worker_dead, false);
     if (vw_platform_thread_create(&sys->sender_thread, vw_plugin_sender_main, sys)) {
       sys->sender_started = true;
+      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER_START", "sender thread started (5/20 ms cadence)");
     } else {
       atomic_store(&sys->sender_running, false);
       vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SENDER_START_FAIL",

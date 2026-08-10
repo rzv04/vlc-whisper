@@ -182,6 +182,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
     vw_ipc_close(handle);
     return 1;
   }
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_READER", "reader thread started; draining pipe into frame queue");
 
   while (atomic_load(&running)) {
     vw_worker_frame_t frame;
@@ -214,20 +215,25 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
     // also enforce after receiving
     if (!valid_payload && frame.payload_len > 0) {
+      vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_PROTOCOL", "invalid payload (type=%u len=%u); exiting", frame.type,
+                   frame.payload_len);
       free(frame.payload);
       break;  // Invalid payload
     }
 
     if (!authenticated) {
       if (frame.type != VW_MSG_HELLO) {
+        vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_AUTH", "first frame was not HELLO (type=%u); rejecting", frame.type);
         free(frame.payload);
         break;  // First message must be HELLO
       }
       if (!verify_token_constant_time(config->auth_token, payload_decoded.hello.auth_token)) {
+        vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_AUTH", "HELLO token mismatch; rejecting connection");
         free(frame.payload);
         break;  // Auth failed
       }
       authenticated = true;
+      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_AUTH", "HELLO authenticated; replying HELLO_ACK");
 
       // Reply HELLO_ACK with the negotiated version and supported capabilities
       vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
@@ -264,6 +270,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
           break;  // Duplicate START without STOP — ignore
         }
         if (payload_decoded.start.sample_rate != VW_AUDIO_SAMPLE_RATE) {
+          vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_AUDIO_FORMAT (rate=%u)",
+                       payload_decoded.start.sample_rate);
           send_error(handle, payload_decoded.start.session_id.bytes, E_AUDIO_FORMAT, 1,
                      "Unsupported sample rate (expected 16000)", &sequence);
           break;
@@ -387,6 +395,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   if (engine) vw_whisper_engine_free(engine);
 
   vw_ipc_close(handle);
-  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker exiting (rc=%d)", authenticated ? 0 : 1);
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker exiting (rc=%d, dropped_audio_us=%llu)",
+               authenticated ? 0 : 1, (unsigned long long)vw_worker_queue_get_dropped_audio_us(queue));
   return authenticated ? 0 : 1;
 }

@@ -55,6 +55,8 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
       snprintf(config->pipe_name, sizeof(config->pipe_name), "%s", argv[++i]);
     } else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
       snprintf(config->model_path, sizeof(config->model_path), "%s", argv[++i]);
+    } else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc) {
+      snprintf(config->log_file, sizeof(config->log_file), "%s", argv[++i]);
     } else {
       fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;
