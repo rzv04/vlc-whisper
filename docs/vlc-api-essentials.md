@@ -131,7 +131,7 @@ VLC signals user seeking, playback rate changes, or media item transitions throu
 ### Discontinuity Handling Workflow
 
 ```text
-vlc_whisper_module (pf_audio_filter)
+vw_whisper_module (pf_audio_filter)
   │
   ├── Detect (i_flags & BLOCK_FLAG_DISCONTINUITY) OR (i_pts < last_pts_us)
   │

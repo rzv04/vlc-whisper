@@ -59,7 +59,7 @@ In scope:
 ### 14c — Plugin real-time streaming (after 14b merges; branch `gemini/milestone-3-step-14c`)
 
 In scope:
-1. **`plugin/src/vlc_whisper_module.c`** sender thread:
+1. **`plugin/src/vw_whisper_module.c`** sender thread:
    - sys gains thread handle, `_Atomic bool running`, `_Atomic bool worker_dead`, counters.
    - Loop (~20 ms cadence when queue empty): pop chunk → `send_audio`; failure → `worker_dead=true` + one rate-limited `PLUGIN_WORKER_UNAVAILABLE`-style log, stop sending (playback untouched). Same loop drains worker frames via `receive_timeout(50 ms)`: SEGMENT counted + discarded (step 15 wires the presenter), STATUS/ERROR logged, FATAL → `worker_dead`.
    - Open: launch+connect → `start_session` → start thread; any failure → passthrough-only (existing behavior).
@@ -73,7 +73,7 @@ Out of scope (all): PAUSE/RESUME (16), seek/discontinuity (17), SPU/GPU/source (
 Files expected to change:
 - 14a: `worker/src/vw_whisper_engine.c`, `worker/src/vw_audio_buffer.c`, `worker/src/vw_worker.c`, `worker/src/vw_segment_builder.c`, `worker/include/*.h`, `plugin/include/vw_platform.h`, `plugin/src/vw_platform_linux.c`, `plugin/src/vw_platform_win32.c`, `tests/**`, docs.
 - 14b: `plugin/src/vw_worker_client.c`, `plugin/include/vw_worker_client.h`, `protocol/include/vw_ipc_transport.h`, `protocol/src/vw_ipc_socket_linux.c`, `protocol/src/vw_ipc_pipe_win32.c`, `tests/**`, docs.
-- 14c: `plugin/src/vlc_whisper_module.c`, `plugin/libvlccore.def` (if new VLC symbols needed), `tests/**`, docs.
+- 14c: `plugin/src/vw_whisper_module.c`, `plugin/libvlccore.def` (if new VLC symbols needed), `tests/**`, docs.
 
 ## Design
 

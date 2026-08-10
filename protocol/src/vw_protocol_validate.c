@@ -92,10 +92,12 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
     case VW_MSG_AUDIO_PCM: {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
       if (p->duration_us <= 0 || p->duration_us > 30000000) return false;
-      // pcm_bytes = duration_us * 16000 / 1000000 * 2 = duration_us * 32 / 1000
-      // integer truncated; valid audio under 31.25 µs silently passes?. Negligible at 16kHz (0.5 sample)
+      // pcm_bytes = duration_us * 16000 / 1000000 * 2 = duration_us * 32 / 1000.
+      // api-contracts allows "documented whole-sample rounding": producers may round duration up
+      // or down by half a sample (0.5 sample = 1 byte at 16kHz S16LE), so accept ±1 byte. A
+      // strict equality check killed real sessions on odd-length partial blocks (off-by-one).
       uint32_t expected_bytes = (uint32_t)((p->duration_us * 32) / 1000);
-      if (p->pcm_bytes != expected_bytes) return false;
+      if (p->pcm_bytes + 1 < expected_bytes || p->pcm_bytes > expected_bytes + 1) return false;
       if (p->pcm_bytes > 0 && !p->pcm_data) return false;
       return true;
     }

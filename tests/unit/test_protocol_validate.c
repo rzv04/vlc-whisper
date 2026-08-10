@@ -40,6 +40,18 @@ int main(void) {
   audio.pcm_bytes = 1000;  // Mismatch with duration
   EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
 
+  // Whole-sample rounding tolerance: a producer may round duration up/down by 1 byte (half a
+  // sample at 16kHz S16LE). Accept ±1 byte of the expected pcm_bytes; more is a real mismatch.
+  audio.duration_us = 511937;  // odd frame count: trunc(duration*32/1000) = 16381, bytes = 16382
+  audio.pcm_bytes = 16382;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // +1 byte tolerated
+  audio.pcm_bytes = 16381;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // exact
+  audio.pcm_bytes = 16380;                                         // -1 byte: within tolerance
+  EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
+  audio.pcm_bytes = 16379;  // -2 bytes: beyond tolerance
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
+
   // Validate CONTROL
   vw_msg_control_t control = {0};
   EXPECT(vw_protocol_validate_payload(VW_MSG_PAUSE, &control));

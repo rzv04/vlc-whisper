@@ -106,7 +106,37 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   si.cb = sizeof(si);
   ZeroMemory(&pi, sizeof(pi));
 
-  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+  // Diagnostic: capture the worker's stdout+stderr into %TEMP%\vlc-whisper-worker.log so whisper's
+  // own output, vw_log_event lines, and any crash/assert text are visible. The worker is spawned
+  // with CREATE_NO_WINDOW and no console, so without this its logs are lost. Only the worker
+  // binary is redirected; other spawns (e.g. test_platform's cmd.exe) are left untouched.
+  HANDLE hLog = INVALID_HANDLE_VALUE;
+  if (strstr(executable_path, "vlc-whisper-worker") != NULL) {
+    char tmp_dir[MAX_PATH];
+    if (GetTempPathA(MAX_PATH, tmp_dir) > 0) {
+      char log_path[MAX_PATH];
+      snprintf(log_path, sizeof(log_path), "%svlc-whisper-worker.log", tmp_dir);
+      SECURITY_ATTRIBUTES sa;
+      sa.nLength = sizeof(sa);
+      sa.lpSecurityDescriptor = NULL;
+      sa.bInheritHandle = TRUE;  // required for STARTF_USESTDHANDLES inheritance
+      hLog = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, NULL);
+      if (hLog != INVALID_HANDLE_VALUE) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = hLog;
+        si.hStdError = hLog;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+      }
+    }
+  }
+
+  // bInheritHandles must be TRUE for the stdio handles to reach the child; only when redirecting.
+  BOOL inherit = (hLog != INVALID_HANDLE_VALUE);
+  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, inherit, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+  if (hLog != INVALID_HANDLE_VALUE) {
+    CloseHandle(hLog);
+  }
   free(wcmd);
 
   if (!success) {

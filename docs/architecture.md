@@ -15,22 +15,28 @@ VLC decode pipeline
 capture module (C, non-blocking producer)
   | bounded in-process SPSC queue
   v
-IPC sender thread ---- local named pipe ---- worker.exe (C application)
-                                                   |
-                                            worker IPC reader thread (ADR-013)
-                                                   |
-                                              whisper.cpp C API (Model-once ADR-015)
-                                                   |
-caption receiver thread -- timed segments --> caption presenter (C)
-                                                   |
-                                              VLC subtitle/SPU/OSD path
+plugin sender thread (14c, single send+receive: 5/20 ms cadence)
+  | ---- local named pipe ---- worker.exe (C application)
+                                        |
+                                 worker IPC reader thread (14c, ADR-013)
+                                        |
+                                 worker frame queue (bounded, drop-oldest AUDIO)
+                                        |
+                                 worker session+inference main loop
+                                        |
+                                   whisper.cpp C API (Model-once ADR-015)
+                                        |
+caption receiver thread (step 15) -- timed segments --> caption presenter (C)
+                                        |
+                                   VLC subtitle/SPU/OSD path
 ```
 
 | Component                     | Owns                                                           | Must not do                                                  |
 | ----------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
 | Capture module                | Audio-format validation, PTS mapping, bounded PCM enqueue      | Wait for worker, infer, write pipe, allocate per audio block |
-| IPC sender                    | Session handshake, PCM framing, queue drain, backpressure      | Call VLC presentation API                                    |
-| Worker IPC Reader (`ADR-013`) | Pipe frame reading, protocol validation, worker queue enqueue  | Block on whisper.cpp inference or delay transport reading    |
+| Plugin sender (14c)           | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR | Call VLC presentation API; block on inference |
+| Worker IPC Reader (14c, `ADR-013`) | Pipe frame reading, protocol validation, worker frame queue enqueue | Block on whisper.cpp inference or delay transport reading; send replies |
+| Worker frame queue (14c)      | Bounded FIFO of `{type, payload}` frames; drop-oldest AUDIO; controls never evicted for audio; overflow evicts only PAUSE/RESUME, same-type, or the oldest non-SHUTDOWN control for a required incoming (START/STOP); a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming | Block; allocate unbounded |
 | Worker Engine (`ADR-015`)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder | Read arbitrary paths, expose network service, control VLC    |
 | Caption receiver/presenter    | Validate worker messages, schedule/show/clear captions         | Trust malformed text/timestamps or block VLC playback        |
 | Supervisor                    | Worker start/stop/restart policy and status                    | Restart endlessly or conceal a fatal compatibility error     |
@@ -142,7 +148,7 @@ Transcribed segments carry:
 
 - Non-elevated: worker runs as the user running VLC.
 - No network: local IPC only. Token authentication prevents unauthorized local processes from connecting.
-- Resource limits: worker memory capped by single model model allocation (~39 MB for `tiny.en`). Worker CPU thread count capped by configuration (default 2 threads).
+- Resource limits: worker memory capped by single model model allocation (~39 MB for `tiny.en`). Worker CPU thread count capped by configuration (default 2 threads; graph compute uses ggml's pthread-based threadpool — on Windows OpenMP is disabled at build time so the worker exe stays free of MinGW runtime DLLs, ADR-010).
 - Audio buffer limit: plugin drops audio chunks when the queue reaches 16 chunks (8 s capacity) rather than consuming unbounded memory.
 - Input bounds: header payload length strictly capped at 1 MB. Malformed UTF-8 text or impossible PTS values are rejected.
 - Caption queueing: plugin maintains no internal caption queue (ADR-016). Timed subpictures are submitted directly to VLC's native SPU pipeline (`vout_PutSubpicture`), which manages PTS display scheduling.

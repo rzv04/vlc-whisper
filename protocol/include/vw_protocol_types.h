@@ -31,6 +31,14 @@
 #define VW_AUTH_TOKEN_BYTES 32U          // Local IPC 32-byte secret authentication token
 #define VW_SESSION_ID_BYTES 16U          // Local IPC session identifier size in bytes
 #define VW_MAX_TEXT_BYTES 1024U          // Max caption text length in bytes (UTF-8)
+// Filesystem path bound shared by plugin and worker (plugin passes --model via argv; both sides
+// must agree). ≥ the OS max path length per platform so no valid configured path is rejected:
+// Linux PATH_MAX is 4096 bytes; Windows long paths (\\?\ prefix) allow up to 32767 chars.
+#ifdef _WIN32
+#define VW_PATH_MAX_BYTES 32768U
+#else
+#define VW_PATH_MAX_BYTES 4096U
+#endif
 
 // Capability flags (bitfield)
 #define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)

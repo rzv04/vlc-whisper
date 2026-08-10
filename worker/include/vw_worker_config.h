@@ -7,16 +7,17 @@
 #include "vw_protocol_types.h"
 
 typedef struct vw_worker_config {
-  char model_path[256];
+  char model_path[VW_PATH_MAX_BYTES];
   char language[8];
   uint32_t sample_rate;
   char pipe_name[256];
+  char log_file[512];  // --log-file override; empty = default temp-dir log
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
 } vw_worker_config_t;
 
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 
-// Parse worker CLI args (--pipe, --token <64 hex>, --model) into config.
+// Parse worker CLI args (--pipe, --token <64 hex>, --model, --log-file) into config.
 // Returns 0 on success, or 2 on bad usage (malformed --token, unknown option, missing value).
 int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** argv);
 

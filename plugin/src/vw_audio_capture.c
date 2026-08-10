@@ -34,7 +34,11 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
 
     vw_audio_chunk_t chunk = {0};
     chunk.start_pts_us = current_pts_us;
-    chunk.duration_us = (int64_t)(((double)chunk_frames / VW_AUDIO_TARGET_RATE) * 1000000.0);
+    // Derive duration from the byte count so the worker's strict validation holds exactly:
+    // vw_protocol_validate_payload requires pcm_bytes == trunc(duration_us * 32 / 1000).
+    // duration_us = bytes * 1000 / 32 = bytes * 31.25 must be rounded UP, otherwise odd byte
+    // counts (odd frame counts) truncate to 2f-1 and fail validation by one byte.
+    chunk.duration_us = ((int64_t)chunk_frames * 125 + 1) / 2;  // ceil(frames * 62.5)
     chunk.sample_rate = VW_AUDIO_TARGET_RATE;
     chunk.channels = 1;
     chunk.bytes = (uint32_t)(chunk_frames * sizeof(int16_t));

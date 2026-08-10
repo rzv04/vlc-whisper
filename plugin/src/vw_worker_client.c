@@ -15,32 +15,35 @@
 
 #include "vw_audio_capture.h"
 #include "vw_ipc_transport.h"
+#include "vw_log.h"
 #include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
 
 // Receive exactly len bytes, retrying on partial reads and on read timeouts
-// (VW_IPC_RECV_TIMEOUT). Returns false on fatal error (EOF / broken pipe,
-// VW_IPC_RECV_FATAL) or if the total handshake deadline (deadline_us) expires.
-static bool receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
+// (VW_IPC_RECV_TIMEOUT). Returns VW_IPC_RECV_OK (1) on complete read, VW_IPC_RECV_TIMEOUT (-1) when
+// the deadline expires before any byte was consumed (clean frame boundary), and VW_IPC_RECV_FATAL
+// (-2) on a fatal error (EOF / broken pipe) or on a timeout that consumed part of the frame (desynced).
+static int receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t deadline_us) {
   size_t got = 0;
   while (got < len) {
     int64_t now_us = vw_platform_get_monotonic_time_us();
-    if (now_us >= deadline_us) return false;
+    if (now_us >= deadline_us) return (got == 0) ? VW_IPC_RECV_TIMEOUT : VW_IPC_RECV_FATAL;
     uint32_t remaining_us = (uint32_t)(deadline_us - now_us);
     uint32_t timeout_us = (remaining_us < 3000000U) ? remaining_us : 3000000U;
 
     int32_t res = vw_ipc_receive_timeout(ipc, buf + got, len - got, timeout_us);
     if (res < 0) {
       if (res == VW_IPC_RECV_TIMEOUT) {  // timeout — keep waiting, bounded by the deadline
-        if (vw_platform_get_monotonic_time_us() >= deadline_us) return false;
+        if (vw_platform_get_monotonic_time_us() >= deadline_us)
+          return (got == 0) ? VW_IPC_RECV_TIMEOUT : VW_IPC_RECV_FATAL;
         continue;
       }
-      return false;  // fatal (VW_IPC_RECV_FATAL): EOF / broken pipe / closed
+      return VW_IPC_RECV_FATAL;  // fatal (VW_IPC_RECV_FATAL): EOF / broken pipe / closed
     }
     got += (size_t)res;
   }
-  return true;
+  return VW_IPC_RECV_OK;
 }
 
 // Format 32 raw bytes as a 64-char lowercase hex string.
@@ -64,7 +67,8 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
 }
 
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
-                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES]) {
+                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                        const char* model_path) {
   if (!endpoint_name || !auth_token) {
     return NULL;
   }
@@ -74,7 +78,20 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (executable_path) {
     char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
     token_to_hex(auth_token, token_hex);
-    const char* argv[] = {executable_path, "--pipe", endpoint_name, "--token", token_hex, NULL};
+    // Exactly two argv shapes: with and without --model. NULL model_path omits the flag so the
+    // worker's CWD-relative default stays the fallback.
+    const char* argv[8];
+    size_t argc = 0;
+    argv[argc++] = executable_path;
+    argv[argc++] = "--pipe";
+    argv[argc++] = endpoint_name;
+    argv[argc++] = "--token";
+    argv[argc++] = token_hex;
+    if (model_path) {
+      argv[argc++] = "--model";
+      argv[argc++] = model_path;
+    }
+    argv[argc] = NULL;
     if (!vw_platform_spawn_process(executable_path, argv, &worker_process)) {
       return NULL;
     }
@@ -150,7 +167,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
 
   // Wait for HELLO_ACK (header, then payload)
   uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
-  if (!receive_all(ipc, ack_hdr_buf, sizeof(ack_hdr_buf), handshake_deadline_us)) goto fail;
+  if (receive_all(ipc, ack_hdr_buf, sizeof(ack_hdr_buf), handshake_deadline_us) != VW_IPC_RECV_OK) goto fail;
   vw_frame_header_t ack_hdr;
   if (!vw_protocol_decode_header(ack_hdr_buf, sizeof(ack_hdr_buf), &ack_hdr)) goto fail;  // validates header too
   if (ack_hdr.type != VW_MSG_HELLO_ACK) goto fail;
@@ -160,7 +177,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   }
   uint8_t* ack_payload = (uint8_t*)malloc(ack_hdr.payload_length);
   if (!ack_payload) goto fail;
-  bool ack_ok = receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us);
+  bool ack_ok = (receive_all(ipc, ack_payload, ack_hdr.payload_length, handshake_deadline_us) == VW_IPC_RECV_OK);
   vw_msg_hello_ack_t ack = {0};
   if (ack_ok) {
     ack_ok = vw_protocol_decode_payload(VW_MSG_HELLO_ACK, ack_payload, ack_hdr.payload_length, &ack);
@@ -240,10 +257,12 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
       vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the STARTED/ERROR confirmation wait
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t resp_hdr_buf[sizeof(vw_frame_header_t)];
-    if (!receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us)) {
-      // Deadline expired or fatal EOF, possibly mid-frame: the next frame
-      // boundary is unknowable and a late STARTED from this attempt could be
-      // mistaken for a retry's confirmation. Drop so a retry cannot desync.
+    if (receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us) != VW_IPC_RECV_OK) {
+      // Fatal EOF, or the 5s handshake deadline expired. This is a one-shot handshake, not a poll:
+      // after a timeout the worker's state is unknowable — it may have accepted the START and sent
+      // a STARTED that is still in the socket buffer. A retry would regenerate session_id and read
+      // that stale STARTED as its own confirmation, then send AUDIO for a session the worker never
+      // accepted. Fail closed: drop so any retry must reconnect on a fresh transport.
       vw_worker_client_drop_transport(client);
       return false;
     }
@@ -265,7 +284,15 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
           vw_worker_client_drop_transport(client);
           return false;
         }
-        bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+        bool drained =
+            (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) == VW_IPC_RECV_OK);
+        vw_msg_error_t err;
+        memset(&err, 0, sizeof(err));
+        if (drained && vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err)) {
+          // Surface the worker's rejection (e.g. E_MODEL_MISSING) so the model-absent path is diagnosable.
+          vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_START_ERROR", "code=%u recoverable=%u msg=%.*s", err.error_code,
+                       err.recoverable, (int)strnlen(err.message, VW_MAX_ERROR_MSG_BYTES), err.message);
+        }
         free(resp_payload);
         if (!drained) {
           vw_worker_client_drop_transport(client);
@@ -281,7 +308,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
         vw_worker_client_drop_transport(client);
         return false;
       }
-      bool drained = receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us);
+      bool drained =
+          (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) == VW_IPC_RECV_OK);
       free(resp_payload);
       if (!drained) {
         vw_worker_client_drop_transport(client);
@@ -305,7 +333,7 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
                           .pcm_data = chunk->pcm_data};
   memcpy(audio.session_id.bytes, client->session_id, 16);
 
-  uint8_t payload_buf[32768];
+  uint8_t payload_buf[2 * VW_AUDIO_CHUNK_MAX_PCM_BYTES];  // oversized
   size_t payload_len = 0;
   if (!vw_protocol_encode_payload(VW_MSG_AUDIO_PCM, &audio, payload_buf, sizeof(payload_buf), &payload_len))
     return false;
@@ -371,4 +399,111 @@ void vw_worker_client_shutdown(vw_worker_client_t* client) {
   if (vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) {
     vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf));
   }
+}
+
+int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_us, vw_worker_recv_t* out) {
+  if (!client || !client->pipe_handle || !out) {
+    // A NULL pipe handle means the transport was dropped (dead) — report fatal, not the timeout
+    // value, so a caller can never mistake a dead client for a benign poll timeout.
+    return VW_IPC_RECV_FATAL;
+  }
+  memset(out, 0, sizeof(*out));
+
+  // One per-call deadline for waiting for a frame to START (header). The transport is
+  // message-oriented, so a header arrives whole or not at all: a clean header timeout (0 bytes
+  // consumed) is a safe frame boundary and returns 0. Once the header is consumed the stream is
+  // mid-frame — finish it with the transport's own receive bound (3 s) so a transient delay
+  // between the header and payload messages cannot desync the stream. Any payload failure (timeout
+  // or fatal) still drops: the header is gone, so a later call would read the payload as a header.
+  const int64_t deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)timeout_us;
+  const int64_t frame_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
+
+  while (vw_platform_get_monotonic_time_us() < deadline_us) {
+    uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+    int hdr_rc = receive_all(client->pipe_handle, hdr_buf, sizeof(hdr_buf), deadline_us);
+    if (hdr_rc != VW_IPC_RECV_OK) {
+      if (hdr_rc == VW_IPC_RECV_TIMEOUT) {
+        return VW_IPC_RECV_TIMEOUT;  // clean timeout: no header bytes consumed, still at a frame boundary
+      }
+      vw_worker_client_drop_transport(client);
+      return VW_IPC_RECV_FATAL;  // fatal: transport dead, caller must stop using the client
+    }
+
+    vw_frame_header_t hdr;
+    if (!vw_protocol_decode_header(hdr_buf, sizeof(hdr_buf), &hdr)) {
+      // Header bytes were consumed but don't parse: framing is lost, so this is a fatal transport
+      // state — report VW_IPC_RECV_FATAL, never the timeout value, or the sender would keep polling
+      // a dropped client instead of marking the worker dead.
+      vw_worker_client_drop_transport(client);
+      return VW_IPC_RECV_FATAL;
+    }
+    if (!vw_protocol_validate_header(&hdr)) {
+      vw_worker_client_drop_transport(client);
+      return VW_IPC_RECV_FATAL;
+    }
+
+    // Read the declared payload, if any. A failure here (timeout OR fatal) is always a desync:
+    // the header message was already consumed, so a subsequent call would read the payload as a
+    // new header and fail validation. Drop the transport rather than return a false timeout.
+    uint8_t* payload = NULL;
+    if (hdr.payload_length > 0) {
+      payload = (uint8_t*)malloc(hdr.payload_length);
+      if (!payload) {
+        vw_worker_client_drop_transport(client);
+        return VW_IPC_RECV_FATAL;
+      }
+      if (receive_all(client->pipe_handle, payload, hdr.payload_length, frame_deadline_us) != VW_IPC_RECV_OK) {
+        free(payload);
+        vw_worker_client_drop_transport(client);
+        return VW_IPC_RECV_FATAL;  // desync: header consumed but payload incomplete; framing is lost
+      }
+    }
+
+    // Decode the three worker->plugin types; anything else is drained and skipped.
+    bool decoded = false;
+    switch (hdr.type) {
+      case VW_MSG_CAPTION_SEGMENT: {
+        vw_caption_segment_t* seg = &out->segment;
+        if (vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, payload, hdr.payload_length, seg) &&
+            vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, seg)) {
+          // Copy segment text into owned storage so the caller's zero-heap path never aliases
+          // the freed wire payload.
+          uint16_t n = seg->text_bytes;
+          if (n >= VW_MAX_TEXT_BYTES) {
+            n = VW_MAX_TEXT_BYTES - 1;
+          }
+          memcpy(out->text_buf, seg->text_utf8, n);
+          out->text_buf[n] = '\0';
+          seg->text_utf8 = out->text_buf;
+          seg->text_bytes = n;
+          out->type = VW_MSG_CAPTION_SEGMENT;
+          decoded = true;
+        }
+        break;
+      }
+      case VW_MSG_STATUS:
+        if (vw_protocol_decode_payload(VW_MSG_STATUS, payload, hdr.payload_length, &out->status) &&
+            vw_protocol_validate_payload(VW_MSG_STATUS, &out->status)) {
+          out->type = VW_MSG_STATUS;
+          decoded = true;
+        }
+        break;
+      case VW_MSG_ERROR:
+        if (vw_protocol_decode_payload(VW_MSG_ERROR, payload, hdr.payload_length, &out->error) &&
+            vw_protocol_validate_payload(VW_MSG_ERROR, &out->error)) {
+          out->type = VW_MSG_ERROR;
+          decoded = true;
+        }
+        break;
+      default:
+        // Unknown type (e.g. PAUSE/RESUME/STARTED arriving late): consume and skip.
+        break;
+    }
+    free(payload);
+    if (decoded) {
+      return VW_IPC_RECV_OK;
+    }
+    // Malformed or unsupported frame: keep draining within the same deadline.
+  }
+  return VW_IPC_RECV_TIMEOUT;  // deadline expired at a frame boundary
 }
