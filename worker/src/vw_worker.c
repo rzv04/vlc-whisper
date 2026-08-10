@@ -387,6 +387,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   // is a POSIX portability trap, so the timeout — not the close — is what unblocks the reader.
   atomic_store(&running, false);
   vw_platform_thread_join(reader_thread);
+  const uint64_t dropped_audio_us = vw_worker_queue_get_dropped_audio_us(queue);
   vw_worker_queue_destroy(queue);
 
   free(window_samples);
@@ -396,6 +397,6 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
   vw_ipc_close(handle);
   vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker exiting (rc=%d, dropped_audio_us=%llu)",
-               authenticated ? 0 : 1, (unsigned long long)vw_worker_queue_get_dropped_audio_us(queue));
+               authenticated ? 0 : 1, (unsigned long long)dropped_audio_us);
   return authenticated ? 0 : 1;
 }
