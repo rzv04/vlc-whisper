@@ -313,16 +313,30 @@ static void* vw_plugin_sender_main(void* arg) {
   return NULL;
 }
 
-// Returns true when the VLC input thread reports PAUSE_S (playback paused). Walks the filter's
-// parent/children object hierarchy to the input thread — same walk the caption presenter uses for
-// the vout; deliberately avoids vlc_object_find_name (deprecated, and weak-linkable to NULL on
-// MinGW per the milestone-3 postmortem). Safe to call from the sender thread (read-only query).
+// Returns true when the VLC input thread reports PAUSE_S (playback paused). Mirrors the caption
+// presenter's object walk exactly — checks each node and its children list for an "input" object
+// (the input thread is a child of the playlist/libvlc hierarchy, not an ancestor of the audio
+// filter, as the presenter's live log shows), then queries input_GetState. Deliberately avoids
+// vlc_object_find_name (deprecated, and weak-linkable to NULL on MinGW per the milestone-3
+// postmortem). Safe to call from the sender thread (read-only query).
 static bool vw_plugin_input_is_paused(filter_t* p_filter) {
   if (!p_filter) return false;
   vlc_object_t* cur = VLC_OBJECT(p_filter);
   while (cur) {
     if (cur->obj.object_type && strcmp(cur->obj.object_type, "input") == 0) {
       return input_GetState((input_thread_t*)cur) == PAUSE_S;
+    }
+    vlc_list_t* children = vlc_list_children(cur);
+    if (children) {
+      for (int i = 0; i < children->i_count; i++) {
+        vlc_object_t* child = (vlc_object_t*)children->p_values[i].p_address;
+        if (child && child->obj.object_type && strcmp(child->obj.object_type, "input") == 0) {
+          bool is_paused = input_GetState((input_thread_t*)child) == PAUSE_S;
+          vlc_list_release(children);
+          return is_paused;
+        }
+      }
+      vlc_list_release(children);
     }
     cur = cur->obj.parent;
   }
