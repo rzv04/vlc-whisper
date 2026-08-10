@@ -34,7 +34,7 @@ caption receiver thread (step 15) -- timed segments --> caption presenter (C)
 | Component                     | Owns                                                           | Must not do                                                  |
 | ----------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
 | Capture module                | Audio-format validation, PTS mapping, bounded PCM enqueue      | Wait for worker, infer, write pipe, allocate per audio block |
-| Plugin sender (14c)           | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR | Call VLC presentation API; block on inference |
+| Plugin sender (14c, 15)       | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR, dispatch SEGMENT frames to the caption presenter | Block on inference; call VLC presentation API from the audio callback |
 | Worker IPC Reader (14c, `ADR-013`) | Pipe frame reading, protocol validation, worker frame queue enqueue | Block on whisper.cpp inference or delay transport reading; send replies |
 | Worker frame queue (14c)      | Bounded FIFO of `{type, payload}` frames; drop-oldest AUDIO; controls never evicted for audio; overflow evicts only PAUSE/RESUME, same-type, or the oldest non-SHUTDOWN control for a required incoming (START/STOP); a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming | Block; allocate unbounded |
 | Worker Engine (`ADR-015`)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder | Read arbitrary paths, expose network service, control VLC    |
