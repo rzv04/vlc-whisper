@@ -228,6 +228,38 @@ int main(void) {
   EXPECT(!vw_worker_queue_pop(q9, &f));
   vw_worker_queue_destroy(q9);
 
+  // --- Required incoming (STOP) evicts oldest non-SHUTDOWN; SHUTDOWN survives ---
+  vw_worker_queue_t* q10 = vw_worker_queue_create(2);
+  EXPECT(q10 != NULL);
+  EXPECT(vw_worker_queue_push(q10, VW_MSG_START_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_push(q10, VW_MSG_SHUTDOWN, NULL, 0));  // full (2/2)
+
+  // Incoming STOP_SESSION with no soft/same-type queued: evicts the oldest non-SHUTDOWN control
+  // (START_SESSION) — the newest session directive wins, and SHUTDOWN must survive.
+  EXPECT(vw_worker_queue_push(q10, VW_MSG_STOP_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q10, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(vw_worker_queue_pop(q10, &f));
+  EXPECT(f.type == VW_MSG_STOP_SESSION);
+  EXPECT(!vw_worker_queue_pop(q10, &f));
+  vw_worker_queue_destroy(q10);
+
+  // --- Required incoming into an all-SHUTDOWN queue is dropped (worker exiting anyway) ---
+  vw_worker_queue_t* q11 = vw_worker_queue_create(2);
+  EXPECT(q11 != NULL);
+  EXPECT(vw_worker_queue_push(q11, VW_MSG_SHUTDOWN, NULL, 0));
+  EXPECT(vw_worker_queue_push(q11, VW_MSG_SHUTDOWN, NULL, 0));  // full (2/2, all SHUTDOWN)
+
+  // START_SESSION cannot land without evicting a SHUTDOWN (which would keep the worker running),
+  // so it is dropped — but both SHUTDOWNs survive.
+  EXPECT(!vw_worker_queue_push(q11, VW_MSG_START_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q11, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(vw_worker_queue_pop(q11, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(!vw_worker_queue_pop(q11, &f));
+  vw_worker_queue_destroy(q11);
+
   // --- dropped_audio_us equals decoded duration_us sum; destroy frees queued payloads ---
   vw_worker_queue_destroy(q);
 

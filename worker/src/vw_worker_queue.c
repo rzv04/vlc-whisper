@@ -117,9 +117,10 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   // Full with no evictable AUDIO frame (all-control queue). An incoming AUDIO is dropped (counted)
   // — never sacrifice a control for audio. An incoming CONTROL evicts only a control the incoming
   // supersedes or the worker never needs: PAUSE/RESUME (stateless), a same-type control, or — for
-  // SHUTDOWN — anything. Queued START/STOP/SHUTDOWN transitions are never evicted by an unrelated
-  // control; when nothing safe is evictable the incoming control is dropped instead. Reachable
-  // only in a pathological burst of controls; the main loop pops controls immediately.
+  // SHUTDOWN — anything. A required incoming (START/STOP) additionally supersedes the oldest
+  // non-SHUTDOWN control; a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming. Only a
+  // soft incoming (PAUSE/RESUME) can be dropped; required incomings always land. Reachable only in
+  // a pathological burst of controls; the main loop pops controls immediately.
   if (type == VW_MSG_AUDIO_PCM) {
     atomic_fetch_add_explicit(&q->dropped_audio_us, vw_worker_queue_audio_duration_us(payload, payload_len),
                               memory_order_relaxed);
@@ -129,14 +130,18 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   }
   // Incoming SHUTDOWN supersedes every queued control — evict the oldest, whatever it is (a newer
   // SHUTDOWN replaces an older one, so at least one SHUTDOWN always survives). Any other incoming
-  // control evicts only the oldest PAUSE/RESUME (stateless no-ops in the worker loop) or the oldest
-  // same-type control it supersedes — a queued START/STOP/SHUTDOWN the worker must observe is never
-  // sacrificed for an unrelated control. If nothing safe is evictable, drop the incoming control
-  // (return false) rather than lose a queued required transition.
+  // control evicts only a control it supersedes or the worker never needs: oldest PAUSE/RESUME
+  // (stateless no-ops in the worker loop), oldest same-type, or — for a required incoming
+  // (START/STOP) — the oldest non-SHUTDOWN control, since the newest session directive supersedes
+  // the oldest. A queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming. A required incoming
+  // is dropped only when every queued control is SHUTDOWN (the worker is exiting anyway, so the
+  // incoming session directive is moot); a soft incoming may also be dropped when nothing is
+  // evictable — never sacrifice a queued required transition for it.
   size_t evict_ctrl = q->capacity;  // sentinel: not found
   if (type == VW_MSG_SHUTDOWN) {
     evict_ctrl = q->tail;
   } else {
+    bool required = (type == VW_MSG_START_SESSION || type == VW_MSG_STOP_SESSION);
     for (size_t i = q->tail; i < q->head; i++) {
       uint16_t queued = q->slots[i % q->capacity].type;
       if (queued == VW_MSG_PAUSE || queued == VW_MSG_RESUME || queued == type) {
@@ -144,11 +149,23 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
         break;
       }
     }
+    if (evict_ctrl == q->capacity && required) {
+      // Newest required directive supersedes the oldest non-SHUTDOWN one; never a queued SHUTDOWN.
+      for (size_t i = q->tail; i < q->head; i++) {
+        if (q->slots[i % q->capacity].type != VW_MSG_SHUTDOWN) {
+          evict_ctrl = i;
+          break;
+        }
+      }
+    }
   }
   if (evict_ctrl == q->capacity) {
+    // Reachable only when nothing evictable exists: a soft incoming with no soft/same-type queued
+    // (dropping PAUSE/RESUME is harmless), or a required incoming into an all-SHUTDOWN queue (the
+    // worker is exiting, so the directive is moot). Never sacrifice a queued required transition.
     free(payload);
     pthread_mutex_unlock(&q->mutex);
-    return false;  // all-control full and nothing evictable: keep queued transitions, drop incoming
+    return false;
   }
   vw_worker_frame_t* victim = &q->slots[evict_ctrl % q->capacity];
   atomic_fetch_add_explicit(&q->dropped_audio_us,

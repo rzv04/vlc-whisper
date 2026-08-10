@@ -356,12 +356,19 @@ static int vw_plugin_open(vlc_object_t* obj) {
   char* configured = config_GetPsz(obj, "worker-path");
   if (configured && configured[0]) {
     if (strlen(configured) >= sizeof(sys->worker_path)) {
+      // Fail closed: the user explicitly chose this worker; falling back to discovery would launch
+      // a DIFFERENT binary than configured. Refuse to open rather than substitute a wrong artifact.
       vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_CONFIG_PATH",
-                   "worker-path exceeds %zu bytes; ignoring and falling back to discovery",
+                   "worker-path exceeds %zu bytes (OS path limit); refusing to launch a different worker",
                    sizeof(sys->worker_path) - 1);
-    } else {
-      snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", configured);
+      free(configured);
+      vw_log_set_sink(NULL, NULL);  // close() never runs after a failed open; drop the dangling sink
+      vw_spsc_queue_destroy(sys->queue);
+      p_filter->p_sys = NULL;
+      free(sys);
+      return VLC_EGENERIC;
     }
+    snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", configured);
   }
   if (sys->worker_path[0] == '\0' && vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
     // Resolved to a concrete path next to the plugin or VLC executable.
@@ -379,15 +386,22 @@ static int vw_plugin_open(vlc_object_t* obj) {
 
   // Model path: explicit option wins, then discovery next to the plugin/VLC exe. A bad configured
   // path surfaces as E_MODEL_MISSING at session start — do not pre-check existence here. An
-  // oversized configured path is rejected with a log rather than silently truncated.
+  // oversized configured path fails closed (refuse to open) rather than load a different model or
+  // silently truncate.
   char* model_cfg = config_GetPsz(obj, "model-path");
   if (model_cfg && model_cfg[0]) {
     if (strlen(model_cfg) >= sizeof(sys->model_path)) {
       vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_CONFIG_PATH",
-                   "model-path exceeds %zu bytes; ignoring and falling back to discovery", sizeof(sys->model_path) - 1);
-    } else {
-      snprintf(sys->model_path, sizeof(sys->model_path), "%s", model_cfg);
+                   "model-path exceeds %zu bytes (OS path limit); refusing to load a different model",
+                   sizeof(sys->model_path) - 1);
+      free(model_cfg);
+      vw_log_set_sink(NULL, NULL);  // close() never runs after a failed open; drop the dangling sink
+      vw_spsc_queue_destroy(sys->queue);
+      p_filter->p_sys = NULL;
+      free(sys);
+      return VLC_EGENERIC;
     }
+    snprintf(sys->model_path, sizeof(sys->model_path), "%s", model_cfg);
   } else if (vw_plugin_resolve_model_path(sys->model_path, sizeof(sys->model_path))) {
     // Resolved to a concrete file next to the plugin or VLC executable.
   }

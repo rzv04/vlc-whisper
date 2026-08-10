@@ -26,10 +26,11 @@ void vw_worker_queue_destroy(vw_worker_queue_t* q);
 // Pushes one frame, taking ownership of payload (freed if the frame is dropped). On overflow, drops
 // the oldest queued audio frame; control frames are never dropped to make room for audio. On an
 // all-control overflow, evicts only PAUSE/RESUME (stateless no-ops), a same-type control the
-// incoming supersedes, or — for SHUTDOWN — any control; queued START/STOP/SHUTDOWN transitions are
-// never evicted for an unrelated control. Returns true if accepted; false when the frame is dropped
-// (a counted AUDIO drop, or a control dropped because the all-control queue held nothing safe to
-// evict — keep the queued transitions rather than lose one).
+// incoming supersedes, or — for SHUTDOWN — any control; a required incoming (START/STOP) evicts the
+// oldest non-SHUTDOWN control, and a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming.
+// Returns true if accepted; false when the frame is dropped (a counted AUDIO drop, or a control
+// dropped because nothing evictable existed: a soft incoming with no soft/same-type queued, or a
+// required incoming into an all-SHUTDOWN queue — never at the cost of a queued required transition).
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len);
 
 // Pops the oldest frame into out, transferring payload ownership to the caller, who must free it
