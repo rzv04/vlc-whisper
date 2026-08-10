@@ -246,14 +246,14 @@ static void* vw_plugin_sender_main(void* arg) {
     if (atomic_load(&sys->worker_dead)) break;
 
     vw_worker_recv_t recv;
-    int r = vw_worker_client_receive_frame(sys->client, sent_any ? 5000 : 20000, &recv);
-    if (r < 0) {
+    int recv_status = vw_worker_client_receive_frame(sys->client, sent_any ? 5000 : 20000, &recv);
+    if (recv_status < 0) {
       atomic_store(&sys->worker_dead, true);
       vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_DEAD",
                    "receive_frame fatal (transport dead); captions disabled, passthrough only");
       break;
     }
-    if (r == 1) {
+    if (recv_status == 1) {
       sys->frames_received++;
       switch (recv.type) {
         case VW_MSG_CAPTION_SEGMENT:
