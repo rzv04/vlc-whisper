@@ -255,7 +255,72 @@ static void* vw_fake_server_frames_thread(void* arg) {
   vw_ipc_send(server, hdr_buf, 20);
   vw_ipc_send(server, payload, err_len);
 
-  vw_ipc_close(server);  // EOF: next receive_frame must return -1
+  vw_ipc_close(server);  // EOF: next receive_frame must return VW_IPC_RECV_FATAL
+  return (void*)0;
+}
+
+// Fake server that completes the handshake, then sends a 20-byte header that fails
+// vw_protocol_decode_header (zero magic) and closes. Exercises the corrupt-header path: the client
+// must report VW_IPC_RECV_FATAL and drop the transport — never the timeout value.
+static void* vw_fake_server_bad_header_thread(void* arg) {
+  const char* endpoint = (const char*)arg;
+  vw_ipc_handle_t* server = vw_ipc_listen(endpoint);
+  if (!server) return (void*)1;
+
+  // HELLO / HELLO_ACK handshake (same shape as vw_fake_server_thread)
+  uint8_t hdr_buf[20];
+  if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
+    vw_ipc_close(server);
+    return (void*)2;
+  }
+  vw_frame_header_t hdr;
+  vw_protocol_decode_header(hdr_buf, 20, &hdr);
+  uint8_t payload[512];
+  if (vw_ipc_receive(server, payload, hdr.payload_length) != (int32_t)hdr.payload_length) {
+    vw_ipc_close(server);
+    return (void*)3;
+  }
+  vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
+                            .selected_minor = 0,
+                            .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO};
+  size_t ack_len = 0;
+  vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, payload, sizeof(payload), &ack_len);
+  vw_frame_header_t ack_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                               .major = VW_PROTOCOL_VERSION_MAJOR,
+                               .type = VW_MSG_HELLO_ACK,
+                               .payload_length = (uint32_t)ack_len,
+                               .sequence = 1};
+  vw_protocol_encode_header(&ack_hdr, hdr_buf, 20);
+  vw_ipc_send(server, hdr_buf, 20);
+  vw_ipc_send(server, payload, ack_len);
+
+  // Receive START_SESSION, reply STARTED (header-only)
+  if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
+    vw_ipc_close(server);
+    return (void*)4;
+  }
+  vw_protocol_decode_header(hdr_buf, 20, &hdr);
+  if (hdr.type != VW_MSG_START_SESSION) {
+    vw_ipc_close(server);
+    return (void*)5;
+  }
+  if (vw_ipc_receive(server, payload, hdr.payload_length) != (int32_t)hdr.payload_length) {
+    vw_ipc_close(server);
+    return (void*)6;
+  }
+  vw_frame_header_t started_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                   .major = VW_PROTOCOL_VERSION_MAJOR,
+                                   .type = VW_MSG_STARTED,
+                                   .payload_length = 0,
+                                   .sequence = 2};
+  vw_protocol_encode_header(&started_hdr, hdr_buf, 20);
+  vw_ipc_send(server, hdr_buf, 20);
+
+  // Corrupt frame: 20 zero bytes (magic 0 != VW_PROTOCOL_MAGIC) — must fail decode/validate.
+  memset(hdr_buf, 0, sizeof(hdr_buf));
+  vw_ipc_send(server, hdr_buf, 20);
+
+  vw_ipc_close(server);
   return (void*)0;
 }
 
@@ -401,6 +466,35 @@ int main(void) {
   vw_worker_client_shutdown(client3);
   vw_worker_client_disconnect(client3);
   pthread_join(thread3, &ret_val);
+  EXPECT((int)(intptr_t)ret_val == 0);
+
+  // Test 10: Corrupt header — receive_frame must report VW_IPC_RECV_FATAL (never the timeout
+  // value) and drop the transport, so the sender stops instead of spinning on a dead client.
+  const char* pipe_name4 =
+#ifdef _WIN32
+      "\\\\.\\pipe\\test_worker_client_socket_badheader";
+#else
+      "test_worker_client_socket_badheader";
+#endif
+  pthread_t thread4;
+  err = pthread_create(&thread4, NULL, vw_fake_server_bad_header_thread, (void*)pipe_name4);
+  EXPECT(err == 0);
+  vw_platform_sleep_ms(100);
+
+  vw_worker_client_t* client4 = vw_worker_client_launch_and_connect(NULL, pipe_name4, auth_token, NULL);
+  EXPECT(client4 != NULL);
+  EXPECT(vw_worker_client_start_session(client4, 0, "ggml-tiny.en.bin"));
+
+  // First receive hits the corrupt header: fatal, not timeout.
+  memset(&recv, 0, sizeof(recv));
+  EXPECT(vw_worker_client_receive_frame(client4, 1000000, &recv) == VW_IPC_RECV_FATAL);
+
+  // Transport was dropped (pipe handle closed): a second call must stay fatal, not loop forever
+  // returning the timeout value with a dead handle.
+  EXPECT(vw_worker_client_receive_frame(client4, 1000000, &recv) == VW_IPC_RECV_FATAL);
+
+  vw_worker_client_disconnect(client4);
+  pthread_join(thread4, &ret_val);
   EXPECT((int)(intptr_t)ret_val == 0);
 
   return 0;

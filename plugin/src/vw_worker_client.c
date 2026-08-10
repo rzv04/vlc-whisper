@@ -403,7 +403,9 @@ void vw_worker_client_shutdown(vw_worker_client_t* client) {
 
 int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_us, vw_worker_recv_t* out) {
   if (!client || !client->pipe_handle || !out) {
-    return -1;
+    // A NULL pipe handle means the transport was dropped (dead) — report fatal, not the timeout
+    // value, so a caller can never mistake a dead client for a benign poll timeout.
+    return VW_IPC_RECV_FATAL;
   }
   memset(out, 0, sizeof(*out));
 
@@ -429,12 +431,15 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
 
     vw_frame_header_t hdr;
     if (!vw_protocol_decode_header(hdr_buf, sizeof(hdr_buf), &hdr)) {
+      // Header bytes were consumed but don't parse: framing is lost, so this is a fatal transport
+      // state — report VW_IPC_RECV_FATAL, never the timeout value, or the sender would keep polling
+      // a dropped client instead of marking the worker dead.
       vw_worker_client_drop_transport(client);
-      return -1;
+      return VW_IPC_RECV_FATAL;
     }
     if (!vw_protocol_validate_header(&hdr)) {
       vw_worker_client_drop_transport(client);
-      return -1;
+      return VW_IPC_RECV_FATAL;
     }
 
     // Read the declared payload, if any. A failure here (timeout OR fatal) is always a desync:
@@ -445,7 +450,7 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
       payload = (uint8_t*)malloc(hdr.payload_length);
       if (!payload) {
         vw_worker_client_drop_transport(client);
-        return -1;
+        return VW_IPC_RECV_FATAL;
       }
       if (receive_all(client->pipe_handle, payload, hdr.payload_length, frame_deadline_us) != VW_IPC_RECV_OK) {
         free(payload);
