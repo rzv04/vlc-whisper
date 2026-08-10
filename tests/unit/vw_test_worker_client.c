@@ -105,13 +105,13 @@ static void* vw_fake_server_thread(void* arg) {
   }
   free(big_payload);
 
-  // Step 6: Receive STOP_SESSION control frame sent by vw_worker_client_stop_session
+  // Step 6: Receive PAUSE control frame sent by vw_worker_client_pause_session
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)10;
   }
   vw_protocol_decode_header(hdr_buf, 20, &hdr);
-  if (hdr.type != VW_MSG_STOP_SESSION) {
+  if (hdr.type != VW_MSG_PAUSE) {
     vw_ipc_close(server);
     return (void*)11;
   }
@@ -119,16 +119,58 @@ static void* vw_fake_server_thread(void* arg) {
     vw_ipc_close(server);
     return (void*)12;
   }
+  vw_msg_control_t pause_ctrl;
+  vw_protocol_decode_payload(VW_MSG_PAUSE, payload, hdr.payload_length, &pause_ctrl);
+  if (pause_ctrl.reason != VW_CTRL_REASON_USER_PAUSE) {
+    vw_ipc_close(server);
+    return (void*)15;
+  }
 
-  // Step 7: Receive SHUTDOWN control frame sent by vw_worker_client_shutdown
+  // Step 7: Receive RESUME control frame sent by vw_worker_client_resume_session
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)13;
   }
   vw_protocol_decode_header(hdr_buf, 20, &hdr);
-  if (hdr.type != VW_MSG_SHUTDOWN) {
+  if (hdr.type != VW_MSG_RESUME) {
     vw_ipc_close(server);
     return (void*)14;
+  }
+  if (vw_ipc_receive(server, payload, hdr.payload_length) != (int32_t)hdr.payload_length) {
+    vw_ipc_close(server);
+    return (void*)16;
+  }
+  vw_msg_control_t resume_ctrl;
+  vw_protocol_decode_payload(VW_MSG_RESUME, payload, hdr.payload_length, &resume_ctrl);
+  if (resume_ctrl.reason != VW_CTRL_REASON_USER_RESUME) {
+    vw_ipc_close(server);
+    return (void*)17;
+  }
+
+  // Step 8: Receive STOP_SESSION control frame sent by vw_worker_client_stop_session
+  if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
+    vw_ipc_close(server);
+    return (void*)18;
+  }
+  vw_protocol_decode_header(hdr_buf, 20, &hdr);
+  if (hdr.type != VW_MSG_STOP_SESSION) {
+    vw_ipc_close(server);
+    return (void*)19;
+  }
+  if (vw_ipc_receive(server, payload, hdr.payload_length) != (int32_t)hdr.payload_length) {
+    vw_ipc_close(server);
+    return (void*)20;
+  }
+
+  // Step 9: Receive SHUTDOWN control frame sent by vw_worker_client_shutdown
+  if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
+    vw_ipc_close(server);
+    return (void*)21;
+  }
+  vw_protocol_decode_header(hdr_buf, 20, &hdr);
+  if (hdr.type != VW_MSG_SHUTDOWN) {
+    vw_ipc_close(server);
+    return (void*)22;
   }
 
   vw_ipc_close(server);
@@ -366,7 +408,9 @@ int main(void) {
   memcpy(chunk.pcm_data, pcm_data, 320);
   EXPECT(vw_worker_client_send_audio(client, &chunk));
 
-  // Test 5: Send STOP_SESSION and SHUTDOWN control frames
+  // Test 5: Send PAUSE and RESUME control frames (session stays active), then STOP + SHUTDOWN
+  vw_worker_client_pause_session(client);
+  vw_worker_client_resume_session(client);
   vw_worker_client_stop_session(client, 0);
   vw_worker_client_shutdown(client);
 
@@ -462,6 +506,8 @@ int main(void) {
   };
   memcpy(chunk2.pcm_data, pcm_data, 320);
   EXPECT(vw_worker_client_send_audio(client3, &chunk2));
+  vw_worker_client_pause_session(client3);
+  vw_worker_client_resume_session(client3);
   vw_worker_client_stop_session(client3, 0);
   vw_worker_client_shutdown(client3);
   vw_worker_client_disconnect(client3);

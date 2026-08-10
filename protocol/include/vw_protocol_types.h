@@ -136,6 +136,10 @@ typedef struct vw_msg_control {
   uint16_t reason;
 } vw_msg_control_t;
 
+// Control-message reason codes (vw_msg_control_t.reason), per docs/api-contracts.md.
+#define VW_CTRL_REASON_USER_PAUSE 1U   // PAUSE: user paused playback
+#define VW_CTRL_REASON_USER_RESUME 1U  // RESUME: user resumed playback
+
 typedef struct vw_msg_status {
   vw_session_id_t session_id;
   uint32_t state;

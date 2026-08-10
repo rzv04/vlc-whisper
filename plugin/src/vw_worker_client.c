@@ -359,33 +359,47 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
   return true;
 }
 
-void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason) {
-  if (!client || !client->pipe_handle || !client->session_active) return;
+// Sends one control frame (PAUSE/RESUME/STOP) stamped with the client's session id and reason.
+// Drops the transport fail-closed on any write failure (the stream is mis-framed or dead — a
+// partial control frame can never be re-synced). Returns true only when the whole frame was sent.
+static bool send_control_frame(vw_worker_client_t* client, vw_message_type_t type, uint16_t reason) {
+  if (!client || !client->pipe_handle) return false;
   vw_msg_control_t ctrl = {.reason = reason};
   memcpy(ctrl.session_id.bytes, client->session_id, 16);
   uint8_t payload_buf[64];
   size_t payload_len = 0;
-  if (vw_protocol_encode_payload(VW_MSG_STOP_SESSION, &ctrl, payload_buf, sizeof(payload_buf), &payload_len)) {
-    vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
-                             .major = VW_PROTOCOL_VERSION_MAJOR,
-                             .type = VW_MSG_STOP_SESSION,
-                             .payload_length = (uint32_t)payload_len,
-                             .sequence = ++client->sequence};
-    uint8_t hdr_buf[sizeof(vw_frame_header_t)];
-    if (vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) {
-      bool ok1 = vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf));
-      bool ok2 = vw_ipc_send(client->pipe_handle, payload_buf, payload_len);
-      if (ok1 && ok2) {
-        client->session_active = false;
-      } else {
-        // Header-only or no-op write: the stream is desynced (worker waits
-        // for the declared STOP payload) or dead. Never leave session_active
-        // set against a mis-framed connection — drop it so a replacement
-        // session cannot be started on a stream that will eat its frames.
-        vw_worker_client_drop_transport(client);
-      }
-    }
+  if (!vw_protocol_encode_payload(type, &ctrl, payload_buf, sizeof(payload_buf), &payload_len)) return false;
+  vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
+                           .major = VW_PROTOCOL_VERSION_MAJOR,
+                           .type = type,
+                           .payload_length = (uint32_t)payload_len,
+                           .sequence = ++client->sequence};
+  uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
+  bool ok1 = vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf));
+  bool ok2 = vw_ipc_send(client->pipe_handle, payload_buf, payload_len);
+  if (ok1 && ok2) {
+    return true;
   }
+  vw_worker_client_drop_transport(client);
+  return false;
+}
+
+void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason) {
+  if (!client || !client->pipe_handle || !client->session_active) return;
+  if (send_control_frame(client, VW_MSG_STOP_SESSION, reason)) {
+    client->session_active = false;
+  }
+}
+
+void vw_worker_client_pause_session(vw_worker_client_t* client) {
+  if (!client || !client->pipe_handle || !client->session_active) return;
+  send_control_frame(client, VW_MSG_PAUSE, VW_CTRL_REASON_USER_PAUSE);
+}
+
+void vw_worker_client_resume_session(vw_worker_client_t* client) {
+  if (!client || !client->pipe_handle || !client->session_active) return;
+  send_control_frame(client, VW_MSG_RESUME, VW_CTRL_REASON_USER_RESUME);
 }
 
 void vw_worker_client_shutdown(vw_worker_client_t* client) {

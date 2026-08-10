@@ -168,6 +168,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   vw_session_id_t session_id;
   memset(&session_id, 0, sizeof(session_id));
   bool session_active = false;
+  bool paused = false;  // PAUSE suspends window accumulation; RESUME clears it (step 16)
   uint32_t sequence = 1;
 
   vw_worker_queue_t* queue = vw_worker_queue_create(32);
@@ -312,9 +313,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
 
       case VW_MSG_AUDIO_PCM: {
-        if (!session_active ||
+        if (!session_active || paused ||
             memcmp(payload_decoded.audio.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES) != 0) {
-          break;
+          break;  // paused: drop AUDIO (plugin suspends forwarding; defensive if any slip through)
         }
 
         const int16_t* pcm16 = (const int16_t*)payload_decoded.audio.pcm_data;
@@ -349,6 +350,23 @@ int vw_worker_run(const vw_worker_config_t* config) {
             vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
           }
         }
+        break;
+      }
+
+      case VW_MSG_PAUSE: {
+        if (!session_active) break;
+        paused = true;
+        // Drop the in-flight analysis window: a window spanning the pause gap would mix
+        // pre-pause and post-resume audio. The session timeline (PTS epoch) is preserved.
+        if (audio_buf) vw_audio_buffer_clear(audio_buf);
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "paused; window cleared, transcription suspended");
+        break;
+      }
+
+      case VW_MSG_RESUME: {
+        if (!session_active) break;
+        paused = false;
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "resumed; transcription active");
         break;
       }
 

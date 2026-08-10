@@ -9,6 +9,7 @@
 #include <vlc_block.h>
 // clang-format on
 #include <vlc_filter.h>
+#include <vlc_input.h>
 #include <vlc_plugin.h>
 
 #include "vw_log.h"
@@ -53,6 +54,7 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 
 static int vw_plugin_open(vlc_object_t* obj);
 static void vw_plugin_close(vlc_object_t* obj);
+static bool vw_plugin_input_is_paused(filter_t* p_filter);
 
 static char vw_plugin_dl_anchor;
 
@@ -228,12 +230,33 @@ static void* vw_plugin_sender_main(void* arg) {
   }
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED", "caption session started (STARTED confirmed)");
 
+  // Play/pause lifecycle: poll the input thread once per iteration (cadence is 5-20ms). On the
+  // playing->paused transition send PAUSE; on paused->playing send RESUME. While paused the
+  // queue is drained and DISCARDED (stale pre-pause/during-pause PCM must never reach the worker,
+  // which cleared its window on PAUSE); worker frames are still drained so the client stays live
+  // and STATUS/ERROR flow and worker death is still detected.
+  bool paused = false;
   while (atomic_load(&sys->sender_running) && !atomic_load(&sys->worker_dead)) {
+    bool now_paused = vw_plugin_input_is_paused((filter_t*)sys->presenter.p_filter_ctx);
+    if (now_paused != paused) {
+      if (now_paused) {
+        vw_worker_client_pause_session(sys->client);
+        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PAUSE", "playback paused; PCM forwarding suspended");
+      } else {
+        vw_worker_client_resume_session(sys->client);
+        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_RESUME", "playback resumed; PCM forwarding active");
+      }
+      paused = now_paused;
+    }
+
     // Drain the SPSC queue (send burst), then one receive: 5ms after sends (audio latency
     // priority), 20ms when idle (the idle wait doubles as cadence, no extra sleep).
     vw_audio_chunk_t chunk;
     bool sent_any = false;
     while (vw_spsc_queue_pop(sys->queue, &chunk)) {
+      if (paused) {
+        continue;  // discard audio captured before/during pause; never forward it after resume
+      }
       sys->chunks_sent++;
       if (!vw_worker_client_send_audio(sys->client, &chunk)) {
         atomic_store(&sys->worker_dead, true);
@@ -288,6 +311,22 @@ static void* vw_plugin_sender_main(void* arg) {
     }
   }
   return NULL;
+}
+
+// Returns true when the VLC input thread reports PAUSE_S (playback paused). Walks the filter's
+// parent/children object hierarchy to the input thread — same walk the caption presenter uses for
+// the vout; deliberately avoids vlc_object_find_name (deprecated, and weak-linkable to NULL on
+// MinGW per the milestone-3 postmortem). Safe to call from the sender thread (read-only query).
+static bool vw_plugin_input_is_paused(filter_t* p_filter) {
+  if (!p_filter) return false;
+  vlc_object_t* cur = VLC_OBJECT(p_filter);
+  while (cur) {
+    if (cur->obj.object_type && strcmp(cur->obj.object_type, "input") == 0) {
+      return input_GetState((input_thread_t*)cur) == PAUSE_S;
+    }
+    cur = cur->obj.parent;
+  }
+  return false;
 }
 
 // Passthrough filter callback required by VLC filter pipeline (100% lock-free, Rule 4 compliant)
