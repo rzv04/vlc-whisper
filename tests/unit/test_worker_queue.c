@@ -144,6 +144,42 @@ int main(void) {
   EXPECT(!vw_worker_queue_pop(q3, &f));
   vw_worker_queue_destroy(q3);
 
+  // --- A queued SHUTDOWN is never evicted by a non-terminal control ---
+  vw_worker_queue_t* q5 = vw_worker_queue_create(3);
+  EXPECT(q5 != NULL);
+  EXPECT(vw_worker_queue_push(q5, VW_MSG_SHUTDOWN, NULL, 0));  // terminal first: must survive
+  EXPECT(vw_worker_queue_push(q5, VW_MSG_PAUSE, NULL, 0));
+  EXPECT(vw_worker_queue_push(q5, VW_MSG_STOP_SESSION, NULL, 0));  // full (3/3)
+
+  // Incoming non-terminal control evicts the oldest NON-SHUTDOWN control (PAUSE), SHUTDOWN stays.
+  EXPECT(vw_worker_queue_push(q5, VW_MSG_RESUME, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q5, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(vw_worker_queue_pop(q5, &f));
+  EXPECT(f.type == VW_MSG_STOP_SESSION);
+  EXPECT(vw_worker_queue_pop(q5, &f));
+  EXPECT(f.type == VW_MSG_RESUME);
+  EXPECT(!vw_worker_queue_pop(q5, &f));
+  vw_worker_queue_destroy(q5);
+
+  // --- A newer SHUTDOWN supersedes an older one ---
+  vw_worker_queue_t* q6 = vw_worker_queue_create(3);
+  EXPECT(q6 != NULL);
+  EXPECT(vw_worker_queue_push(q6, VW_MSG_PAUSE, NULL, 0));
+  EXPECT(vw_worker_queue_push(q6, VW_MSG_STOP_SESSION, NULL, 0));
+  EXPECT(vw_worker_queue_push(q6, VW_MSG_SHUTDOWN, NULL, 0));  // full (3/3)
+
+  // Incoming SHUTDOWN evicts the oldest (PAUSE) — a newer shutdown supersedes, not the other way.
+  EXPECT(vw_worker_queue_push(q6, VW_MSG_SHUTDOWN, NULL, 0));
+  EXPECT(vw_worker_queue_pop(q6, &f));
+  EXPECT(f.type == VW_MSG_STOP_SESSION);
+  EXPECT(vw_worker_queue_pop(q6, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(vw_worker_queue_pop(q6, &f));
+  EXPECT(f.type == VW_MSG_SHUTDOWN);
+  EXPECT(!vw_worker_queue_pop(q6, &f));
+  vw_worker_queue_destroy(q6);
+
   // --- dropped_audio_us equals decoded duration_us sum; destroy frees queued payloads ---
   vw_worker_queue_destroy(q);
 

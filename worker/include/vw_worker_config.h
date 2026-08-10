@@ -7,7 +7,7 @@
 #include "vw_protocol_types.h"
 
 typedef struct vw_worker_config {
-  char model_path[256];
+  char model_path[VW_PATH_MAX_BYTES];
   char language[8];
   uint32_t sample_rate;
   char pipe_name[256];

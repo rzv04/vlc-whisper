@@ -116,8 +116,9 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
 
   // Full with no evictable AUDIO frame (all-control queue). An incoming AUDIO is dropped (counted)
   // — never sacrifice a control for audio. An incoming CONTROL evicts the OLDEST control so the
-  // newest one always lands (a STOP/SHUTDOWN supersedes an older control). Reachable only in a
-  // pathological burst of controls; the main loop pops controls immediately.
+  // newest one always lands, but a queued SHUTDOWN is never evicted by a non-terminal control:
+  // only a newer SHUTDOWN supersedes an older one. Reachable only in a pathological burst of
+  // controls; the main loop pops controls immediately.
   if (type == VW_MSG_AUDIO_PCM) {
     atomic_fetch_add_explicit(&q->dropped_audio_us, vw_worker_queue_audio_duration_us(payload, payload_len),
                               memory_order_relaxed);
@@ -125,7 +126,18 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
     pthread_mutex_unlock(&q->mutex);
     return false;
   }
+  // Evict the oldest control — skipping SHUTDOWN when the incoming frame is not itself a SHUTDOWN
+  // (dropping the only shutdown the worker will see would leave it running until the pipe breaks).
+  // If every queued control is SHUTDOWN, evicting one is harmless: the rest still deliver it.
   size_t evict_ctrl = q->tail;
+  if (type != VW_MSG_SHUTDOWN) {
+    for (size_t i = q->tail; i < q->head; i++) {
+      if (q->slots[i % q->capacity].type != VW_MSG_SHUTDOWN) {
+        evict_ctrl = i;
+        break;
+      }
+    }
+  }
   vw_worker_frame_t* victim = &q->slots[evict_ctrl % q->capacity];
   atomic_fetch_add_explicit(&q->dropped_audio_us,
                             vw_worker_queue_audio_duration_us(victim->payload, victim->payload_len),

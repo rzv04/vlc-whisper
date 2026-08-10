@@ -96,7 +96,7 @@ static bool vw_plugin_probe_ancestors(const char* file_path, int max_up, const c
     for (size_t n = 0; n < n_names; n++) {
       size_t need = try_len + 1 + strlen(names[n]) + 1;
       if (need > out_size) continue;
-      char candidate[1024];
+      char candidate[VW_PATH_MAX_BYTES];
       memcpy(candidate, file_path, try_len);
 #ifdef _WIN32
       candidate[try_len] = '\\';  // native separator: GetFileAttributesA/CreateProcessW expect backslashes
@@ -197,7 +197,7 @@ typedef struct {
 
   char pipe_name[256];
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
-  char worker_path[256];
+  char worker_path[VW_PATH_MAX_BYTES];
 
   // Sender thread (14c): drains the SPSC queue to the worker and drains worker frames back.
   vw_thread_t sender_thread;
@@ -209,7 +209,7 @@ typedef struct {
   uint32_t segments_received;
   uint32_t status_received;
   uint32_t errors_received;
-  char model_path[256];
+  char model_path[VW_PATH_MAX_BYTES];
 } vw_plugin_sys_t;
 // Sender thread (14c): the only consumer of the SPSC queue and the only user of the worker client.
 // Starts one session, then alternates draining queue -> send AUDIO frames with draining worker ->

@@ -31,6 +31,7 @@
 #define VW_AUTH_TOKEN_BYTES 32U          // Local IPC 32-byte secret authentication token
 #define VW_SESSION_ID_BYTES 16U          // Local IPC session identifier size in bytes
 #define VW_MAX_TEXT_BYTES 1024U          // Max caption text length in bytes (UTF-8)
+#define VW_PATH_MAX_BYTES 4096U          // Max filesystem path bytes (Linux PATH_MAX; plugin→worker argv contract)
 
 // Capability flags (bitfield)
 #define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)
