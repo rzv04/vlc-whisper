@@ -137,7 +137,7 @@ vw_whisper_module (pf_audio_filter)
   │
   ├── 1. Clear active presentation: vw_caption_presenter_clear()
   ├── 2. Send IPC control message: STOP (reason = SEEK_DISCONTINUITY)
-  ├── 3. Reset SPSC queue & VAD state: vw_spsc_queue_reset()
+  ├── 3. Discard SPSC queue (drain via vw_spsc_queue_pop) & VAD state (energy VAD is stateless)
   └── 4. Re-initialize session: Send START message with updated timeline_origin_pts_us
 ```
 

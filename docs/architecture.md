@@ -72,7 +72,7 @@ IDLE -> STARTING -> READY -> PLAYING <-> PAUSED -> STOPPING -> IDLE
 
 A session is identified by a random 128-bit `session_id`; each playback start creates a new one. `sequence` is monotonic per direction. The plugin ignores stale session messages. A pause sends `PAUSE`, stops forwarding audio, and clears partial captions; final captions already scheduled may remain until their end PTS. Resume sends `RESUME`. Stop clears all generated captions before closing IPC.
 
-MVP seeking & discontinuity policy: when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), resets the SPSC queue & VAD state, and initializes a new session epoch (`timeline_origin_pts_us`) seamlessly without disabling captions or interrupting VLC media playback.
+MVP seeking & discontinuity policy (shipped, step 17): when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), discards the SPSC queue, and starts a new session epoch (new `session_id`, `timeline_origin_pts_us` = post-seek PTS anchor) seamlessly without disabling captions or interrupting VLC media playback. Detection is realtime-safe (atomics only in the filter callback; teardown/restart on the sender thread).
 
 ## IPC protocol
 

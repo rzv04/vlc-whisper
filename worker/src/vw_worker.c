@@ -298,6 +298,15 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
         memcpy(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
         session_active = true;
+        // Discard any segment-builder hypothesis left over from the previous epoch: it was
+        // produced from pre-seek audio and would otherwise be stamped with the NEW session_id
+        // and rendered post-seek. Drain-pop reuses the ownership contract (caller frees text).
+        if (builder) {
+          vw_caption_segment_t stale_seg;
+          while (vw_segment_builder_pop(builder, &stale_seg)) {
+            if (stale_seg.text_utf8) free(stale_seg.text_utf8);
+          }
+        }
         vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent)");
 
         // Reply STARTED (header-only)

@@ -207,6 +207,10 @@ typedef struct {
   bool sender_started;  // thread create succeeded; close joins only when true
   _Atomic bool sender_running;
   _Atomic bool worker_dead;
+  // Step 17: set by the realtime filter callback (flag or PTS jump), consumed by the sender
+  // thread to restart the session epoch. Callback only stores atomics — never IPC/heap/locks.
+  _Atomic bool discontinuity_pending;
+  _Atomic int64_t resume_pts_us;  // PTS anchor of the first post-seek block
   uint64_t chunks_sent;
   uint32_t frames_received;
   uint32_t segments_received;
@@ -255,6 +259,29 @@ static void* vw_plugin_sender_main(void* arg) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_RESUME", "playback resumed; PCM forwarding active");
       }
       paused = now_paused;
+    }
+
+    // Step 17: seek/discontinuity restart. The callback set the flag (atomics only); here on the
+    // sender thread we tear down the epoch and start a fresh one: clear OSD, STOP(SEEK_DISCONTINUITY),
+    // discard stale queued PCM, START with the new PTS anchor. The worker's session_id gating drops
+    // any in-flight pre-seek AUDIO frame that slipped past the drain. Playback is never touched.
+    if (atomic_load(&sys->discontinuity_pending)) {
+      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity; restarting session epoch");
+      vw_caption_presenter_blank(&sys->presenter);  // erase OSD, keep context (clear() is teardown-only)
+      vw_worker_client_stop_session(sys->client, VW_CTRL_REASON_SEEK_DISCONTINUITY);
+      vw_audio_chunk_t stale;
+      while (vw_spsc_queue_pop(sys->queue, &stale)) {
+      }  // discard pre-seek audio; worker cleared its window on STOP
+      int64_t resume_pts_us = atomic_load(&sys->resume_pts_us);
+      atomic_store(&sys->discontinuity_pending, false);
+      if (sys->client && !vw_worker_client_start_session(sys->client, resume_pts_us, "tiny.en")) {
+        atomic_store(&sys->worker_dead, true);
+        vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_RESTART_FAIL",
+                     "worker rejected restart; captions disabled, passthrough only");
+        break;
+      }
+      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_RESTARTED", "session epoch restarted at %lldus",
+                   (long long)resume_pts_us);
     }
 
     // Drain the SPSC queue (send burst), then one receive: 5ms after sends (audio latency
@@ -378,6 +405,18 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
                             .sample_rate = p_filter->fmt_in.audio.i_rate,
                             .channels = p_filter->fmt_in.audio.i_channels};
 
+  // Step 17 seek/discontinuity detection — realtime-safe: atomics only, the sender thread does
+  // the teardown/restart. BLOCK_FLAG_DISCONTINUITY is VLC's own seek/rate/swap signal; the
+  // non-monotonic-PTS fallback catches backward jumps VLC does not flag. Guard the fallback with
+  // p_block->i_pts >= VLC_TS_0: VLC delivers blocks with VLC_TICK_INVALID (0) when no PTS is
+  // available (vlc_block.h), and 0 would falsely look like a backward jump. The first valid
+  // post-seek block's PTS becomes the new epoch anchor.
+  if ((p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) || (p_block->i_pts >= VLC_TS_0 && sys->capture.last_pts_us > 0 &&
+                                                        p_block->i_pts < sys->capture.last_pts_us - 500000)) {
+    atomic_store(&sys->discontinuity_pending, true);
+    atomic_store(&sys->resume_pts_us, p_block->i_pts);
+  }
+
   vw_audio_capture_process_block(&sys->capture, &input);
 
   // Return the original block untouched to preserve user playback quality
@@ -491,6 +530,8 @@ static int vw_plugin_open(vlc_object_t* obj) {
     // Start the sender thread; a spawn failure keeps passthrough (close path stays safe).
     atomic_init(&sys->sender_running, true);
     atomic_init(&sys->worker_dead, false);
+    atomic_init(&sys->discontinuity_pending, false);
+    atomic_init(&sys->resume_pts_us, 0);
     if (vw_platform_thread_create(&sys->sender_thread, vw_plugin_sender_main, sys)) {
       sys->sender_started = true;
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER_START", "sender thread started (5/20 ms cadence)");

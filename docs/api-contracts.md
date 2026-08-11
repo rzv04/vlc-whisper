@@ -84,7 +84,7 @@ Plugin to worker. Payload: session ID, `u16 reason`.
 
 - `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); the session timeline/epoch is preserved. Reason codes: `USER_PAUSE=1`.
 - `RESUME`: Resumes active transcription processing after pause. Reason codes: `USER_RESUME=1`.
-- `STOP`: Terminates active captioning session, clears buffers, and resets VAD state. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2`, `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
+- `STOP`: Terminates active captioning session, clears buffers, and resets VAD state. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
 
 ### SHUTDOWN
 
