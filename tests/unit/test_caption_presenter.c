@@ -77,7 +77,14 @@ int main(void) {
   (void)segment;
   (void)empty_seg;
 
-  // Test 6: Clear presenter
+  // Test 6: Clear presenter (teardown-only: blanks AND resets context)
+  filter_t fake_filter = {0};  // zeroed: find_vout's walk sees NULL object_type and NULL parent
+  vw_caption_presenter_t ctx_presenter = {.p_filter_ctx = &fake_filter};
+  vw_caption_presenter_blank(&ctx_presenter);  // mid-session blank: keeps context
+  assert(ctx_presenter.p_filter_ctx == &fake_filter);
+  vw_caption_presenter_clear(&ctx_presenter);  // teardown: resets context
+  assert(ctx_presenter.p_filter_ctx == NULL);
+
   vw_caption_presenter_clear(&presenter);
   assert(presenter.p_filter_ctx == NULL);
 

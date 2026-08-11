@@ -108,7 +108,10 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   return vw_caption_presenter_display(filter_obj, segment->text_utf8, duration_us);
 }
 
-void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
+// Blanks the current OSD overlay (empty text on the caption channel) but KEEPS the filter
+// context, so later segments still render. Safe mid-session — e.g. erase captions on a seek
+// before the restarted session emits new ones. No-op when the presenter has no filter context.
+void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
   if (!presenter || !presenter->p_filter_ctx) {
     return;
   }
@@ -118,5 +121,14 @@ void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
     vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 0, "");
     vlc_object_release(VLC_OBJECT(vout));
   }
-  presenter->p_filter_ctx = NULL;
+}
+
+// Clears active caption overlays AND resets the presenter context (p_filter_ctx = NULL).
+// Teardown-only: after this, show_segment/blank become no-ops, so call only when the module
+// (and the filter context it holds) is going away — never mid-session.
+void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
+  vw_caption_presenter_blank(presenter);
+  if (presenter) {
+    presenter->p_filter_ctx = NULL;
+  }
 }
