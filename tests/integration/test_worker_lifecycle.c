@@ -214,6 +214,10 @@ int main(void) {
       };
       EXPECT(vw_worker_client_send_audio(c, &chunk));
     }
+    // Pause/resume mid-stream: worker must accept both without dying; the session stays active
+    // so the subsequent STOP/STOP flow still works (exit 0 proves the worker survived).
+    vw_worker_client_pause_session(c);
+    vw_worker_client_resume_session(c);
     vw_worker_client_stop_session(c, 0);
     vw_worker_client_shutdown(c);
     pthread_join(thread, &ret_val);

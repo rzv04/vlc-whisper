@@ -38,6 +38,14 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
 // must be created (the worker may be mid-frame and the stream can never be reframed).
 void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason);
 
+// Sends a PAUSE control frame (USER_PAUSE) over IPC to suspend transcription while playback is paused.
+// The session stays active so audio forwarding can resume; drops the transport on write failure.
+void vw_worker_client_pause_session(vw_worker_client_t* client);
+
+// Sends a RESUME control frame (USER_RESUME) over IPC to continue transcription after PAUSE.
+// The session stays active; drops the transport on write failure, same fail-closed policy as STOP.
+void vw_worker_client_resume_session(vw_worker_client_t* client);
+
 // Sends a SHUTDOWN frame over IPC instructing the worker process to cleanly terminate its main event loop.
 void vw_worker_client_shutdown(vw_worker_client_t* client);
 
