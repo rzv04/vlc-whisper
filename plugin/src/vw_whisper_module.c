@@ -236,8 +236,16 @@ static void* vw_plugin_sender_main(void* arg) {
   // which cleared its window on PAUSE); worker frames are still drained so the client stays live
   // and STATUS/ERROR flow and worker death is still detected.
   bool paused = false;
+  int64_t last_pause_poll_us = 0;
   while (atomic_load(&sys->sender_running) && !atomic_load(&sys->worker_dead)) {
-    bool now_paused = vw_plugin_input_is_paused((filter_t*)sys->presenter.p_filter_ctx);
+    // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
+    // state only changes at human timescale (8s windows make 100ms detection lag irrelevant).
+    bool now_paused = paused;
+    int64_t now_us = vw_platform_get_monotonic_time_us();
+    if (now_us - last_pause_poll_us >= 100000) {
+      last_pause_poll_us = now_us;
+      now_paused = vw_plugin_input_is_paused((filter_t*)sys->presenter.p_filter_ctx);
+    }
     if (now_paused != paused) {
       if (now_paused) {
         vw_worker_client_pause_session(sys->client);
