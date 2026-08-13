@@ -54,7 +54,9 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 
 static int vw_plugin_open(vlc_object_t* obj);
 static void vw_plugin_close(vlc_object_t* obj);
+static input_thread_t* vw_plugin_find_input(filter_t* p_filter);
 static bool vw_plugin_input_is_paused(filter_t* p_filter);
+static int64_t vw_plugin_input_position_us(input_thread_t* input);
 
 static char vw_plugin_dl_anchor;
 
@@ -241,6 +243,8 @@ static void* vw_plugin_sender_main(void* arg) {
   // and STATUS/ERROR flow and worker death is still detected.
   bool paused = false;
   int64_t last_pause_poll_us = 0;
+  int64_t last_position_us = -1;    // -1 = no baseline yet (first poll only samples)
+  int64_t paused_position_us = -1;  // media position captured at the pause transition
   while (atomic_load(&sys->sender_running) && !atomic_load(&sys->worker_dead)) {
     // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
     // state only changes at human timescale (8s windows make 100ms detection lag irrelevant).
@@ -248,7 +252,39 @@ static void* vw_plugin_sender_main(void* arg) {
     int64_t now_us = vw_platform_get_monotonic_time_us();
     if (now_us - last_pause_poll_us >= 100000) {
       last_pause_poll_us = now_us;
-      now_paused = vw_plugin_input_is_paused((filter_t*)sys->presenter.p_filter_ctx);
+      input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
+      now_paused = input != NULL && input_GetState(input) == PAUSE_S;
+      int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
+
+      // Seek detection while PAUSED: the audio callback never runs (no blocks flow) so
+      // BLOCK_FLAG_DISCONTINUITY never arrives, and the input time variable is clock-driven so
+      // it stays frozen during the paused seek. Compare the position captured at the PAUSE
+      // transition against the live position on RESUME: a >1s jump means a seek happened while
+      // paused. Report it as a discontinuity so the sender restarts the epoch on resume.
+      if (now_paused != paused) {
+        if (now_paused) {
+          paused_position_us = position_us;  // baseline at pause
+        } else {
+          if (paused_position_us >= 0 && position_us >= 0 && llabs(position_us - paused_position_us) > 1000000) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_WHILE_PAUSED",
+                         "position jumped %lldus during pause; restarting on resume",
+                         (long long)(position_us - paused_position_us));
+            atomic_store(&sys->discontinuity_pending, true);
+            atomic_store(&sys->resume_pts_us, position_us);
+          }
+          paused_position_us = -1;
+        }
+      }
+
+      // Continuous seek detection via input position (covers unflagged playing-case seeks and
+      // paused seeks in builds where the time variable does advance). >1s forward/backward jump.
+      if (position_us >= 0 && last_position_us >= 0 && llabs(position_us - last_position_us) > 1000000) {
+        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; restarting epoch",
+                     (long long)(position_us - last_position_us));
+        atomic_store(&sys->discontinuity_pending, true);
+        atomic_store(&sys->resume_pts_us, position_us);
+      }
+      if (position_us >= 0) last_position_us = position_us;
     }
     if (now_paused != paused) {
       if (now_paused) {
@@ -316,6 +352,13 @@ static void* vw_plugin_sender_main(void* arg) {
       sys->frames_received++;
       switch (recv.type) {
         case VW_MSG_CAPTION_SEGMENT:
+          // A segment transcribed BEFORE a seek can still be in flight when the restart completes.
+          // Its session_id predates the new epoch — never render stale pre-seek text over the OSD.
+          if (memcmp(recv.segment.session_id.bytes, sys->client->session_id, VW_SESSION_ID_BYTES) != 0) {
+            vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_STALE_SEGMENT",
+                         "dropping segment from previous epoch (session mismatch)");
+            break;
+          }
           sys->segments_received++;
           // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
           // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
@@ -348,34 +391,47 @@ static void* vw_plugin_sender_main(void* arg) {
   return NULL;
 }
 
-// Returns true when the VLC input thread reports PAUSE_S (playback paused). Mirrors the caption
-// presenter's object walk exactly — checks each node and its children list for an "input" object
-// (the input thread is a child of the playlist/libvlc hierarchy, not an ancestor of the audio
-// filter, as the presenter's live log shows), then queries input_GetState. Deliberately avoids
-// vlc_object_find_name (deprecated, and weak-linkable to NULL on MinGW per the milestone-3
-// postmortem). Safe to call from the sender thread (read-only query).
-static bool vw_plugin_input_is_paused(filter_t* p_filter) {
-  if (!p_filter) return false;
+// Finds the VLC input thread reachable from the filter. Mirrors the caption presenter's object
+// walk exactly — checks each node and its children list for an "input" object (the input thread
+// is a child of the playlist/libvlc hierarchy, not an ancestor of the audio filter, as the
+// presenter's live log shows). Deliberately avoids vlc_object_find_name (deprecated, and
+// weak-linkable to NULL on MinGW per the milestone-3 postmortem). Safe from the sender thread.
+static input_thread_t* vw_plugin_find_input(filter_t* p_filter) {
+  if (!p_filter) return NULL;
   vlc_object_t* cur = VLC_OBJECT(p_filter);
   while (cur) {
     if (cur->obj.object_type && strcmp(cur->obj.object_type, "input") == 0) {
-      return input_GetState((input_thread_t*)cur) == PAUSE_S;
+      return (input_thread_t*)cur;
     }
     vlc_list_t* children = vlc_list_children(cur);
     if (children) {
       for (int i = 0; i < children->i_count; i++) {
         vlc_object_t* child = (vlc_object_t*)children->p_values[i].p_address;
         if (child && child->obj.object_type && strcmp(child->obj.object_type, "input") == 0) {
-          bool is_paused = input_GetState((input_thread_t*)child) == PAUSE_S;
+          input_thread_t* input = (input_thread_t*)child;
           vlc_list_release(children);
-          return is_paused;
+          return input;
         }
       }
       vlc_list_release(children);
     }
     cur = cur->obj.parent;
   }
-  return false;
+  return NULL;
+}
+
+// Returns true when the VLC input thread reports PAUSE_S (playback paused).
+static bool vw_plugin_input_is_paused(filter_t* p_filter) {
+  input_thread_t* input = vw_plugin_find_input(p_filter);
+  return input != NULL && input_GetState(input) == PAUSE_S;
+}
+
+// Reads the input's current media position in microseconds, or -1 when unavailable.
+static int64_t vw_plugin_input_position_us(input_thread_t* input) {
+  if (!input) return -1;
+  int64_t position_us = 0;
+  if (input_Control(input, INPUT_GET_TIME, &position_us) != VLC_SUCCESS) return -1;
+  return position_us;
 }
 
 // Passthrough filter callback required by VLC filter pipeline (100% lock-free, Rule 4 compliant)

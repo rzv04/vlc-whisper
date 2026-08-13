@@ -35,6 +35,24 @@ static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES
   return diff == 0;
 }
 
+// Returns the symbolic name of a control-message reason code (for logs), or the numeric value
+// rendered as a string when the code has no documented macro (e.g. 0 = plain user stop).
+static const char* vw_worker_control_reason_name(uint16_t reason) {
+  switch (reason) {
+    case VW_CTRL_REASON_USER_STOP:
+      return "USER_STOP";
+    case VW_CTRL_REASON_SEEK_DISCONTINUITY:
+      return "SEEK_DISCONTINUITY";
+    case VW_CTRL_REASON_MEDIA_END:
+      return "MEDIA_END";
+    default: {
+      static char buf[16];
+      snprintf(buf, sizeof(buf), "%u", reason);
+      return buf;
+    }
+  }
+}
+
 // Builds and sends a VW_MSG_ERROR frame over IPC. Returns true on success.
 static bool send_error(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESSION_ID_BYTES], vw_error_code_t code,
                        uint8_t recoverable, const char* msg, uint32_t* sequence) {
@@ -381,7 +399,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
       case VW_MSG_STOP_SESSION: {
         session_active = false;
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped");
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped (reason=%s)",
+                     vw_worker_control_reason_name(payload_decoded.control.reason));
         if (audio_buf) vw_audio_buffer_clear(audio_buf);
         break;
       }

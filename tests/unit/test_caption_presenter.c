@@ -47,6 +47,11 @@ void vout_OSDText(vout_thread_t* vout, int channel, int position, vlc_tick_t dur
   (void)text;
 }
 
+void vout_FlushSubpictureChannel(vout_thread_t* vout, int channel) {
+  (void)vout;
+  (void)channel;
+}
+
 int main(void) {
   // Test 1: NULL text handling
   assert(!vw_caption_presenter_display(NULL, NULL, 1000000LL));

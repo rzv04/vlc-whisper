@@ -108,9 +108,9 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   return vw_caption_presenter_display(filter_obj, segment->text_utf8, duration_us);
 }
 
-// Blanks the current OSD overlay (empty text on the caption channel) but KEEPS the filter
-// context, so later segments still render. Safe mid-session — e.g. erase captions on a seek
-// before the restarted session emits new ones. No-op when the presenter has no filter context.
+// Blanks the current OSD overlay (flushes the caption channel) but KEEPS the filter context, so
+// later segments still render. Safe mid-session — e.g. erase captions on a seek before the
+// restarted session emits new ones. No-op when the presenter has no filter context.
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
   if (!presenter || !presenter->p_filter_ctx) {
     return;
@@ -118,7 +118,12 @@ void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
   filter_t* p_filter = (filter_t*)presenter->p_filter_ctx;
   vout_thread_t* vout = vw_caption_presenter_find_vout(p_filter);
   if (vout) {
-    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 0, "");
+    // Flush channel 1 (VOUT_SPU_CHANNEL_OSD) — the instant, canonical clear. As a fallback for
+    // builds where the flush is ineffective, also post an EMPTY text with a SHORT positive
+    // duration: a 0-duration OSD subpicture is immediately expired and never displaces the
+    // current caption (that is why the original empty-text blank failed), but a 1ms one does.
+    vout_FlushSubpictureChannel(vout, 1);
+    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 1000, "");
     vlc_object_release(VLC_OBJECT(vout));
   }
 }
