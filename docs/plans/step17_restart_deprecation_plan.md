@@ -4,6 +4,7 @@
 
 ## Goal
 Retire the MVP per-seek full session restart (plugin `STOP(SEEK_DISCONTINUITY)` → drain SPSC →
+<<<<<<< HEAD
 `START(new session_id, timeline_origin)` → playback-rate 8s window refill) in favor of a
 lightweight, fire-and-forget seek message that re-anchors the epoch without a handshake or
 teardown. The 8s analysis window (`VW_WINDOW_SAMPLES`) is a hard batch-transcribe constraint
@@ -19,6 +20,11 @@ that look-ahead does not remove — what changes is the refill RATE:
 So "near-instant" is only true inside the horizon; outside it, look-ahead strictly beats the MVP
 restart but still pays a decode-rate 8s-sample refill. Horizon depth (17c `POSITION` lead) is the
 tunable that decides how many seeks fall in the near-instant bucket.
+=======
+`START(new session_id, timeline_origin)` → 8s window refill) in favor of a lightweight,
+fire-and-forget seek message that re-anchors the epoch without a handshake or teardown — so
+look-ahead transcription (17c/17d) can produce near-instant post-seek captions.
+>>>>>>> 0335b0f483d6d970d8bd4c94c9b81ded02bfbca1
 
 ## Context
 - **Relevant docs/ADRs**: `docs/architecture.md:75` (shipped MVP policy + placeholder note),
@@ -54,6 +60,7 @@ tunable that decides how many seeks fall in the near-instant bucket.
 
 ## Design
 - **Inputs and outputs**: seek signal (existing atomics/position poll) → `VW_MSG_SEEK {session_id,
+<<<<<<< HEAD
   pts_us}` → worker re-seeks its demuxer, clears the analysis window and builder, bumps an epoch
   marker → same `session_id` continues. Caption latency after the seek depends on whether the
   target overlaps the decoded look-ahead horizon: inside it → near-instant (inference only);
@@ -61,6 +68,10 @@ tunable that decides how many seeks fall in the near-instant bucket.
   speed (≈2–5× realtime → ≈1.6–4s + inference), which still beats the MVP's playback-rate 8s
   refill. The seek message itself adds no refill of its own — it only avoids the STOP→START
   handshake, teardown, and session regeneration that the MVP restart pays on top.
+=======
+  pts_us}` → worker re-seek + epoch reset → same `session_id` continues, captions resume from the
+  demuxer's look-ahead buffer (near-instant) instead of after an 8s refill.
+>>>>>>> 0335b0f483d6d970d8bd4c94c9b81ded02bfbca1
 - **Ownership/threading model**: same as today — callback only sets atomics; sender thread sends
   the seek message (fire-and-forget, no response wait); worker main loop handles it. `session_id`
   is NOT regenerated, so in-flight stale segments remain gated by the existing memcmp (17d may
@@ -82,11 +93,16 @@ tunable that decides how many seeks fall in the near-instant bucket.
 | OSD blank/flush on seek | — |
 
 ## Acceptance criteria
+<<<<<<< HEAD
 - [ ] Seek INTO the decoded look-ahead horizon (playing and paused, 17c source mode) produces
       captions after inference only — no window refill, no handshake, no session teardown.
 - [ ] Seek OUTSIDE the horizon (forward past it or backward) refills the 8s window at demux/decode
       speed (≈2–5× realtime) with no STOP→START round-trip, strictly faster than the MVP
       playback-rate refill.
+=======
+- [ ] Seek (playing and paused) produces near-instant captions from the worker look-ahead buffer,
+      not after an 8s refill, under 17c source mode.
+>>>>>>> 0335b0f483d6d970d8bd4c94c9b81ded02bfbca1
 - [ ] Rapid scrubbing causes no session teardown, no 5s stalls, no transport drops.
 - [ ] Stale pre-seek segments/text still cannot cross the epoch boundary (gating intact).
 - [ ] Jitter/network re-buffer does not clear captions (17d 5s gate).
