@@ -30,6 +30,19 @@ without interrupting VLC playback. No pre-seek audio leaks into the post-seek tr
   - Postmortem note: a segment hypothesis left in the worker builder at seek time would be
     stamped with the NEW session_id and rendered post-seek — the worker must discard the builder
     on `START` (see Design).
+  - **MVP placeholder (deprecation planned)**: the full STOP→START session restart per seek is
+    the correct MVP seek primitive but the WRONG long-term one for look-ahead (17c/17d). Its
+    per-seek blocking handshake (≤5s), playback-rate 8s window refill, and teardown/recreate
+    churn directly contradict near-instant post-seek captions; it also cannot carry source-mode
+    seek parameters (17c `POSITION` lead pacing) and resets the media-system offset wholesale
+    instead of re-anchoring it. Plan of record: supersede with a dedicated `SEEK`/`POSITION`
+    protocol v1.1 message (fire-and-forget; worker re-seeks its own demuxer, clears the window,
+    bumps the epoch id without a handshake). Caveat: the 8s analysis window still refills for
+    seeks outside the decoded look-ahead horizon — at demux/decode speed (≈2–5× realtime) rather
+    than playback rate; only in-horizon seeks are near-instant. Reused by 17d: `session_id`
+    epoch gating, builder/audio-buffer discard at the epoch boundary, realtime-safe atomics
+    detection, position-jump poll (→ 17d clock-jump detector). See
+    `docs/plans/step17_restart_deprecation_plan.md`.
 
 ## Scope
 - **In scope**:
