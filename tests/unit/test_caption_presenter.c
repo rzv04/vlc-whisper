@@ -47,9 +47,13 @@ void vout_OSDText(vout_thread_t* vout, int channel, int position, vlc_tick_t dur
   (void)text;
 }
 
+static int g_flush_calls = 0;
+static int g_flush_channel = -1;
+
 void vout_FlushSubpictureChannel(vout_thread_t* vout, int channel) {
   (void)vout;
-  (void)channel;
+  g_flush_calls++;
+  g_flush_channel = channel;
 }
 
 int main(void) {
@@ -83,12 +87,17 @@ int main(void) {
   (void)empty_seg;
 
   // Test 6: Clear presenter (teardown-only: blanks AND resets context)
-  filter_t fake_filter = {0};  // zeroed: find_vout's walk sees NULL object_type and NULL parent
+  // object_type="vout" makes find_vout resolve at the first node (hold + return), so the OSD
+  // flush path is actually exercised instead of no-opping on a NULL object walk.
+  filter_t fake_filter = {.obj.object_type = "vout"};
   vw_caption_presenter_t ctx_presenter = {.p_filter_ctx = &fake_filter};
   vw_caption_presenter_blank(&ctx_presenter);  // mid-session blank: keeps context
   assert(ctx_presenter.p_filter_ctx == &fake_filter);
+  assert(g_flush_calls == 1);                  // the OSD channel flush must have been issued...
+  assert(g_flush_channel == 1);                // ...on channel 1 (VOUT_SPU_CHANNEL_OSD)
   vw_caption_presenter_clear(&ctx_presenter);  // teardown: resets context
   assert(ctx_presenter.p_filter_ctx == NULL);
+  assert(g_flush_calls == 2);  // clear() delegates to blank() → second flush
 
   vw_caption_presenter_clear(&presenter);
   assert(presenter.p_filter_ctx == NULL);

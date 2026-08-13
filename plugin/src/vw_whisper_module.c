@@ -52,6 +52,12 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 #include "vw_queue.h"
 #include "vw_worker_client.h"
 
+// Seek/discontinuity detection thresholds (step 17). Position-jump and PTS-jump share the same
+// 1s gate: smaller scrubs are below the caption-epoch granularity (8s windows) and VLC's own
+// BLOCK_FLAG_DISCONTINUITY remains the primary seek signal.
+#define VW_SEEK_JUMP_THRESHOLD_US 1000000  // >1s media-position jump = seek (paused or playing)
+#define VW_PTS_JUMP_THRESHOLD_US 500000    // backward PTS jump past this = unflagged discontinuity
+
 static int vw_plugin_open(vlc_object_t* obj);
 static void vw_plugin_close(vlc_object_t* obj);
 static input_thread_t* vw_plugin_find_input(filter_t* p_filter);
@@ -263,9 +269,12 @@ static void* vw_plugin_sender_main(void* arg) {
       // paused. Report it as a discontinuity so the sender restarts the epoch on resume.
       if (now_paused != paused) {
         if (now_paused) {
-          paused_position_us = position_us;  // baseline at pause
+          // Baseline at pause; only commit a readable position (-1 = input lookup failed, which
+          // can be transient — a later poll while still paused backfills it below).
+          paused_position_us = (position_us >= 0) ? position_us : -1;
         } else {
-          if (paused_position_us >= 0 && position_us >= 0 && llabs(position_us - paused_position_us) > 1000000) {
+          if (paused_position_us >= 0 && position_us >= 0 &&
+              llabs(position_us - paused_position_us) > VW_SEEK_JUMP_THRESHOLD_US) {
             vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_WHILE_PAUSED",
                          "position jumped %lldus during pause; restarting on resume",
                          (long long)(position_us - paused_position_us));
@@ -274,11 +283,16 @@ static void* vw_plugin_sender_main(void* arg) {
           }
           paused_position_us = -1;
         }
+      } else if (now_paused && position_us >= 0 && paused_position_us < 0) {
+        // The pause edge raced input availability; backfill the baseline so a later resume can
+        // still detect a paused-seek instead of silently skipping the jump check.
+        paused_position_us = position_us;
       }
 
       // Continuous seek detection via input position (covers unflagged playing-case seeks and
       // paused seeks in builds where the time variable does advance). >1s forward/backward jump.
-      if (position_us >= 0 && last_position_us >= 0 && llabs(position_us - last_position_us) > 1000000) {
+      if (position_us >= 0 && last_position_us >= 0 &&
+          llabs(position_us - last_position_us) > VW_SEEK_JUMP_THRESHOLD_US) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; restarting epoch",
                      (long long)(position_us - last_position_us));
         atomic_store(&sys->discontinuity_pending, true);
@@ -467,8 +481,9 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
   // p_block->i_pts >= VLC_TS_0: VLC delivers blocks with VLC_TICK_INVALID (0) when no PTS is
   // available (vlc_block.h), and 0 would falsely look like a backward jump. The first valid
   // post-seek block's PTS becomes the new epoch anchor.
-  if ((p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) || (p_block->i_pts >= VLC_TS_0 && sys->capture.last_pts_us > 0 &&
-                                                        p_block->i_pts < sys->capture.last_pts_us - 500000)) {
+  if ((p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) ||
+      (p_block->i_pts >= VLC_TS_0 && sys->capture.last_pts_us > 0 &&
+       p_block->i_pts < sys->capture.last_pts_us - VW_PTS_JUMP_THRESHOLD_US)) {
     atomic_store(&sys->discontinuity_pending, true);
     atomic_store(&sys->resume_pts_us, p_block->i_pts);
   }

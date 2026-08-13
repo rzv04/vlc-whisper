@@ -35,9 +35,10 @@ static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES
   return diff == 0;
 }
 
-// Returns the symbolic name of a control-message reason code (for logs), or the numeric value
-// rendered as a string when the code has no documented macro (e.g. 0 = plain user stop).
-static const char* vw_worker_control_reason_name(uint16_t reason) {
+// Returns the symbolic name of a STOP reason code for logs, or the numeric value as a string when
+// the code has no documented macro (e.g. 0 = plain user stop). STOP-only: PAUSE/RESUME also use
+// reason 1U, so this must never be called for those message types (the name would mislabel them).
+static const char* vw_worker_stop_reason_name(uint16_t reason) {
   switch (reason) {
     case VW_CTRL_REASON_USER_STOP:
       return "USER_STOP";
@@ -46,7 +47,8 @@ static const char* vw_worker_control_reason_name(uint16_t reason) {
     case VW_CTRL_REASON_MEDIA_END:
       return "MEDIA_END";
     default: {
-      static char buf[16];
+      // Thread-local so a log from any thread cannot alias/overwrite the buffer.
+      _Thread_local static char buf[16];
       snprintf(buf, sizeof(buf), "%u", reason);
       return buf;
     }
@@ -400,7 +402,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
       case VW_MSG_STOP_SESSION: {
         session_active = false;
         vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped (reason=%s)",
-                     vw_worker_control_reason_name(payload_decoded.control.reason));
+                     vw_worker_stop_reason_name(payload_decoded.control.reason));
         if (audio_buf) vw_audio_buffer_clear(audio_buf);
         break;
       }
