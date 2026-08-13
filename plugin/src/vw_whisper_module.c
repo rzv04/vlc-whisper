@@ -61,7 +61,6 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 static int vw_plugin_open(vlc_object_t* obj);
 static void vw_plugin_close(vlc_object_t* obj);
 static input_thread_t* vw_plugin_find_input(filter_t* p_filter);
-static bool vw_plugin_input_is_paused(filter_t* p_filter);
 static int64_t vw_plugin_input_position_us(input_thread_t* input);
 
 static char vw_plugin_dl_anchor;
@@ -258,6 +257,8 @@ static void* vw_plugin_sender_main(void* arg) {
     int64_t now_us = vw_platform_get_monotonic_time_us();
     if (now_us - last_pause_poll_us >= 100000) {
       last_pause_poll_us = now_us;
+      // find_input returns a HELD object (guards the input's lifetime across media swap/teardown
+      // while we poll state); release it at the end of this throttled block.
       input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
       now_paused = input != NULL && input_GetState(input) == PAUSE_S;
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
@@ -299,6 +300,7 @@ static void* vw_plugin_sender_main(void* arg) {
         atomic_store(&sys->resume_pts_us, position_us);
       }
       if (position_us >= 0) last_position_us = position_us;
+      if (input) vlc_object_release((vlc_object_t*)input);
     }
     if (now_paused != paused) {
       if (now_paused) {
@@ -410,11 +412,15 @@ static void* vw_plugin_sender_main(void* arg) {
 // is a child of the playlist/libvlc hierarchy, not an ancestor of the audio filter, as the
 // presenter's live log shows). Deliberately avoids vlc_object_find_name (deprecated, and
 // weak-linkable to NULL on MinGW per the milestone-3 postmortem). Safe from the sender thread.
+// Returns a HELD input_thread_t (vlc_object_hold) — the caller MUST vlc_object_release it when
+// done, since the children list that protected the object is released before returning and the
+// input may be destroyed at any time (media swap, teardown) while the sender polls state.
 static input_thread_t* vw_plugin_find_input(filter_t* p_filter) {
   if (!p_filter) return NULL;
   vlc_object_t* cur = VLC_OBJECT(p_filter);
   while (cur) {
     if (cur->obj.object_type && strcmp(cur->obj.object_type, "input") == 0) {
+      vlc_object_hold(cur);
       return (input_thread_t*)cur;
     }
     vlc_list_t* children = vlc_list_children(cur);
@@ -422,9 +428,9 @@ static input_thread_t* vw_plugin_find_input(filter_t* p_filter) {
       for (int i = 0; i < children->i_count; i++) {
         vlc_object_t* child = (vlc_object_t*)children->p_values[i].p_address;
         if (child && child->obj.object_type && strcmp(child->obj.object_type, "input") == 0) {
-          input_thread_t* input = (input_thread_t*)child;
+          vlc_object_hold(child);  // hold BEFORE releasing the list that guards the child's lifetime
           vlc_list_release(children);
-          return input;
+          return (input_thread_t*)child;
         }
       }
       vlc_list_release(children);
@@ -432,12 +438,6 @@ static input_thread_t* vw_plugin_find_input(filter_t* p_filter) {
     cur = cur->obj.parent;
   }
   return NULL;
-}
-
-// Returns true when the VLC input thread reports PAUSE_S (playback paused).
-static bool vw_plugin_input_is_paused(filter_t* p_filter) {
-  input_thread_t* input = vw_plugin_find_input(p_filter);
-  return input != NULL && input_GetState(input) == PAUSE_S;
 }
 
 // Reads the input's current media position in microseconds, or -1 when unavailable.

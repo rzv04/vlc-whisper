@@ -18,14 +18,12 @@ bool vw_caption_presenter_display(void* p_filter, const char* text, int64_t dura
 // microsecond duration bounds and formatting UTF-8 text for display.
 bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment);
 
-// Blanks the current OSD overlay (empty text on the caption channel) but KEEPS the filter
-// context, so later segments still render. Safe mid-session, e.g. to erase captions on a seek
-// before the restarted session emits new ones. No-op when the presenter has no filter context.
+// Blanks the active OSD overlay while retaining the filter context, allowing later caption
+// segments to render after a mid-session seek. No-op when no filter context is set.
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter);
 
-// Clears active caption overlays from the video output surface by issuing an empty text payload to OSD rendering,
-// AND resets the presenter context (p_filter_ctx = NULL). Teardown-only: after this, show_segment/blank become
-// no-ops, so call only when the module (and its filter context) is going away — never mid-session.
+// Blanks the active OSD overlay and resets the filter context during module teardown,
+// preventing subsequent segment rendering through the presenter. Never mid-session.
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter);
 
 #endif  // VW_CAPTION_PRESENTER_H_
