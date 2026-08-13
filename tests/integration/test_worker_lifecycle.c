@@ -215,9 +215,24 @@ int main(void) {
       EXPECT(vw_worker_client_send_audio(c, &chunk));
     }
     // Pause/resume mid-stream: worker must accept both without dying; the session stays active
-    // so the subsequent STOP/STOP flow still works (exit 0 proves the worker survived).
+    // so the subsequent STOP flow still works (exit 0 proves the worker survived).
     vw_worker_client_pause_session(c);
     vw_worker_client_resume_session(c);
+    // Step 17: seek restart — STOP(SEEK_DISCONTINUITY) then START again on the same connection.
+    // The worker must accept the new epoch (new session_id), drop stale pre-seek AUDIO, and
+    // continue transcribing; exit 0 proves the full STOP->START cycle.
+    vw_worker_client_stop_session(c, VW_CTRL_REASON_SEEK_DISCONTINUITY);
+    EXPECT(vw_worker_client_start_session(c, 4000000, "tiny.en"));  // new epoch, new session_id
+    for (int i = 0; i < 2; i++) {
+      vw_audio_chunk_t chunk2 = {
+          .start_pts_us = 4000000 + (int64_t)i * 512000,
+          .duration_us = 512000,
+          .sample_rate = 16000,
+          .channels = 1,
+          .bytes = 16384,
+      };
+      EXPECT(vw_worker_client_send_audio(c, &chunk2));
+    }
     vw_worker_client_stop_session(c, 0);
     vw_worker_client_shutdown(c);
     pthread_join(thread, &ret_val);

@@ -161,6 +161,12 @@ static void* vw_fake_server_thread(void* arg) {
     vw_ipc_close(server);
     return (void*)20;
   }
+  vw_msg_control_t stop_ctrl;
+  vw_protocol_decode_payload(VW_MSG_STOP_SESSION, payload, hdr.payload_length, &stop_ctrl);
+  if (stop_ctrl.reason != VW_CTRL_REASON_SEEK_DISCONTINUITY) {
+    vw_ipc_close(server);
+    return (void*)23;
+  }
 
   // Step 9: Receive SHUTDOWN control frame sent by vw_worker_client_shutdown
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
@@ -411,7 +417,7 @@ int main(void) {
   // Test 5: Send PAUSE and RESUME control frames (session stays active), then STOP + SHUTDOWN
   vw_worker_client_pause_session(client);
   vw_worker_client_resume_session(client);
-  vw_worker_client_stop_session(client, 0);
+  vw_worker_client_stop_session(client, VW_CTRL_REASON_SEEK_DISCONTINUITY);
   vw_worker_client_shutdown(client);
 
   // Test 6: Verify server thread cleanly received all expected protocol frames
@@ -508,7 +514,7 @@ int main(void) {
   EXPECT(vw_worker_client_send_audio(client3, &chunk2));
   vw_worker_client_pause_session(client3);
   vw_worker_client_resume_session(client3);
-  vw_worker_client_stop_session(client3, 0);
+  vw_worker_client_stop_session(client3, VW_CTRL_REASON_SEEK_DISCONTINUITY);
   vw_worker_client_shutdown(client3);
   vw_worker_client_disconnect(client3);
   pthread_join(thread3, &ret_val);

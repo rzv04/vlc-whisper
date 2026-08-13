@@ -35,6 +35,26 @@ static bool verify_token_constant_time(const uint8_t token_a[VW_AUTH_TOKEN_BYTES
   return diff == 0;
 }
 
+// Returns the symbolic name of a STOP reason code for logs, or the numeric value as a string when
+// the code has no documented macro (e.g. 0 = plain user stop). STOP-only: PAUSE/RESUME also use
+// reason 1U, so this must never be called for those message types (the name would mislabel them).
+static const char* vw_worker_stop_reason_name(uint16_t reason) {
+  switch (reason) {
+    case VW_CTRL_REASON_USER_STOP:
+      return "USER_STOP";
+    case VW_CTRL_REASON_SEEK_DISCONTINUITY:
+      return "SEEK_DISCONTINUITY";
+    case VW_CTRL_REASON_MEDIA_END:
+      return "MEDIA_END";
+    default: {
+      // Thread-local so a log from any thread cannot alias/overwrite the buffer.
+      _Thread_local static char buf[16];
+      snprintf(buf, sizeof(buf), "%u", reason);
+      return buf;
+    }
+  }
+}
+
 // Builds and sends a VW_MSG_ERROR frame over IPC. Returns true on success.
 static bool send_error(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESSION_ID_BYTES], vw_error_code_t code,
                        uint8_t recoverable, const char* msg, uint32_t* sequence) {
@@ -298,6 +318,15 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
         memcpy(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
         session_active = true;
+        // Discard any segment-builder hypothesis left over from the previous epoch: it was
+        // produced from pre-seek audio and would otherwise be stamped with the NEW session_id
+        // and rendered post-seek. Drain-pop reuses the ownership contract (caller frees text).
+        if (builder) {
+          vw_caption_segment_t stale_seg;
+          while (vw_segment_builder_pop(builder, &stale_seg)) {
+            if (stale_seg.text_utf8) free(stale_seg.text_utf8);
+          }
+        }
         vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent)");
 
         // Reply STARTED (header-only)
@@ -372,7 +401,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
       case VW_MSG_STOP_SESSION: {
         session_active = false;
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped");
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped (reason=%s)",
+                     vw_worker_stop_reason_name(payload_decoded.control.reason));
         if (audio_buf) vw_audio_buffer_clear(audio_buf);
         break;
       }

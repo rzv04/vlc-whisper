@@ -1,7 +1,7 @@
-# Diff Analysis: gemini/milestone-3
+# Diff Analysis: gemini/milestone-3-step-17
 
-**13 files changed, +369 / -34 lines**  
-**Base**: `gemini/milestone-3`
+**19 files changed, +356 / -579 lines**  
+**Base**: `origin/gemini/milestone-3`
 
 ---
 
@@ -9,49 +9,15 @@
 
 ### 1.1 `docs/api-contracts.md`
 
-**Why change**: Document `VW_CTRL_REASON_USER_PAUSE` (1) and `VW_CTRL_REASON_USER_RESUME` (1) control frame reason codes for `PAUSE` and `RESUME` frames per Step 16 specification.
+**Why change**: Align documented `STOP_SESSION` control frame wire reasons with Step 17 seek/discontinuity support (`VW_CTRL_REASON_SEEK_DISCONTINUITY = 2U`).
 
-**Responsibility before**: Defined IPC message types (`VW_MSG_PAUSE`=0x0006, `VW_MSG_RESUME`=0x0007), payload structures, and session lifecycle states with TBD reason codes.  
-**After**: Fully specified numeric control reason codes (`USER_PAUSE` = 1, `USER_RESUME` = 1) and defined worker in-flight window clearing behavior upon pause.
+**Responsibility before**: Binary message contracts documentation up to Step 16 (USER_STOP=1, MEDIA_END=3).  
+**After**: Binary message contract specification updated with `SEEK_DISCONTINUITY` control reason.
 
-**Callers**: Developers and AI agents reviewing protocol contracts.  
+**Callers**: Developers and AI agents reviewing IPC contracts.  
 **Callees**: None.
 
-**Happy path**: Client invokes `vw_worker_client_pause_session()`, populating `vw_msg_control_t.reason = VW_CTRL_REASON_USER_PAUSE` (1) in compliance with `docs/api-contracts.md:L139`.
-
-**Failure path**: N/A (specification document).
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | Read-only documentation file |
-| **I/O** | Read by LLM harness / developers |
-| **Persistence** | Static repository file |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Document VW_CTRL_REASON_USER_PAUSE & USER_RESUME | `docs/api-contracts.md:L139` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: Reason code 1U is used for both user-initiated pause and resume control frames as specified in API contracts.
-
----
-
-### 1.2 `docs/architecture.md`
-
-**Why change**: Update architecture documentation and data flow diagrams to include sender thread `input_GetState` polling, IPC `PAUSE`/`RESUME` control frames, and worker audio window clearing.
-
-**Responsibility before**: Documented Step 14c / Step 15 streaming architecture with SPSC queue and presenter display.  
-**After**: Detailed Step 16 play/pause lifecycle including background thread input tree walk, PCM discarding during pause, and worker analysis window reset.
-
-**Callers**: Developers and maintainers reviewing system layout.  
-**Callees**: None.
-
-**Happy path**: Developer inspects `docs/architecture.md:L42` to verify sender thread pause polling architecture.
+**Happy path**: Developer checks `docs/api-contracts.md:L87` to verify control frame reason codes.
 
 **Failure path**: N/A.
 
@@ -61,287 +27,7 @@
 | --- | --- |
 | **Input validation** | N/A |
 | **Authorization** | N/A |
-| **Concurrency** | Read-only documentation file |
-| **I/O** | Read by LLM harness / developers |
-| **Persistence** | Static repository file |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Document sender thread pause polling architecture | `docs/architecture.md:L42` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: Pause state polling is executed on background sender thread during idle/send cadence (5ms/20ms).
-
----
-
-### 1.3 `docs/plans/step15_plan.md`
-
-**Why change**: Record implementation plan, architectural rationale, and postmortem latency notes for Step 15 (caption presenter integration on sender thread).
-
-**Responsibility before**: New plan document added for Step 15.  
-**After**: Comprehensive 81-line specification and postmortem analysis for Step 15 presenter display wiring and 8s window batch inference latency.
-
-**Callers**: Developers tracking milestone deliverables.  
-**Callees**: None.
-
-**Happy path**: N/A (documentation).
-
-**Failure path**: N/A (documentation).
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | Read-only documentation file |
-| **I/O** | Read by LLM harness / developers |
-| **Persistence** | Static repository file |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add Step 15 plan and latency postmortem | `docs/plans/step15_plan.md:L1-L81` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: Captions display ~8s behind live audio due to batch window geometry; targeted by look-ahead in Step 17.
-
----
-
-### 1.4 `docs/plans/step16_plan.md`
-
-**Why change**: Document design, object walk logic, protocol rationale, and Definition of Done for Step 16 (Play/Pause lifecycle).
-
-**Responsibility before**: New plan document added for Step 16.  
-**After**: Detailed 96-line technical specification covering `input_GetState` object walk, IPC control frames, sender thread PCM drop while paused, and unit/integration test cases.
-
-**Callers**: Developers and AI agents verifying Step 16 design requirements.  
-**Callees**: None.
-
-**Happy path**: N/A (documentation).
-
-**Failure path**: N/A (documentation).
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | Read-only documentation file |
-| **I/O** | Read by LLM harness / developers |
-| **Persistence** | Static repository file |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add Step 16 design blueprint and test plan | `docs/plans/step16_plan.md:L1-L96` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: Object walk avoids `vlc_object_find_name` to prevent MinGW weak symbol linkage crashes.
-
----
-
-### 1.5 `docs/roadmap.md`
-
-**Why change**: Mark Step 15 and Step 16 completed (`[x]`) in milestone 3 roadmap and document sub-item 17e (transcription quality pass).
-
-**Responsibility before**: Steps 15 and 16 marked pending (`[ ]`).  
-**After**: Steps 15 and 16 marked completed with implementation summaries; roadmap updated to include 17e.
-
-**Callers**: Project maintainers tracking milestone progress.  
-**Callees**: None.
-
-**Happy path**: Maintainer checks `docs/roadmap.md:L49-L50` to verify completed deliverables.
-
-**Failure path**: N/A.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | Read-only documentation file |
-| **I/O** | Read by LLM harness / developers |
-| **Persistence** | Static repository file |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Mark Step 15 & Step 16 complete in roadmap | `docs/roadmap.md:L49-L50` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.6 `docs/test-strategy.md`
-
-**Why change**: Document test strategy updates for Step 15 (caption presenter stubs) and Step 16 (unit fake server PAUSE/RESUME sequence and integration lifecycle tests).
-
-**Responsibility before**: Documented test coverage up to Step 14c.  
-**After**: Updated test strategy covering `vw_test_worker_client` pause/resume assertions and `test_worker_lifecycle` mid-stream pause/resume verification.
-
-**Callers**: Developers executing test suite.  
-**Callees**: None.
-
-**Happy path**: Developer reviews `docs/test-strategy.md:L56-L58` for pause/resume test coverage requirements.
-
-**Failure path**: N/A.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | Read-only documentation file |
-| **I/O** | Read by LLM harness / developers |
-| **Persistence** | Static repository file |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Document Step 15 & Step 16 test strategy | `docs/test-strategy.md:L56-L58` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: Live VLC presenter testing remains manual; automated suite tests IPC framing and worker lifecycle.
-
----
-
-### 1.7 `plugin/include/vw_worker_client.h`
-
-**Why change**: Export `vw_worker_client_pause_session` and `vw_worker_client_resume_session` API functions for plugin sender thread and tests.
-
-**Responsibility before**: Declared client API methods for `start_session`, `send_audio`, `stop_session`, `shutdown`, `disconnect`, `receive_frame`.  
-**After**: Extended interface with `vw_worker_client_pause_session` and `vw_worker_client_resume_session`.
-
-**Callers**: `plugin/src/vw_whisper_module.c`, `tests/unit/vw_test_worker_client.c`, `tests/integration/test_worker_lifecycle.c`.  
-**Callees**: Implemented in `plugin/src/vw_worker_client.c`.
-
-**Happy path**: Sender thread includes `vw_worker_client.h` and invokes `vw_worker_client_pause_session(sys->client)` upon detecting `PAUSE_S`.
-
-**Failure path**: N/A (header file).
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Functions check `!client` before proceeding |
-| **Authorization** | Session ID populated from active client instance |
-| **Concurrency** | Invoked from single background sender thread |
-| **I/O** | N/A (header declaration) |
-| **Persistence** | N/A |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Declare vw_worker_client_pause_session | `plugin/include/vw_worker_client.h:L90` | `vw_test_worker_client.c` | ✅ done |
-| 2 | Declare vw_worker_client_resume_session | `plugin/include/vw_worker_client.h:L98` | `vw_test_worker_client.c` | ✅ done |
-
-**Assumptions/Tradeoffs**: Thread-safe invocation when called from plugin background sender thread.
-
----
-
-### 1.8 `plugin/src/vw_whisper_module.c`
-
-**Why change**: Implement pause detection via `input_GetState` object walk on sender thread, send `PAUSE`/`RESUME` IPC control frames, discard queued PCM while paused, wire presenter display on `VW_MSG_CAPTION_SEGMENT`, and clear presenter on plugin close.
-
-**Responsibility before**: Sender thread forwarded SPSC audio chunks over IPC and discarded `CAPTION_SEGMENT` worker frames without rendering.  
-**After**: Sender thread polls `input_GetState` via `vw_plugin_input_is_paused()`, sends `PAUSE`/`RESUME` frames on transition, drops SPSC chunks while paused, calls `vw_caption_presenter_show_segment()` when `VW_MSG_CAPTION_SEGMENT` arrives, and clears presenter on close (`vw_caption_presenter_clear()`).
-
-**Callers**: VLC module lifecycle (`vw_plugin_open`, `vw_plugin_close`, filter callback, and sender thread).  
-**Callees**: `vw_plugin_input_is_paused()`, `vw_worker_client_pause_session()`, `vw_worker_client_resume_session()`, `vw_caption_presenter_show_segment()`, `vw_caption_presenter_clear()`, `vlc_list_children()`, `vlc_list_release()`, `input_GetState()`.
-
-**Happy path**: User pauses playback → `vw_plugin_input_is_paused()` detects `PAUSE_S` → `vw_worker_client_pause_session()` sends `VW_MSG_PAUSE` → SPSC queue pops and drops audio (`if (paused) continue;`) → user resumes → `vw_worker_client_resume_session()` sends `VW_MSG_RESUME` → audio forwarding resumes.
-
-**Failure path**: If VLC object tree has no "input" node, `vw_plugin_input_is_paused()` safely returns false without NULL pointer dereference or crash.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks `!p_filter`, validates `cur->obj.object_type`, checks `children != NULL`, calls `vlc_list_release(children)` |
-| **Authorization** | N/A |
-| **Concurrency** | Read-only object tree walk on background sender thread; `paused` state thread-local to sender loop |
-| **I/O** | Discards SPSC audio chunks locally during pause to prevent queue backlog |
-| **Persistence** | N/A |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Poll input pause state via object walk | `plugin/src/vw_whisper_module.c:L316-L343` | Manual VLC acceptance | ✅ done |
-| 2 | Send PAUSE/RESUME on state transition | `plugin/src/vw_whisper_module.c:L227-L236` | `vw_test_worker_client.c` | ✅ done |
-| 3 | Discard SPSC queue chunks while paused | `plugin/src/vw_whisper_module.c:L244-L246` | Manual VLC acceptance | ✅ done |
-| 4 | Presenter display segment rendering | `plugin/src/vw_whisper_module.c:L286` | `test_caption_presenter.c` | ✅ done |
-| 5 | Presenter OSD clear on plugin close | `plugin/src/vw_whisper_module.c:L526` | `test_caption_presenter.c` | ✅ done |
-
-**Assumptions/Tradeoffs**: Object walk searches parent chain and children list of each parent for `object_type == "input"`, avoiding deprecated `vlc_object_find_name`.
-
----
-
-### 1.9 `plugin/src/vw_worker_client.c`
-
-**Why change**: Refactor control frame transmission (`STOP_SESSION`, `PAUSE`, `RESUME`) into a unified `send_control_frame` helper function with fail-closed transport drop on write failure, and implement `vw_worker_client_pause_session` and `vw_worker_client_resume_session`.
-
-**Responsibility before**: `vw_worker_client_stop_session` manually encoded `VW_MSG_STOP_SESSION` header/payload.  
-**After**: `send_control_frame` helper handles header/payload encoding and drops transport on failure; `stop_session`, `pause_session`, and `resume_session` utilize `send_control_frame`.
-
-**Callers**: `vw_plugin_sender_main` (`plugin/src/vw_whisper_module.c`), unit and integration tests.  
-**Callees**: `vw_protocol_encode_payload()`, `vw_protocol_encode_header()`, `vw_ipc_send()`, `vw_worker_client_drop_transport()`.
-
-**Happy path**: `vw_worker_client_pause_session(client)` calls `send_control_frame(client, VW_MSG_PAUSE, VW_CTRL_REASON_USER_PAUSE)` → encodes header & payload → sends via `vw_ipc_send()` → returns true.
-
-**Failure path**: If either IPC send call fails, `send_control_frame` calls `vw_worker_client_drop_transport(client)` to drop pipe and prevent desynchronization, returning false.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks `!client || !client->pipe_handle || !client->session_active` before sending |
-| **Authorization** | Stamps 16-byte session ID on control payload |
-| **Concurrency** | Atomic sequence increment / single-threaded sender invocation |
-| **I/O** | Sends header and payload atomically; drops transport if write fails |
-| **Persistence** | N/A |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Unified send_control_frame helper | `plugin/src/vw_worker_client.c:L365-L386` | `vw_test_worker_client.c` | ✅ done |
-| 2 | Implement vw_worker_client_pause_session | `plugin/src/vw_worker_client.c:L395-L398` | `vw_test_worker_client.c` | ✅ done |
-| 3 | Implement vw_worker_client_resume_session | `plugin/src/vw_worker_client.c:L400-L403` | `vw_test_worker_client.c` | ✅ done |
-| 4 | Transport drop on control write failure | `plugin/src/vw_worker_client.c:L383` | `vw_test_worker_client.c` | ✅ done |
-
-**Assumptions/Tradeoffs**: Control frames require an active session and valid IPC pipe handle.
-
----
-
-### 1.10 `protocol/include/vw_protocol_types.h`
-
-**Why change**: Define `VW_CTRL_REASON_USER_PAUSE` (1U) and `VW_CTRL_REASON_USER_RESUME` (1U) protocol reason macros.
-
-**Responsibility before**: Defined IPC header/payload structures without reason code macro definitions.  
-**After**: Added `#define VW_CTRL_REASON_USER_PAUSE 1U` and `#define VW_CTRL_REASON_USER_RESUME 1U`.
-
-**Callers**: `vw_worker_client.c`, `vw_worker.c`, and test suites.  
-**Callees**: None.
-
-**Happy path**: Code referencing `VW_CTRL_REASON_USER_PAUSE` compiles with constant value 1U.
-
-**Failure path**: N/A.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | Macro constants |
+| **Concurrency** | N/A |
 | **I/O** | N/A |
 | **Persistence** | N/A |
 
@@ -349,205 +35,748 @@
 
 | # | Criterion | Code | Test | Status |
 | --- | --- | --- | --- | --- |
-| 1 | Add control reason code macros | `protocol/include/vw_protocol_types.h:L140-L141` | `vw_test_worker_client.c` | ✅ done |
+| 1 | Document `SEEK_DISCONTINUITY` control reason | `docs/api-contracts.md:L87` | Manual Inspection | ✅ done |
 
-**Assumptions/Tradeoffs**: Numeric values match specification in `docs/api-contracts.md`.
+**Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.11 `tests/integration/test_worker_lifecycle.c`
+### 1.2 `docs/architecture.md`
 
-**Why change**: Extend worker lifecycle integration test to invoke `pause_session` and `resume_session` mid-stream during audio transmission.
+**Why change**: Document Step 17 seek and discontinuity handling workflow in architecture specification.
 
-**Responsibility before**: Lifecycle test sent `START`, `AUDIO` chunks, `STOP_SESSION`, and `SHUTDOWN` against a spawned worker process.  
-**After**: Included `vw_worker_client_pause_session(c)` and `vw_worker_client_resume_session(c)` mid-stream, verifying worker process remains healthy and exits 0.
+**Responsibility before**: Architecture specification up to Step 16 play/pause lifecycle.  
+**After**: Architecture specification updated with sender thread seek detection, OSD blanking, and session epoch restart logic.
 
-**Callers**: CTest harness (`test_worker_lifecycle`).  
-**Callees**: `vw_worker_client_pause_session()`, `vw_worker_client_resume_session()`, worker binary.
+**Callers**: Developers reviewing system architecture.  
+**Callees**: None.
 
-**Happy path**: Test spawns worker → streams audio → invokes pause & resume → sends stop & shutdown → worker process exits cleanly with status 0 (`EXPECT(exit_code == 0)`).
+**Happy path**: Reader reviews `docs/architecture.md:L75` to understand seek handling.
 
-**Failure path**: If worker process crashes on `PAUSE` or `RESUME`, exit status is non-zero, triggering test failure.
+**Failure path**: N/A.
 
 **Boundaries**:
 
 | Boundary type | What to check |
 | --- | --- |
 | **Input validation** | N/A |
-| **Authorization** | Session ID validation across pause/resume |
-| **Concurrency** | Process IPC communication |
-| **I/O** | Pipe write/read assertion |
-| **Persistence** | Process lifetime assertion |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Assert worker pause/resume mid-stream survival | `tests/integration/test_worker_lifecycle.c:L219-L220` | `test_worker_lifecycle` | ✅ done |
-
-**Assumptions/Tradeoffs**: Worker process handles `PAUSE`/`RESUME` without resetting session active flag.
-
----
-
-### 1.12 `tests/unit/vw_test_worker_client.c`
-
-**Why change**: Update fake server thread and client unit test cases to verify `VW_MSG_PAUSE` and `VW_MSG_RESUME` IPC frame sequence and reason payload values.
-
-**Responsibility before**: Fake server expected `START_SESSION` → `AUDIO_PCM` → `STOP_SESSION` → `SHUTDOWN`.  
-**After**: Fake server sequence updated to: `START_SESSION` → `AUDIO_PCM` → `PAUSE` (reason=1) → `RESUME` (reason=1) → `STOP_SESSION` → `SHUTDOWN`. Updated client test cases.
-
-**Callers**: CTest harness (`vw_test_worker_client`).  
-**Callees**: `vw_ipc_receive()`, `vw_protocol_decode_header()`, `vw_protocol_decode_payload()`, `vw_worker_client_pause_session()`, `vw_worker_client_resume_session()`.
-
-**Happy path**: Fake server receives `VW_MSG_PAUSE` → validates `reason == 1` → receives `VW_MSG_RESUME` → validates `reason == 1` → receives `STOP_SESSION` → exits thread 0.
-
-**Failure path**: If client sends invalid payload or incorrect frame sequence, fake server returns non-zero code (11..22), failing test assertion.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Frame header type and payload length checks |
-| **Authorization** | Reason code assertions (`VW_CTRL_REASON_USER_PAUSE`/`RESUME`) |
-| **Concurrency** | Multi-threaded client/server IPC mock |
-| **I/O** | Socket read timeouts |
+| **Authorization** | N/A |
+| **Concurrency** | Describes sender thread seek epoch restart |
+| **I/O** | N/A |
 | **Persistence** | N/A |
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
 | --- | --- | --- | --- | --- |
-| 1 | Server expectation for PAUSE frame & reason | `tests/unit/vw_test_worker_client.c:L108-L127` | `vw_test_worker_client` | ✅ done |
-| 2 | Server expectation for RESUME frame & reason | `tests/unit/vw_test_worker_client.c:L129-L148` | `vw_test_worker_client` | ✅ done |
-| 3 | Client pause/resume API unit test | `tests/unit/vw_test_worker_client.c:L411-L412` | `vw_test_worker_client` | ✅ done |
+| 1 | Document seek discontinuity architectural workflow | `docs/architecture.md:L75` | Manual Inspection | ✅ done |
 
-**Assumptions/Tradeoffs**: Fake server runs in dedicated thread with synchronous IPC reads.
+**Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.13 `worker/src/vw_worker.c`
+### 1.3 `docs/plans/step-14-realtime-pcm-streaming.md` (Deleted)
 
-**Why change**: Implement `VW_MSG_PAUSE` and `VW_MSG_RESUME` handling in worker main loop, clear active audio buffer window on pause, gate incoming `AUDIO_PCM` frames while paused, and resume window accumulation on resume.
+**Why change**: Removed obsolete step plan artifact to clean up `docs/plans/`.
 
-**Responsibility before**: Worker processed `START_SESSION`, `AUDIO_PCM`, `STOP_SESSION`, `SHUTDOWN`, ignoring unknown frames.  
-**After**: Worker loop tracks `bool paused = false;`. On `VW_MSG_PAUSE`, sets `paused = true`, executes `vw_audio_buffer_clear(audio_buf)` to flush partial window, and logs event. On `VW_MSG_AUDIO_PCM`, drops frame if `paused` is true. On `VW_MSG_RESUME`, sets `paused = false`.
+**Responsibility before**: Implementation roadmap for Step 14.  
+**After**: Deleted file.
 
-**Callers**: Worker main process loop (`vw_worker_run`).  
-**Callees**: `vw_audio_buffer_clear()`, `vw_log_event()`, `memcmp()`.
+**Callers**: N/A.  
+**Callees**: N/A.
 
-**Happy path**: Worker receives `VW_MSG_PAUSE` → sets `paused = true` → calls `vw_audio_buffer_clear(audio_buf)` → drops subsequent `VW_MSG_AUDIO_PCM` frames → receives `VW_MSG_RESUME` → sets `paused = false` → accumulates fresh 8s window.
+**Happy path**: File removed from working directory.
 
-**Failure path**: If `VW_MSG_PAUSE` or `RESUME` arrives when `session_active` is false, worker ignores frame (`if (!session_active) break;`). `audio_buf` null-check prevents invalid dereference.
+**Failure path**: N/A.
 
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks `!session_active` before handling control; checks `audio_buf != NULL` before clear |
-| **Authorization** | Session ID comparison on incoming audio frames |
-| **Concurrency** | Processed on main worker event loop |
-| **I/O** | Frame queue consumption |
-| **Persistence** | Preserves session timeline (PTS epoch); clears only in-flight partial audio window |
+**Boundaries**: N/A.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
 | --- | --- | --- | --- | --- |
-| 1 | Gate AUDIO frames while paused | `worker/src/vw_worker.c:L316` | `test_worker_lifecycle` | ✅ done |
-| 2 | Clear audio buffer on VW_MSG_PAUSE | `worker/src/vw_worker.c:L356-L361` | `test_worker_lifecycle` | ✅ done |
-| 3 | Reset paused state on VW_MSG_RESUME | `worker/src/vw_worker.c:L366-L370` | `test_worker_lifecycle` | ✅ done |
-| 4 | Preserve session timeline across pause/resume | `worker/src/vw_worker.c:L358` | Manual PTS log audit | ✅ done |
+| 1 | Clean up obsolete plan artifact | Deleted | N/A | ✅ done |
 
-**Assumptions/Tradeoffs**: Clearing partial audio buffer on pause guarantees no window spans across a user playback pause gap.
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.4 `docs/plans/step14c_plan.md` (Deleted)
+
+**Why change**: Removed obsolete step plan artifact to clean up `docs/plans/`.
+
+**Responsibility before**: Implementation roadmap for Step 14c.  
+**After**: Deleted file.
+
+**Callers**: N/A.  
+**Callees**: N/A.
+
+**Happy path**: File removed from working directory.
+
+**Failure path**: N/A.
+
+**Boundaries**: N/A.
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Clean up obsolete plan artifact | Deleted | N/A | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.5 `docs/plans/step15_plan.md` (Deleted)
+
+**Why change**: Removed obsolete step plan artifact to clean up `docs/plans/`.
+
+**Responsibility before**: Implementation roadmap for Step 15.  
+**After**: Deleted file.
+
+**Callers**: N/A.  
+**Callees**: N/A.
+
+**Happy path**: File removed from working directory.
+
+**Failure path**: N/A.
+
+**Boundaries**: N/A.
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Clean up obsolete plan artifact | Deleted | N/A | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.6 `docs/plans/step16_plan.md` (Deleted)
+
+**Why change**: Removed obsolete step plan artifact to clean up `docs/plans/`.
+
+**Responsibility before**: Implementation roadmap for Step 16.  
+**After**: Deleted file.
+
+**Callers**: N/A.  
+**Callees**: N/A.
+
+**Happy path**: File removed from working directory.
+
+**Failure path**: N/A.
+
+**Boundaries**: N/A.
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Clean up obsolete plan artifact | Deleted | N/A | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.7 `docs/plans/step17_plan.md` (Added)
+
+**Why change**: Enforce Rule 9 (Task Planning Template Enforcement) by storing technical specification for Step 17 seeking and discontinuity handling.
+
+**Responsibility before**: New file.  
+**After**: Authoritative task plan and design record for Step 17.
+
+**Callers**: AI agents and developers reviewing Step 17 requirements.  
+**Callees**: None.
+
+**Happy path**: Reader inspects `docs/plans/step17_plan.md` for verification criteria.
+
+**Failure path**: N/A.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | N/A |
+| **Authorization** | N/A |
+| **Concurrency** | N/A |
+| **I/O** | N/A |
+| **Persistence** | File stored in repo |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Enforce Rule 9 task template for Step 17 | `docs/plans/step17_plan.md:L1` | Manual Inspection | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.8 `docs/roadmap.md`
+
+**Why change**: Mark Step 17 (Seeking & Discontinuity support) as completed per Rule 14.
+
+**Responsibility before**: Roadmap with Step 17 unchecked.  
+**After**: Roadmap with Step 17 marked complete.
+
+**Callers**: Project maintainers and AI agents.  
+**Callees**: None.
+
+**Happy path**: Reviewer checks `docs/roadmap.md:L51`.
+
+**Failure path**: N/A.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | N/A |
+| **Authorization** | N/A |
+| **Concurrency** | N/A |
+| **I/O** | N/A |
+| **Persistence** | N/A |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Mark Step 17 completed in roadmap | `docs/roadmap.md:L51` | Manual Inspection | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.9 `docs/test-strategy.md`
+
+**Why change**: Document Step 17 seek test additions in test strategy per Rule 14.
+
+**Responsibility before**: Test inventory up to Step 16.  
+**After**: Test inventory updated with Step 17 seek tests.
+
+**Callers**: Developers running test suite.  
+**Callees**: None.
+
+**Happy path**: Developer checks test strategy doc.
+
+**Failure path**: N/A.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | N/A |
+| **Authorization** | N/A |
+| **Concurrency** | N/A |
+| **I/O** | N/A |
+| **Persistence** | N/A |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Add Step 17 test strategy documentation | `docs/test-strategy.md:L59` | Manual Inspection | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.10 `docs/vlc-api-essentials.md`
+
+**Why change**: Update discontinuity handling workflow in VLC API essentials document per Rule 14.
+
+**Responsibility before**: VLC API usage guide.  
+**After**: Updated guide explaining `BLOCK_FLAG_DISCONTINUITY` and position jump handling.
+
+**Callers**: Developers working on VLC plugin.  
+**Callees**: None.
+
+**Happy path**: Reader checks `docs/vlc-api-essentials.md:L140`.
+
+**Failure path**: N/A.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | N/A |
+| **Authorization** | N/A |
+| **Concurrency** | N/A |
+| **I/O** | N/A |
+| **Persistence** | N/A |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Update VLC API essentials doc | `docs/vlc-api-essentials.md:L140` | Manual Inspection | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.11 `plugin/include/vw_caption_presenter.h`
+
+**Why change**: Add `vw_caption_presenter_blank()` declaration for mid-session OSD blanking (keeping filter context) and document `vw_caption_presenter_clear()` as teardown-only (called only from `vw_plugin_close`).
+
+**Responsibility before**: Declared presenter init, display, show_segment, and clear functions.  
+**After**: Declares `vw_caption_presenter_blank()` for mid-session OSD clearing, and expands clear doc comment to cite `vw_plugin_close`.
+
+**Callers**: `vw_whisper_module.c`, `vw_caption_presenter.c`, `test_caption_presenter.c`.  
+**Callees**: None.
+
+**Happy path**: `vw_whisper_module.c` includes header and calls `vw_caption_presenter_blank(&sys->presenter)` on seek restart.
+
+**Failure path**: Compiler error on signature mismatch.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Parameter nullability handling |
+| **Authorization** | N/A |
+| **Concurrency** | Called on sender thread only |
+| **I/O** | N/A |
+| **Persistence** | N/A |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Declare `vw_caption_presenter_blank()` and update doc comments | `plugin/include/vw_caption_presenter.h:L26` | `test_caption_presenter` | ✅ done |
+
+**Assumptions/Tradeoffs**: Enforces Rule 11 (20-30 word header function comments).
+
+---
+
+### 1.12 `plugin/libvlccore.def`
+
+**Why change**: Add `vout_FlushSubpictureChannel` symbol export for Win32 MinGW build.
+
+**Responsibility before**: Symbol import definitions for `libvlccore.dll`.  
+**After**: Includes `vout_FlushSubpictureChannel`.
+
+**Callers**: MinGW linker.  
+**Callees**: `libvlccore.dll`.
+
+**Happy path**: Linker resolves `vout_FlushSubpictureChannel` symbol on Win32.
+
+**Failure path**: Linker error if symbol is missing.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Definition file syntax |
+| **Authorization** | N/A |
+| **Concurrency** | N/A |
+| **I/O** | N/A |
+| **Persistence** | N/A |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Export `vout_FlushSubpictureChannel` symbol | `plugin/libvlccore.def:L10` | Build Verification | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.13 `plugin/src/vw_caption_presenter.c`
+
+**Why change**: Implement `vw_caption_presenter_blank()` to erase active OSD subpictures mid-session without destroying presenter filter context.
+
+**Responsibility before**: Handled presenter display, vout lookup, and teardown clear.  
+**After**: Implements `vw_caption_presenter_blank()` using `vout_FlushSubpictureChannel(vout, VOUT_SPU_CHANNEL_OSD)` with 1ms blank fallback, and updates `vw_caption_presenter_clear()` to delegate to `blank()`.
+
+**Callers**: `vw_whisper_module.c:L320`, `test_caption_presenter.c`.  
+**Callees**: `vw_caption_presenter_find_vout`, `vout_FlushSubpictureChannel`, `vout_OSDText`, `vlc_object_release`.
+
+**Happy path**: `vw_caption_presenter_blank` locates active `vout_thread_t`, invokes `vout_FlushSubpictureChannel(vout, VOUT_SPU_CHANNEL_OSD)` and 1ms blank OSD text, releases vout reference, preserving `presenter->p_filter_ctx`.
+
+**Failure path**: `p_filter_ctx` NULL or `find_vout` returns NULL; returns false gracefully.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Null checks on `presenter` and `p_filter_ctx` |
+| **Authorization** | N/A |
+| **Concurrency** | Called on sender thread; releases vout reference immediately |
+| **I/O** | OSD subpicture channel flush |
+| **Persistence** | None |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Implement mid-session OSD blanking | `plugin/src/vw_caption_presenter.c:L125` | `test_caption_presenter` | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.14 `plugin/src/vw_whisper_module.c`
+
+**Why change**: Implement Step 17 seek & discontinuity session restart logic, threshold macros (`VW_SEEK_JUMP_THRESHOLD_US`, `VW_PTS_JUMP_THRESHOLD_US`), seek-while-paused baseline backfill, position-jump detection, and audio callback PTS fallback checks.
+
+**Responsibility before**: Module descriptor, audio callback, sender thread with play/pause lifecycle.  
+**After**: Module descriptor, audio callback with PTS jump fallback (`VW_PTS_JUMP_THRESHOLD_US = 500ms`), sender thread with position-jump detection (`VW_SEEK_JUMP_THRESHOLD_US = 1s`), pause baseline backfill, OSD blanking, and session epoch restart (`STOP` -> drain SPSC -> `START` with new `session_id`).
+
+**Callers**: VLC module loader, VLC audio pipeline (`pf_audio_filter`), sender thread.  
+**Callees**: `vw_caption_presenter_blank`, `vw_worker_client_stop_session`, `vw_spsc_queue_pop`, `vw_worker_client_start_session`, `vw_plugin_find_input`, `input_GetState`, `vw_plugin_input_position_us`.
+
+**Happy path**:
+1. Callback: `vw_plugin_filter:L481` checks `BLOCK_FLAG_DISCONTINUITY` or `p_block->i_pts < last_pts_us - VW_PTS_JUMP_THRESHOLD_US` (500ms). Sets `discontinuity_pending = true` and stores `resume_pts_us`.
+2. Sender poll: `vw_plugin_sender_main:L276-L300` checks `position_us` jumps (>1s) while playing or paused (backfilling pause baseline if input lookup raced pause edge). Sets `discontinuity_pending = true`.
+3. Epoch restart: Sender thread sees `discontinuity_pending = true` (`:L318`):
+   - Calls `vw_caption_presenter_blank(&sys->presenter)` to erase OSD.
+   - Calls `vw_worker_client_stop_session(sys->client, VW_CTRL_REASON_SEEK_DISCONTINUITY)`.
+   - Drains stale pre-seek PCM from SPSC queue (`:L323`).
+   - Calls `vw_worker_client_start_session(sys->client, resume_pts_us, "tiny.en")`.
+   - Resets `discontinuity_pending = false` and resumes real-time audio streaming.
+
+**Failure path**:
+1. Worker rejects restart (e.g. model missing): `vw_worker_client_start_session` returns false; sender marks `worker_dead = true`, logs warning, breaks loop, and plugin degrades to audio passthrough.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | `p_block->i_pts >= VLC_TS_0` + `last_pts_us > 0` guards; `position_us >= 0` guards; `VW_SEEK_JUMP_THRESHOLD_US` (1s) and `VW_PTS_JUMP_THRESHOLD_US` (500ms) macro gates |
+| **Authorization** | CSPRNG auth token verification |
+| **Concurrency** | Callback is 100% lock-free (Rule 4), writes only atomic bool/int64; sender thread executes restart sequence exclusively |
+| **I/O** | Non-blocking SPSC drain; IPC control frames |
+| **Persistence** | None |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Implement seek discontinuity session restart | `plugin/src/vw_whisper_module.c:L318-L335` | `test_worker_lifecycle` | ✅ done |
+| 2 | Robust paused-seek baseline backfill | `plugin/src/vw_whisper_module.c:L274, L286` | Manual & Code Review | ✅ done |
+| 3 | Use threshold macros (`VW_SEEK_JUMP_THRESHOLD_US`, `VW_PTS_JUMP_THRESHOLD_US`) | `plugin/src/vw_whisper_module.c:L57-L58` | Code Review | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.15 `protocol/include/vw_protocol_types.h`
+
+**Why change**: Add `VW_CTRL_REASON_SEEK_DISCONTINUITY = 2U` control reason constant.
+
+**Responsibility before**: Protocol types and message constants up to Step 16.  
+**After**: Protocol types including `VW_CTRL_REASON_SEEK_DISCONTINUITY`.
+
+**Callers**: `vw_whisper_module.c`, `vw_worker_client.c`, `vw_worker.c`, unit tests.  
+**Callees**: None.
+
+**Happy path**: Code passes `VW_CTRL_REASON_SEEK_DISCONTINUITY` in control frame payload.
+
+**Failure path**: N/A.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Wire reason code fits in `uint16_t` |
+| **Authorization** | N/A |
+| **Concurrency** | Pure constants |
+| **I/O** | N/A |
+| **Persistence** | N/A |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Define `VW_CTRL_REASON_SEEK_DISCONTINUITY` | `protocol/include/vw_protocol_types.h:L143` | `vw_test_worker_client` | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.16 `tests/integration/test_worker_lifecycle.c`
+
+**Why change**: Update worker lifecycle integration test to assert multi-session restart (`START` -> `AUDIO` -> `STOP(SEEK_DISCONTINUITY)` -> `START` -> `AUDIO` -> `STOP` -> `SHUTDOWN`) with session ID epoch gating verification.
+
+**Responsibility before**: Lifecycle test for single session streaming.  
+**After**: Lifecycle test verifying session epoch restarts and pre-seek audio rejection.
+
+**Callers**: CTest harness (`ctest`).  
+**Callees**: `vw_worker_client_start_session`, `vw_worker_client_send_audio`, `vw_worker_client_stop_session`.
+
+**Happy path**: Test starts session 1, sends audio, sends `STOP(SEEK_DISCONTINUITY)`, starts session 2 with new session ID, sends audio, stops session 2, shuts down client, and asserts worker process exits 0 cleanly.
+
+**Failure path**: Test assertion fails if worker crashes or fails session restart.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Checks session response codes |
+| **Authorization** | Secret auth token |
+| **Concurrency** | Client + worker process IPC |
+| **I/O** | IPC transport |
+| **Persistence** | Temporary sockets cleaned up |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Test multi-session epoch restart | `tests/integration/test_worker_lifecycle.c:L218` | `test_worker_lifecycle` | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.17 `tests/unit/test_caption_presenter.c`
+
+**Why change**: Update presenter unit test to assert `vw_caption_presenter_blank()` mid-session behavior, `vw_caption_presenter_clear()` teardown behavior, and flush invocation counts on `fake_filter.obj.object_type = "vout"`.
+
+**Responsibility before**: Tested standalone display and segment presenter functions.  
+**After**: Unit test asserting `blank()` OSD channel flush on `channel == 1` (`VOUT_SPU_CHANNEL_OSD`) and context retention, and `clear()` context resetting.
+
+**Callers**: CTest harness (`ctest`).  
+**Callees**: `vw_caption_presenter_blank`, `vw_caption_presenter_clear`.
+
+**Happy path**: Test sets `.obj.object_type = "vout"`, calls `blank()`, asserts `g_flush_calls == 1 && g_flush_channel == 1` and `p_filter_ctx` retained; calls `clear()`, asserts `g_flush_calls == 2` and `p_filter_ctx == NULL`.
+
+**Failure path**: Test fails if flush is not called or context is lost on blank.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Handles NULL and non-NULL contexts |
+| **Authorization** | N/A |
+| **Concurrency** | Single-threaded test |
+| **I/O** | None |
+| **Persistence** | None |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Test `blank()` and `clear()` presenter functions | `tests/unit/test_caption_presenter.c:L90` | `test_caption_presenter` | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.18 `tests/unit/vw_test_worker_client.c`
+
+**Why change**: Update worker client unit test to assert `VW_CTRL_REASON_SEEK_DISCONTINUITY` framing against mock server.
+
+**Responsibility before**: Tested client session state machine up to Step 16.  
+**After**: Updated test suite asserting seek discontinuity reason codes.
+
+**Callers**: CTest harness (`ctest`).  
+**Callees**: `vw_worker_client_stop_session`.
+
+**Happy path**: Test calls `vw_worker_client_stop_session(client, VW_CTRL_REASON_SEEK_DISCONTINUITY)` and mock server receives `STOP_SESSION` frame with reason `2U`.
+
+**Failure path**: Test assertion fails if reason code is corrupted.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Checks reason code framing |
+| **Authorization** | N/A |
+| **Concurrency** | Mock server thread synchronization |
+| **I/O** | IPC socket pair |
+| **Persistence** | None |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Test `SEEK_DISCONTINUITY` reason framing | `tests/unit/vw_test_worker_client.c:L166` | `test_worker_client` | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.19 `worker/src/vw_worker.c`
+
+**Why change**: Handle `STOP_SESSION` with `VW_CTRL_REASON_SEEK_DISCONTINUITY`, drain segment builder on `START_SESSION`, clear audio buffer on `STOP`, implement `vw_worker_stop_reason_name` with `_Thread_local static char buf[16]` buffer, and document STOP-only usage.
+
+**Responsibility before**: Handled single session lifecycle and inference event loop.  
+**After**: Handled multi-session epoch restarts: on `STOP`, clears audio buffer and logs reason via thread-safe `vw_worker_stop_reason_name`; on `START`, drains segment builder hypothesis queue to drop pre-seek hypotheses, resets session ID, and begins new epoch.
+
+**Callers**: `worker/src/main.c` (`main()`), integration tests.  
+**Callees**: `vw_worker_stop_reason_name`, `vw_audio_buffer_clear`, `vw_segment_builder_pop`, `vw_protocol_encode_header`, `vw_ipc_send`.
+
+**Happy path**:
+1. Worker receives `STOP_SESSION` (reason `2U`): `vw_worker.c:L402` sets `session_active = false`, clears `audio_buf`, and logs `WORKER_SESSION: session stopped (reason=SEEK_DISCONTINUITY)`.
+2. Worker receives `START_SESSION` (new session ID): `vw_worker.c:L322-L327` drains and discards any remaining hypotheses from `builder`, copies new `session_id`, sets `session_active = true`, and replies `STARTED`.
+3. Audio processing: `VW_MSG_AUDIO_PCM` frames matching `session_id` are accumulated and transcribed; any stale pre-seek `AUDIO` frame with old `session_id` is dropped (`:L343`).
+
+**Failure path**:
+1. Invalid model on restart: `if (!engine)` at `:L309` triggers `send_error(..., E_MODEL_MISSING, 0, ...)`; `session_active` stays false; worker remains ready for subsequent clean shutdown.
+
+**Boundaries**:
+
+| Boundary type | What to check |
+| --- | --- |
+| **Input validation** | Checks `session_id` bytes match active session; validates sample rate (16000) |
+| **Authorization** | Constant-time auth token comparison |
+| **Concurrency** | Single-writer main loop; `vw_worker_stop_reason_name` uses `_Thread_local static char buf[16]` for thread safety |
+| **I/O** | Timed IPC socket reads and writes |
+| **Persistence** | None |
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Drain segment builder on `START` to drop pre-seek hypotheses | `worker/src/vw_worker.c:L322-L327` | `test_worker_lifecycle` | ✅ done |
+| 2 | Clear audio buffer on `STOP` | `worker/src/vw_worker.c:L404` | `test_worker_lifecycle` | ✅ done |
+| 3 | Thread-safe `vw_worker_stop_reason_name` helper | `worker/src/vw_worker.c:L41-L56` | `test_worker_ipc` | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
 
 ---
 
 ## 2. Happy-Path Request Trace
 
-End-to-end trace when user pauses and resumes playback in VLC during active captioning:
+The following trace demonstrates an end-to-end seek discontinuity handling workflow during active playback:
 
-1. User clicks Pause in VLC player UI.
-2. Background sender thread running `vw_plugin_sender_main` (`plugin/src/vw_whisper_module.c:L226`) invokes `vw_plugin_input_is_paused(p_filter)` (`plugin/src/vw_whisper_module.c:L316`).
-3. `vw_plugin_input_is_paused` traverses VLC parent object chain, finds child with `object_type == "input"`, and evaluates `input_GetState((input_thread_t*)child) == PAUSE_S` (`plugin/src/vw_whisper_module.c:L330`).
-4. Pause transition detected (`now_paused != paused`). Sender thread calls `vw_worker_client_pause_session(sys->client)` (`plugin/src/vw_whisper_module.c:L228`).
-5. `vw_worker_client_pause_session` (`plugin/src/vw_worker_client.c:L395`) calls `send_control_frame(client, VW_MSG_PAUSE, VW_CTRL_REASON_USER_PAUSE)` (`plugin/src/vw_worker_client.c:L365`).
-6. `send_control_frame` encodes `vw_msg_control_t` payload with `reason = 1` and `vw_frame_header_t` with `type = VW_MSG_PAUSE`, sending both over IPC pipe via `vw_ipc_send` (`plugin/src/vw_worker_client.c:L380`).
-7. Sender thread sets local `paused = true` and logs `PLUGIN_PAUSE` event (`plugin/src/vw_whisper_module.c:L229`).
-8. Sender thread continues draining SPSC audio queue (`plugin/src/vw_whisper_module.c:L243`); since `paused` is true, it discards chunks (`if (paused) continue;` `plugin/src/vw_whisper_module.c:L245`), keeping queue empty without sending `AUDIO` IPC messages.
-9. Worker reader/main thread running `vw_worker_run` (`worker/src/vw_worker.c:L168`) receives IPC header, decodes payload, and enters `case VW_MSG_PAUSE:` (`worker/src/vw_worker.c:L356`).
-10. Worker sets `paused = true`, executes `vw_audio_buffer_clear(audio_buf)` (`worker/src/vw_worker.c:L360`) to flush in-flight partial audio window, and logs `WORKER_SESSION` paused event.
-11. User clicks Play in VLC player UI.
-12. Sender thread invokes `vw_plugin_input_is_paused`, receives `false`. Transition detected (`now_paused != paused`).
-13. Sender thread calls `vw_worker_client_resume_session(sys->client)` (`plugin/src/vw_whisper_module.c:L231`).
-14. `vw_worker_client_resume_session` (`plugin/src/vw_worker_client.c:L400`) sends `VW_MSG_RESUME` frame with `reason = VW_CTRL_REASON_USER_RESUME` (1) over IPC.
-15. Sender thread sets `paused = false` and resumes sending audio chunks from SPSC queue across IPC.
-16. Worker main loop receives `VW_MSG_RESUME` (`worker/src/vw_worker.c:L365`), sets `paused = false`, and begins accumulating fresh audio window into `audio_buf`.
+```text
+1. User Seeks During Playback (VLC Filter & Main Audio Thread)
+   └─ plugin/src/vw_whisper_module.c:vw_plugin_filter (L481)
+      ├─ VLC audio callback receives block with BLOCK_FLAG_DISCONTINUITY set (or PTS backward jump >500ms)
+      ├─ Updates atomic flag: atomic_store(&sys->discontinuity_pending, true)
+      └─ Stores new media PTS anchor: atomic_store(&sys->resume_pts_us, p_block->i_pts)
+
+2. Plugin Background Sender Thread (vw_sender_thread)
+   └─ plugin/src/vw_whisper_module.c:vw_plugin_sender_main (L318)
+      ├─ Detects atomic_load(&sys->discontinuity_pending) == true
+      ├─ Erases active OSD subpictures: plugin/src/vw_caption_presenter.c:vw_caption_presenter_blank (L125)
+      │  └─ Calls vout_FlushSubpictureChannel(vout, VOUT_SPU_CHANNEL_OSD) and 1ms blank OSD
+      ├─ Sends STOP_SESSION frame over IPC: plugin/src/vw_worker_client.c:vw_worker_client_stop_session (L321)
+      │  └─ Reason: VW_CTRL_REASON_SEEK_DISCONTINUITY (2U)
+      ├─ Drains and discards stale pre-seek audio chunks from SPSC queue: vw_spsc_queue_pop (L323)
+      ├─ Reads new PTS anchor: resume_pts_us = atomic_load(&sys->resume_pts_us) (L325)
+      ├─ Clears pending flag: atomic_store(&sys->discontinuity_pending, false) (L326)
+      └─ Sends START_SESSION frame over IPC with new session_id and resume_pts_us (L327)
+
+3. Worker Process Handling (vlc-whisper-worker Main Loop)
+   └─ worker/src/vw_worker.c:vw_worker_run (L322, L400)
+      ├─ Receives STOP_SESSION:
+      │  ├─ Sets session_active = false
+      │  ├─ Clears PCM audio buffer: vw_audio_buffer_clear (L404)
+      │  └─ Logs: "WORKER_SESSION: session stopped (reason=SEEK_DISCONTINUITY)"
+      └─ Receives START_SESSION:
+         ├─ Drains and discards pre-seek hypotheses from segment builder: vw_segment_builder_pop (L323)
+         ├─ Copies new session_id into session state (L328)
+         ├─ Sets session_active = true
+         └─ Sends STARTED reply header over IPC
+
+4. Resumed Audio Streaming & Caption Generation
+   └─ Plugin sender thread receives STARTED reply, logs PLUGIN_SESSION_RESTARTED (L333)
+      ├─ Resumes popping post-seek PCM audio chunks from SPSC queue
+      ├─ Transmits post-seek VW_MSG_AUDIO_PCM frames tagged with new session_id
+      └─ Worker receives post-seek PCM, accumulates post-seek window, transcribes, and emits post-seek CAPTION_SEGMENT
+```
 
 ---
 
 ## 3. Most Important Failure Path
 
-Trace failure scenario: Transport pipe write failure during `PAUSE` control frame transmission (e.g. worker process killed or pipe broken right as user pauses):
+### Failure Scenario: Worker Model File Removed Before Seek Restart (`E_MODEL_MISSING`)
 
-1. User pauses VLC playback.
-2. Sender thread detects pause state transition and calls `vw_worker_client_pause_session(sys->client)` (`plugin/src/vw_whisper_module.c:L228`).
-3. `vw_worker_client_pause_session` invokes `send_control_frame(client, VW_MSG_PAUSE, VW_CTRL_REASON_USER_PAUSE)` (`plugin/src/vw_worker_client.c:L396`).
-4. `send_control_frame` encodes header and payload buffers and calls `vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf))` (`plugin/src/vw_worker_client.c:L379`).
-5. `vw_ipc_send` returns `false` due to broken pipe / write failure.
-6. `send_control_frame` evaluates `if (ok1 && ok2)` as false, enters error path, and calls `vw_worker_client_drop_transport(client)` (`plugin/src/vw_worker_client.c:L383`).
-7. `vw_worker_client_drop_transport` closes `client->pipe_handle`, resets `client->session_active = false`, and sets pipe handle to NULL.
-8. `send_control_frame` returns `false`.
-9. Next iteration of sender thread attempts audio/control sends; `vw_worker_client_send_audio` detects `client->pipe_handle == NULL` and returns `false`.
-10. Sender thread evaluates `if (!vw_worker_client_send_audio(...))` as true and sets `atomic_store(&sys->worker_dead, true)` (`plugin/src/vw_whisper_module.c:L248`).
-11. Sender thread exits main loop cleanly, and plugin degrades gracefully to audio passthrough without crashing VLC.
+```text
+1. Seek Occurs During Playback
+   └─ plugin/src/vw_whisper_module.c:vw_plugin_filter (L481)
+      └─ Callback sets discontinuity_pending = true and stores resume_pts_us
+
+2. Plugin Sender Thread Initiates Restart Epoch
+   └─ plugin/src/vw_whisper_module.c:vw_plugin_sender_main (L318)
+      ├─ Erases active OSD: vw_caption_presenter_blank (L320)
+      ├─ Transmits STOP_SESSION (reason=SEEK_DISCONTINUITY) over IPC (L321)
+      ├─ Drains stale pre-seek SPSC audio queue chunks (L323)
+      └─ Transmits START_SESSION over IPC: vw_worker_client_start_session (L327)
+
+3. Worker Missing Model Handling
+   └─ worker/src/vw_worker.c:vw_worker_run (L309)
+      ├─ Receives STOP_SESSION: clears audio buffer, sets session_active = false
+      ├─ Receives START_SESSION: evaluates if (!engine) -> true (model deleted)
+      ├─ Logs warning: "WORKER_SESSION: START rejected: E_MODEL_MISSING" (L311)
+      ├─ Invokes send_error(..., E_MODEL_MISSING, recoverable=0, "Whisper model file missing or invalid")
+      └─ session_active remains false
+
+4. Plugin Rejection & Passthrough Fallback
+   └─ plugin/src/vw_worker_client.c:vw_worker_client_start_session (L327)
+      ├─ Awaited STARTED reply times out / receives VW_MSG_ERROR payload
+      ├─ Logs warning: "PLUGIN_SESSION_RESTART_FAIL: worker rejected restart; captions disabled, passthrough only" (L330)
+      ├─ Sets atomic flag: atomic_store(&sys->worker_dead, true) (L328)
+      └─ Sender thread breaks execution loop and terminates cleanly (L332)
+
+5. VLC Media Playback Uninterrupted
+   └─ plugin/src/vw_whisper_module.c:vw_plugin_filter (L475)
+      ├─ Audio callback continues executing on VLC main audio thread
+      ├─ Captures audio to SPSC queue (overflow chunks dropped harmlessly)
+      └─ Returns p_block untouched to VLC audio output pipeline (100% uninterrupted audio playback)
+```
 
 ---
 
 ## 4. Boundary Summary
 
-| Boundary type | What to check | Code Location | Status / Mitigation |
-| --- | --- | --- | --- |
-| **Input validation** | NULL client/filter checks, valid uint16_t reason codes | `vw_worker_client.c:L366`, `vw_whisper_module.c:L317`, `vw_worker.c:L357` | Verified NULL checks on client, pipe_handle, and p_filter; bounds check on child object list |
-| **Authorization** | Session ID matching on control & audio frames | `vw_worker_client.c:L368`, `vw_worker.c:L317` | Session ID copied onto control frame; worker rejects mismatched session IDs |
-| **Concurrency** | Sender thread local pause state vs worker main loop state; lock-free SPSC queue | `vw_whisper_module.c:L226-L246`, `vw_worker.c:L171` | Pause state managed on background sender thread; audio queue popped safely; worker loop single-threaded event loop |
-| **I/O** | Atomic control frame writes (header + payload), fail-closed transport drop | `vw_worker_client.c:L379-L384` | `send_control_frame` drops pipe on partial/failed write to prevent protocol desynchronization |
-| **Persistence** | Session timeline vs in-flight analysis window state | `vw_worker.c:L360` | `vw_audio_buffer_clear()` flushes partial window on pause while maintaining overall session timeline |
+| Boundary type | Checks performed | Code Location | Finding / Guard Implementation |
+|---|---|---|---|
+| **Input validation** | Audio Callback PTS Fallback | `vw_whisper_module.c:L481` | Guards `p_block->i_pts >= VLC_TS_0` and `last_pts_us > 0` before checking `VW_PTS_JUMP_THRESHOLD_US` (500ms) backward jump. |
+| **Input validation** | Position Jump Gates | `vw_whisper_module.c:L276, L295` | `position_us >= 0` guards and `VW_SEEK_JUMP_THRESHOLD_US` (1s) macro gate on continuous and paused position checks. |
+| **Input validation** | Paused Baseline Backfill | `vw_whisper_module.c:L286-L290` | Backfills `paused_position_us` if initial pause edge input lookup returned `-1`, ensuring paused seeks are never missed. |
+| **Input validation** | Session ID Gating | `vw_worker.c:L343`<br>`vw_whisper_module.c:L357` | `session_id` memcmp gating drops stale pre-seek `AUDIO` frames and in-flight `SEGMENT` frames. |
+| **Authorization** | Auth Token Verification | `vw_worker.c:L30` | Secret 32-byte auth token validated using `verify_token_constant_time`. |
+| **Concurrency** | Lock-Free Callback | `vw_whisper_module.c:L475` | Callback is 100% lock-free (Rule 4). Writes only atomic bool/int64 variables (`discontinuity_pending`, `resume_pts_us`). |
+| **Concurrency** | Sender Thread Exclusive Restart | `vw_whisper_module.c:L318` | Session epoch restart sequence runs exclusively on background sender thread. |
+| **Concurrency** | Thread-Safe Stop Reason Logger | `vw_worker.c:L51` | `vw_worker_stop_reason_name` uses `_Thread_local static char buf[16]` to ensure thread safety across logging calls. |
+| **I/O** | OSD Channel Flush | `vw_caption_presenter.c:L125` | `vw_caption_presenter_blank` uses `vout_FlushSubpictureChannel` and 1ms OSD blanking to erase active subpictures mid-session. |
+| **I/O** | IPC Control Frames | `vw_worker_client.c:L321` | Non-blocking IPC control frame send (`STOP_SESSION` with `VW_CTRL_REASON_SEEK_DISCONTINUITY`). |
+| **Persistence** | Socket & File Cleanup | `vw_whisper_module.c:L411`<br>`vw_worker.c:L440` | Socket files and pipe handles unlinked and closed on teardown. Zero transcript/PCM data written to disk (Rule 5). |
 
 ---
 
 ## 5. Acceptance Criterion → Code Mapping
 
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Input pause detection via VLC object tree walk | `plugin/src/vw_whisper_module.c:L316-L343` | Manual live VLC acceptance | ✅ done |
-| 2 | PAUSE and RESUME IPC frame generation with reason codes | `plugin/src/vw_worker_client.c:L395-L403`, `protocol/include/vw_protocol_types.h:L140-L141` | `tests/unit/vw_test_worker_client.c:L411-L412` | ✅ done |
-| 3 | SPSC audio queue discarding during pause state | `plugin/src/vw_whisper_module.c:L244-L246` | Manual live VLC acceptance | ✅ done |
-| 4 | Worker audio window clear on VW_MSG_PAUSE | `worker/src/vw_worker.c:L356-L361` | `tests/integration/test_worker_lifecycle.c:L219-L220` | ✅ done |
-| 5 | Worker AUDIO frame gating while paused | `worker/src/vw_worker.c:L316` | `tests/integration/test_worker_lifecycle.c:L219-L220` | ✅ done |
-| 6 | Refactored send_control_frame with fail-closed transport drop | `plugin/src/vw_worker_client.c:L365-L386` | `tests/unit/vw_test_worker_client.c:L108-L148` | ✅ done |
-| 7 | Caption presenter display rendering on SEGMENT frame | `plugin/src/vw_whisper_module.c:L286` | `tests/unit/test_caption_presenter.c` | ✅ done |
-| 8 | Presenter OSD clear on plugin close | `plugin/src/vw_whisper_module.c:L526` | `tests/unit/test_caption_presenter.c` | ✅ done |
+| # | Criterion | Code Implementation | Test Assertion | Status |
+|---|---|---|---|---|
+| 1 | Seek during playback: OSD clears immediately | `plugin/src/vw_caption_presenter.c:L125`<br>`plugin/src/vw_whisper_module.c:L320` | `tests/unit/test_caption_presenter.c:L90` | ✅ done |
+| 2 | New captions resume from post-seek position | `worker/src/vw_worker.c:L322-L328` epoch restart | `tests/integration/test_worker_lifecycle.c:L218` | ✅ done |
+| 3 | No caption mixes pre-seek and post-seek audio | `worker/src/vw_worker.c:L323` builder drain + `worker/src/vw_worker.c:L404` audio buffer clear | `tests/integration/test_worker_lifecycle.c:L223` | ✅ done |
+| 4 | Log `PLUGIN_DISCONTINUITY` and `PLUGIN_SESSION_RESTARTED` | `plugin/src/vw_whisper_module.c:L319, L333` | `tests/integration/test_worker_lifecycle.c:L218` | ✅ done |
+| 5 | Pre-seek audio discarded from SPSC queue | `plugin/src/vw_whisper_module.c:L323-L324` SPSC drain loop | `tests/integration/test_worker_lifecycle.c:L223` | ✅ done |
+| 6 | Seek while paused: robust baseline backfill, no transport drop | `plugin/src/vw_whisper_module.c:L274, L286-L290` | Manual & Code Review | ✅ done |
+| 7 | Threshold macros (`VW_SEEK_JUMP_THRESHOLD_US`, `VW_PTS_JUMP_THRESHOLD_US`) | `plugin/src/vw_whisper_module.c:L57-L58` | Code Review | ✅ done |
+| 8 | `VW_CTRL_REASON_SEEK_DISCONTINUITY` constant | `protocol/include/vw_protocol_types.h:L143` | `tests/unit/vw_test_worker_client.c:L166` | ✅ done |
+| 9 | Thread-safe `vw_worker_stop_reason_name` helper | `worker/src/vw_worker.c:L41-L56` | `tests/integration/test_worker_ipc.c` | ✅ done |
+| 10 | `vout_FlushSubpictureChannel` test assertions | `tests/unit/test_caption_presenter.c:L90-L100` | `test_caption_presenter` | ✅ done |
+| 11 | C17, Google C style, no C++ | All `.c`/`.h` files | `clang-format --dry-run --Werror` | ✅ done |
+| 12 | 100% CTest pass rate (16/16 targets) | CMake & CTest suite | All 16 targets passing | ✅ done |
+| 13 | Zero memory leaks under Valgrind | `ctest -T memcheck` | Valgrind memcheck clean | ✅ done |
 
 ---
 
 ## 7. Code Review Findings (Bugs, Risks, Nitpicks)
 
-### Bugs (Sorted by Priority)
+### Resolved Findings (100% Fixed in `36a8948`)
 
-| Priority | Component / Location | Description | Impact | Proposed Fix |
-| --- | --- | --- | --- | --- |
-| **Low** | `plugin/src/vw_whisper_module.c:328` | Multi-level child object traversal allocates `vlc_list_children` at parent level without recursive release on deeper hierarchy nodes | Minor temporary memory allocation during pause check | Ensure nested child lists are explicitly released or restrict child walk to depth 1 |
+| Priority | Component / Location | Description | Fix Implemented | Status |
+|---|---|---|---|---|
+| **High** | `worker/src/vw_worker.c:41-56` | `vw_worker_control_reason_name` used `static char buf[16]` (not thread-safe) and conflated `USER_STOP` with `USER_PAUSE`/`USER_RESUME` (value `1U`). | Renamed to `vw_worker_stop_reason_name`, documented as STOP-only, and changed buffer to `_Thread_local static char buf[16]` (`:51`). | **RESOLVED** |
+| **Medium** | `plugin/src/vw_whisper_module.c:274, L286-290` | If input lookup returned `-1` on pause edge, `paused_position_us` stored `-1`, causing subsequent resume jump check to miss paused seeks. | `paused_position_us` assignment guarded and backfill logic added (`:286-290`) so transient input lookup failures on pause edge backfill on next poll. | **RESOLVED** |
+| **Medium** | `plugin/src/vw_whisper_module.c:57-58` | Un-named magic literals `1000000` (1s jump) and `500000` (500ms PTS jump). | Defined `#define VW_SEEK_JUMP_THRESHOLD_US 1000000` and `#define VW_PTS_JUMP_THRESHOLD_US 500000` and replaced all literal usages. | **RESOLVED** |
+| **Low** | `tests/unit/test_caption_presenter.c:90-100` | `vout_FlushSubpictureChannel` stub was a no-op that did not assert invocation or channel number. | Updated `fake_filter` with `.obj.object_type = "vout"`, and added assertions verifying `g_flush_calls == 1 && g_flush_channel == 1` for `blank()` and `g_flush_calls == 2` for `clear()`. | **RESOLVED** |
+| **Nitpick** | `plugin/include/vw_caption_presenter.h:26` | Header comment for `vw_caption_presenter_clear` did not explicitly cite caller. | Doc comment expanded to explicitly cite `vw_plugin_close` (teardown-only) vs `vw_caption_presenter_blank` (mid-session OSD clear). | **RESOLVED** |
 
-### Architectural & Operational Risks
+---
 
-| Category | Risk Description | Affected Files | Mitigation Strategy |
-| --- | --- | --- | --- |
-| **Performance** | Sender thread calls `vlc_list_children()` every send iteration (~5-20ms) when checking pause state | `plugin/src/vw_whisper_module.c:323` | Cache parent input object pointer or limit object tree walk frequency to every N iterations (~100ms) |
-| **Latency** | Batch 8-second window inference results in ~8s presentation delay for live captions | `docs/plans/step15_plan.md:75` | Implement look-ahead ahead-of-time source file decoding (Steps 17c/17d) |
+### Architectural & Operational Observations
 
-### Code Style & Quality Nitpicks
-
-| Issue Type | File & Line | Description | Recommendation |
-| --- | --- | --- | --- |
-| **Duplicate Constant** | `protocol/include/vw_protocol_types.h:140` | `VW_CTRL_REASON_USER_PAUSE` and `VW_CTRL_REASON_USER_RESUME` are both defined as 1U | Consider distinct reason codes if telemetry requires distinguishing pause vs resume causes |
-| **Code Formatting** | `plugin/src/vw_worker_client.c:365` | `send_control_frame` helper function static linkage scope | Function correctly declared static; consistent with internal client helpers |
+| Category | Observation / Risk Description | Affected Files | Mitigation Strategy |
+|---|---|---|---|
+| **Jitter vs Seek** | `BLOCK_FLAG_DISCONTINUITY` is set on network re-buffer/jitter (VOD/live streams), not just user seeks. Flag-triggered restart without position jump gate clears captions on jittery streams. | `plugin/src/vw_whisper_module.c:L481` | Tracked for Step 17d: add `VW_INPUT_JUMP_DISCONTINUITY_US` position gate requiring a position jump in addition to the flag for live network streams. MVP behavior is safe and correct for local playback. |
+| **Symbol Export** | `vout_FlushSubpictureChannel` symbol exported via `plugin/libvlccore.def:L10` for Win32 MinGW linking. | `plugin/libvlccore.def`, `plugin/src/vw_caption_presenter.c:L125` | Exported in VLC 3.0.23 baseline. For future VLC build targets, `VW_WEAK` weak symbol resolution can be added if custom VLC builds omit the symbol export. |

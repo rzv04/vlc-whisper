@@ -137,8 +137,11 @@ typedef struct vw_msg_control {
 } vw_msg_control_t;
 
 // Control-message reason codes (vw_msg_control_t.reason), per docs/api-contracts.md.
-#define VW_CTRL_REASON_USER_PAUSE 1U   // PAUSE: user paused playback
-#define VW_CTRL_REASON_USER_RESUME 1U  // RESUME: user resumed playback
+#define VW_CTRL_REASON_USER_PAUSE 1U          // PAUSE: user paused playback
+#define VW_CTRL_REASON_USER_RESUME 1U         // RESUME: user resumed playback
+#define VW_CTRL_REASON_USER_STOP 1U           // STOP: user stopped the session
+#define VW_CTRL_REASON_SEEK_DISCONTINUITY 2U  // STOP: seek or discontinuity — new session epoch
+#define VW_CTRL_REASON_MEDIA_END 3U           // STOP: media ended
 
 typedef struct vw_msg_status {
   vw_session_id_t session_id;
