@@ -123,9 +123,11 @@ static bool vw_plugin_probe_ancestors(const char* file_path, int max_up, const c
 }
 
 // Resolves the vlc-whisper-worker executable path: plugin dir ancestors, then the exe dir.
+// Probes the GPU worker ("vlc-whisper-worker") first, then falls back to the CPU worker
+// ("vlc-whisper-worker-cpu") if only a CPU-preset binary was built/installed.
 static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
 #ifdef _WIN32
-  const char* worker_name = "vlc-whisper-worker.exe";
+  const char* worker_names[] = {"vlc-whisper-worker.exe", "vlc-whisper-worker-cpu.exe"};
   char plugin_path[MAX_PATH];
   HMODULE hmod = NULL;
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -133,27 +135,27 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
       hmod) {
     DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
     if (len > 0 && len < sizeof(plugin_path)) {
-      if (vw_plugin_probe_ancestors(plugin_path, 3, &worker_name, 1, out, out_size)) return true;
+      if (vw_plugin_probe_ancestors(plugin_path, 3, worker_names, 2, out, out_size)) return true;
     }
   }
   char exe_path[MAX_PATH];
   DWORD elen = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
   if (elen > 0 && elen < sizeof(exe_path)) {
-    if (vw_plugin_probe_ancestors(exe_path, 0, &worker_name, 1, out, out_size)) return true;
+    if (vw_plugin_probe_ancestors(exe_path, 0, worker_names, 2, out, out_size)) return true;
   }
   return false;
 #else
-  const char* worker_name = "vlc-whisper-worker";
+  const char* worker_names[] = {"vlc-whisper-worker", "vlc-whisper-worker-cpu"};
   Dl_info info;
   if (dladdr((void*)&vw_plugin_dl_anchor, &info) && info.dli_fname && info.dli_fname[0]) {
-    if (vw_plugin_probe_ancestors(info.dli_fname, 4, &worker_name, 1, out, out_size)) return true;
+    if (vw_plugin_probe_ancestors(info.dli_fname, 4, worker_names, 2, out, out_size)) return true;
   }
 #ifdef __linux__
   char exe_path[4096];
   ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
   if (n > 0) {
     exe_path[n] = '\0';
-    if (vw_plugin_probe_ancestors(exe_path, 0, &worker_name, 1, out, out_size)) return true;
+    if (vw_plugin_probe_ancestors(exe_path, 0, worker_names, 2, out, out_size)) return true;
   }
 #endif
   return false;

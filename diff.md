@@ -419,7 +419,33 @@
 
 ---
 
-### 1.16 `plugin/include/vw_caption_presenter.h`
+### 1.16 `docs/whisper-api.md`
+
+**Why change**: Document `vw_whisper_engine` C17 engine wrapper types (`vw_worker_backend_t`), initialization parameters (`model_path`, `backend`, `gpu_device`), default behaviors, and updated Vulkan GPU usage pattern per Rule 14.
+
+**Responsibility before**: Documented third-party `whisper.cpp` C API and CPU-only usage pattern.  
+**After**: Added documentation for `vw_whisper_engine` wrapper API, `vw_worker_backend_t` enum values (`AUTO`, `GPU`, `CPU`), device ordinal selection, and Vulkan GPU execution flow with automatic CPU fallback.
+
+**Callers**: Worker developers and API consumers.  
+**Callees**: None.
+
+**Happy path**: Developer reviews `docs/whisper-api.md` for engine wrapper signatures and usage patterns.
+
+**Failure path**: N/A.
+
+**Boundaries**: N/A.
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Document `vw_whisper_engine` API & backend options | `docs/whisper-api.md:L774-L840` | Manual Inspection | ✅ done |
+
+**Assumptions/Tradeoffs**: None.
+
+---
+
+### 1.17 `plugin/include/vw_caption_presenter.h`
 
 **Why change**: Declare `vw_caption_presenter_blank()` for mid-session OSD blanking and document `vw_caption_presenter_clear()` as teardown-only.
 
@@ -515,15 +541,15 @@
 
 ### 1.19 `plugin/src/vw_whisper_module.c`
 
-**Why change**: Implement seek/discontinuity epoch restart (`STOP` -> drain SPSC -> `START` with new `session_id`), position-jump detection (`VW_SEEK_JUMP_THRESHOLD_US = 1s`), pause baseline backfill, and PTS fallback check (`VW_PTS_JUMP_THRESHOLD_US = 500ms`).
+**Why change**: Implement seek/discontinuity epoch restart (`STOP` -> drain SPSC -> `START` with new `session_id`), position-jump detection (`VW_SEEK_JUMP_THRESHOLD_US = 1s`), pause baseline backfill, PTS fallback check (`VW_PTS_JUMP_THRESHOLD_US = 500ms`), and fallback candidate probing for `vlc-whisper-worker` / `vlc-whisper-worker-cpu` in `vw_plugin_resolve_worker_path`.
 
 **Responsibility before**: Audio callback and sender thread with play/pause lifecycle.  
-**After**: Audio callback with PTS jump fallback, sender thread with position-jump seek detection, OSD blanking, and session epoch restart.
+**After**: Audio callback with PTS jump fallback, sender thread with position-jump seek detection, OSD blanking, session epoch restart, and multi-candidate worker executable resolution (`vlc-whisper-worker` then `vlc-whisper-worker-cpu`).
 
 **Callers**: VLC module loader, VLC audio pipeline (`pf_audio_filter`), sender thread.  
-**Callees**: `vw_caption_presenter_blank`, `vw_worker_client_stop_session`, `vw_spsc_queue_pop`, `vw_worker_client_start_session`, `vw_plugin_find_input`, `input_GetState`, `vw_plugin_input_position_us`.
+**Callees**: `vw_caption_presenter_blank`, `vw_worker_client_stop_session`, `vw_spsc_queue_pop`, `vw_worker_client_start_session`, `vw_plugin_find_input`, `input_GetState`, `vw_plugin_input_position_us`, `vw_plugin_probe_ancestors`.
 
-**Happy path**: Callback or sender poll detects seek, sets `discontinuity_pending = true`. Sender thread blanks OSD, sends `STOP_SESSION(SEEK_DISCONTINUITY)`, drains pre-seek PCM from SPSC queue, and sends `START_SESSION` with new session ID and PTS anchor.
+**Happy path**: Callback or sender poll detects seek, sets `discontinuity_pending = true`. Sender thread blanks OSD, sends `STOP_SESSION(SEEK_DISCONTINUITY)`, drains pre-seek PCM from SPSC queue, and sends `START_SESSION` with new session ID and PTS anchor. On startup, `vw_plugin_resolve_worker_path` checks for GPU worker `vlc-whisper-worker` and falls back to CPU worker `vlc-whisper-worker-cpu`.
 
 **Failure path**: Worker rejects restart; sender sets `worker_dead = true`, logs warning, breaks loop, and plugin degrades to audio passthrough.
 
@@ -531,7 +557,7 @@
 
 | Boundary type | What to check |
 | --- | --- |
-| **Input validation** | `p_block->i_pts >= VLC_TS_0` + `last_pts_us > 0` guards; `position_us >= 0` guards; threshold macros (1s / 500ms) |
+| **Input validation** | `p_block->i_pts >= VLC_TS_0` + `last_pts_us > 0` guards; `position_us >= 0` guards; threshold macros (1s / 500ms); candidate name array bounds |
 | **Authorization** | CSPRNG auth token verification |
 | **Concurrency** | Lock-free audio callback (Rule 4), writes only atomic bool/int64; sender thread executes restart sequence exclusively |
 | **I/O** | Non-blocking SPSC queue drain; IPC control frames |
@@ -544,6 +570,7 @@
 | 1 | Seek discontinuity session restart | `plugin/src/vw_whisper_module.c:L318-L335` | `test_worker_lifecycle` | ✅ done |
 | 2 | Paused seek baseline backfill | `plugin/src/vw_whisper_module.c:L274, L286` | Code Review | ✅ done |
 | 3 | Threshold macros | `plugin/src/vw_whisper_module.c:L57-L58` | Code Review | ✅ done |
+| 4 | Worker binary fallback probing (GPU then CPU) | `plugin/src/vw_whisper_module.c:L128, L148` | `test_plugin_load` | ✅ done |
 
 **Assumptions/Tradeoffs**: None.
 
