@@ -4,11 +4,47 @@ Offline, real-time speech captions inside VLC for local media.
 
 ---
 
-## Cloning the Project
+## System Prerequisites
+
+To build and test the project, install the required packages for your development environment:
+
+### Ubuntu / Debian
 
 ```bash
-git clone <repository-url>
+# Core build system and native compilers
+sudo apt-get update && sudo apt-get install -y \
+  cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr
+
+# MinGW-w64 cross-compilers (required for Windows x64 targets)
+sudo apt-get install -y \
+  gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+
+# Vulkan SDK and shader compiler (required for Linux GPU acceleration)
+sudo apt-get install -y libvulkan-dev glslc
+```
+
+### Fedora / RHEL
+
+```bash
+sudo dnf install -y cmake ninja-build gcc gcc-c++ clang-tools-extra valgrind \
+  mingw64-gcc mingw64-gcc-c++ vulkan-loader-devel glslc
+```
+
+---
+
+## Cloning the Project
+
+The repository includes `whisper.cpp` as a Git submodule in `worker/third_party/whisper.cpp`. Clone recursively so all submodules are initialized:
+
+```bash
+git clone --recursive <repository-url>
 cd vlc-whisper
+```
+
+If you already cloned without `--recursive`, initialize submodules before configuring CMake:
+
+```bash
+git submodule update --init --recursive
 ```
 
 ### Optional: enable [conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) hook locally ([conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) will be enforced in CI)
@@ -21,26 +57,89 @@ git config --local core.hooksPath .githooks
 
 ## Building the Project
 
-The project uses CMake (minimum version 3.20) with Ninja and CMake Presets for cross-compiling Windows x64 binaries from Linux using MinGW GCC.
+The project uses CMake (minimum version 3.20) with Ninja and CMake Presets for both native Linux development and cross-compiling standalone Windows x64 binaries via MinGW GCC.
 
-### Option 1: Using CMake Presets (Recommended)
+### Available Presets in `CMakePresets.json`
+
+| Preset Name               | Target OS & Type      | Backend                        | Output Worker Binary         | Notes                                      |
+| ------------------------- | --------------------- | ------------------------------ | ---------------------------- | ------------------------------------------ |
+| `linux-x64-debug`         | Linux Native (Debug)  | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker`         | Primary Linux dev & test target            |
+| `linux-x64-debug-cpu`     | Linux Native (Debug)  | CPU-only                       | `vlc-whisper-worker-cpu`     | No Vulkan/glslc requirement                |
+| `linux-x64-coverage`      | Linux Native (Debug)  | CPU-only + gcov                | `vlc-whisper-worker-cpu`     | Code coverage instrumentation              |
+| `windows-x64-release`     | Windows x64 (Release) | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe`     | Requires `VW_VULKAN_SDK` (see below)       |
+| `windows-x64-release-cpu` | Windows x64 (Release) | CPU-only                       | `vlc-whisper-worker-cpu.exe` | Fully self-contained, no Vulkan SDK needed |
+| `windows-x64-debug`       | Windows x64 (Debug)   | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe`     | Debug symbols included                     |
+| `windows-x64-debug-cpu`   | Windows x64 (Debug)   | CPU-only                       | `vlc-whisper-worker-cpu.exe` | Debug symbols, CPU-only                    |
+
+---
+
+### Building on Linux (Native)
+
+#### 1. Linux GPU Build (Vulkan Acceleration)
+
+Requires `libvulkan-dev` and `glslc`.
 
 ```bash
-# Configure the Windows x64 Release build
-cmake --preset windows-x64-release
-
-# Build primary targets (protocol library, worker executable, native plugin, unit tests)
-cmake --build --preset windows-x64-release
-
-# Run unit and integration tests
-ctest --preset windows-x64-release
+cmake --preset linux-x64-debug
+cmake --build --preset linux-x64-debug -j4
+ctest --preset linux-x64-debug --output-on-failure
 ```
 
-Available presets in `CMakePresets.json`:
+_(If `glslc` or `libvulkan-dev` is missing, CMake will warn and automatically degrade to building `vlc-whisper-worker-cpu`)._
 
-- `windows-x64-release` (Windows x64 Release via MinGW cross-compiler)
-- `windows-x64-debug` (Windows x64 Debug via MinGW cross-compiler)
-- `linux-x64-debug` (Host native Linux debug build for local testing)
+#### 2. Linux CPU-Only Build
+
+```bash
+cmake --preset linux-x64-debug-cpu
+cmake --build --preset linux-x64-debug-cpu -j4
+```
+
+---
+
+### Building for Windows (MinGW Cross-Compilation from Linux)
+
+#### 1. Windows CPU-Only Build (No Vulkan SDK required)
+
+Produces statically-linked, standalone Windows binaries with zero external DLL dependencies:
+
+```bash
+cmake --preset windows-x64-release-cpu
+cmake --build --preset windows-x64-release-cpu -j4
+```
+
+_Outputs_: `build/windows-x64-release-cpu/bin/vlc-whisper-worker-cpu.exe` and `build/windows-x64-release-cpu/bin/libvlc_whisper_plugin.dll`.
+
+#### 2. Windows GPU Build (Vulkan Accelerated)
+
+Cross-compiling `ggml-vulkan` for Windows requires target Windows Vulkan import headers and MinGW library (`libvulkan-1.a`).
+
+Set the `VW_VULKAN_SDK` environment variable pointing to the Windows Vulkan MinGW layout:
+
+```text
+$VW_VULKAN_SDK/
+├── mingw/
+│   ├── include/vulkan/ (vulkan.h, etc.)
+│   └── lib/libvulkan-1.a
+└── spv/
+    └── include/spirv/ (unified1/spirv.h, etc.)
+```
+
+Build command:
+
+```bash
+VW_VULKAN_SDK=/path/to/vulkan-sdk cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release -j4
+```
+
+_(Without `VW_VULKAN_SDK`, `windows-x64-release` prints a warning and automatically falls back to producing the CPU-only worker `vlc-whisper-worker-cpu.exe`)._
+
+---
+
+### GPU (Vulkan) Runtime Notes & Build Memory Limits
+
+- **Runtime Fallback**: When `--backend auto` (default) or `--backend gpu` is used, `whisper.cpp` probes the GPU and transparently falls back to CPU if no physical Vulkan driver/GPU is present at runtime.
+- **Worker Flags**: Pass `--backend auto|gpu|cpu` or `--gpu-device <id>` when launching the worker manually.
+- **Build RAM Usage**: Compiling Vulkan SPIR-V shaders (`glslc`) creates high memory pressure. On systems with ≤8 GB RAM or VMs, limit build concurrency to `-j1` or `-j2` (e.g. `cmake --build --preset <preset> -j1`) to avoid OOM or swap thrashing. The `*-cpu` presets do not invoke `glslc` and are low-memory build targets.
 
 ---
 
@@ -56,7 +155,8 @@ To compile and run tests natively on Linux during development:
 # Configure the native Linux debug build
 cmake --preset linux-x64-debug
 
-# Build tests with 4 parallel jobs
+# Build tests (use -j2 on low-RAM hosts: the first Vulkan build compiles glslc shaders,
+# which spikes memory — see the GPU acceleration section above)
 cmake --build --preset linux-x64-debug -j4
 
 # Run tests and show output for failed ones
@@ -171,7 +271,7 @@ To install and verify the VLC plugin manually on Windows:
 
 3. **Install the Model**: Copy `ggml-tiny.en.bin` next to the worker (VLC root), into a `models\` subdirectory of any ancestor of the plugin, or next to the VLC executable — the plugin probes `<dir>\ggml-tiny.en.bin` and `<dir>\models\ggml-tiny.en.bin` during module open. If the model lives elsewhere, set the module option `--vlc-whisper-model-path` (a.k.a. `model-path`) to its full path. Without a model, captions are disabled cleanly (`E_MODEL_MISSING`) and playback is unaffected.
 
-3. **Reset Plugin Cache & Verify Registration**:
+4. **Reset Plugin Cache & Verify Registration**:
    Open Command Prompt or PowerShell and run:
 
    ```cmd
@@ -182,7 +282,7 @@ To install and verify the VLC plugin manually on Windows:
 
    **Listed ≠ active.** The module being listed (or shown as "enabled" in Tools → Preferences) does not mean it runs: an audio filter is only instantiated when it is actually in the audio chain. Either (a) pass `--audio-filter=vlc_whisper` on the command line, or (b) enable it in Preferences → All → Audio → Filters (it appears there because the module declares the audio-filter subcategory). If you toggle it in the GUI, restart VLC before playing.
 
-4. **Inspect Debug Logs**:
+5. **Inspect Debug Logs**:
    Audio filters only instantiate when audio media is playing and the filter is explicitly selected in the audio chain. To trigger `vw_plugin_open` and write debug output to a file:
 
    ```cmd
@@ -193,6 +293,6 @@ To install and verify the VLC plugin manually on Windows:
 
    _Expected Output_: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.
 
-   **Success signal**: while the audio plays, `vlc-whisper-worker.exe` must appear in Task Manager (it is a long-lived process, not a flash; with `CREATE_NO_WINDOW` it shows under *Background processes*, not Apps). If it appears, the plugin spawned it; if `PLUGIN_OPEN` is logged but no worker appears, check `PLUGIN_WORKER_UNAVAILABLE`/`PLUGIN_SESSION_START_FAIL` in the log (worker path, model path, or spawn failure). If `PLUGIN_OPEN` itself is missing, the filter is not in the chain — re-check `--audio-filter=vlc_whisper` and the module cache.
+   **Success signal**: while the audio plays, `vlc-whisper-worker.exe` must appear in Task Manager (it is a long-lived process, not a flash; with `CREATE_NO_WINDOW` it shows under _Background processes_, not Apps). If it appears, the plugin spawned it; if `PLUGIN_OPEN` is logged but no worker appears, check `PLUGIN_WORKER_UNAVAILABLE`/`PLUGIN_SESSION_START_FAIL` in the log (worker path, model path, or spawn failure). If `PLUGIN_OPEN` itself is missing, the filter is not in the chain — re-check `--audio-filter=vlc_whisper` and the module cache.
 
    **Worker diagnostics**: the worker is spawned with no console, so its stdout/stderr (whisper output, worker lifecycle logs) are captured to `%TEMP%\vlc-whisper-worker.log` on Windows (`/tmp/vlc-whisper-worker.log` or `$XDG_RUNTIME_DIR` on Linux) — truncated every run, so it always holds the last worker session. When diagnosing "worker died" issues, check this file — it shows `WORKER_LIFECYCLE`/`WORKER_ENGINE`/`WORKER_SESSION`/`WORKER_INFERENCE`/`WORKER_READER` events up to the crash. To place the log elsewhere, pass `--vlc-whisper-worker-path ... --log-file <path>` via the worker invocation (the plugin passes through `worker-path`; for a custom worker log location, set the `model-path`-style worker option or launch the worker manually with `--log-file`). The VLC log additionally carries `PLUGIN_WORKER_LAUNCH` (resolved worker path), `PLUGIN_WORKER_CONNECT`, and `PLUGIN_WORKER_DEAD` (failing call + chunk count).

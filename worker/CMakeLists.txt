@@ -13,12 +13,37 @@ if(WIN32)
     set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 endif()
 
-# GPU whisper (Vulkan) is roadmap step 17a — out of scope for the MVP worker. ggml auto-enables
-# GGML_VULKAN when a Vulkan SDK is present on the build host (e.g. /home/razvan/vw-vulkan), which
-# links ggml-vulkan + the SDK's libvulkan and makes the exe import vulkan-1.dll at runtime — a
-# non-system dependency on bare/old Windows, and a host-dependent (non-reproducible) build. Pin it
-# OFF for the worker so every host builds the same CPU-only binary.
+# GPU whisper (Vulkan) acceleration — roadmap step 17a, default ON. When the Vulkan SDK (with
+# glslc) is present, ggml-vulkan is enabled and the exe links the Vulkan loader at link time
+# (imports vulkan-1.dll/libvulkan.so at runtime; the CPU fallback only runs when the loader is
+# present). VW_WITH_VULKAN=OFF builds a fully portable CPU-only worker (output name -cpu) for
+# loader-less/old targets. Build-memory note: compiling ggml-vulkan shaders (glslc +
+# vulkan-shaders-gen ExternalProject) is RAM-hungry — on 8GB hosts keep build parallelism modest
+# (ninja -j2/-j4) to avoid OOM/swap thrash (see milestone3 postmortem).
+option(VW_WITH_VULKAN "worker: build whisper.cpp with ggml-vulkan GPU backend" ON)
+
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+if(VW_WITH_VULKAN)
+    # The Windows MinGW toolchain sets FIND_ROOT_PATH_MODE_PACKAGE ONLY, so find_package(Vulkan)
+    # can never see the host SDK. Allow an explicit SDK root (postmortem layout: <root>/mingw for
+    # libs+headers, <root>/spv for SPIRV-Headers) to be injected into the cross find path:
+    #   VW_VULKAN_SDK=/home/razvan/vw-vulkan cmake --preset windows-x64-debug
+    if(DEFINED ENV{VW_VULKAN_SDK} AND NOT "$ENV{VW_VULKAN_SDK}" STREQUAL "")
+        list(APPEND CMAKE_FIND_ROOT_PATH "$ENV{VW_VULKAN_SDK}/mingw" "$ENV{VW_VULKAN_SDK}/spv")
+        list(APPEND CMAKE_PREFIX_PATH "$ENV{VW_VULKAN_SDK}/mingw" "$ENV{VW_VULKAN_SDK}/spv")
+        set(Vulkan_INCLUDE_DIR "$ENV{VW_VULKAN_SDK}/mingw/include" CACHE PATH "" FORCE)
+        message(STATUS "VW: using Vulkan SDK root '$ENV{VW_VULKAN_SDK}' for cross find path")
+    endif()
+    # Probe for the SDK + glslc (same COMPONENTS ggml-vulkan will require). Non-required here so a
+    # missing SDK degrades to a CPU-only build with a warning instead of a hard configure failure.
+    find_package(Vulkan COMPONENTS glslc)
+    if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
+        message(STATUS "VW: Vulkan SDK found — enabling ggml-vulkan GPU backend")
+        set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    else()
+        message(WARNING "VW: VW_WITH_VULKAN=ON but no Vulkan SDK/glslc found — building CPU-only worker")
+    endif()
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -54,6 +79,14 @@ target_compile_options(vlc-whisper-worker PRIVATE
     -Wextra
     -Wpedantic
 )
+
+# Dist artifact naming: the GPU (default) build keeps the canonical name the plugin discovers;
+# the CPU-only build gets a distinct -cpu suffix so both can ship side by side (see plan 17a).
+if(GGML_VULKAN)
+    set_target_properties(vlc-whisper-worker PROPERTIES OUTPUT_NAME "vlc-whisper-worker")
+else()
+    set_target_properties(vlc-whisper-worker PROPERTIES OUTPUT_NAME "vlc-whisper-worker-cpu")
+endif()
 
 target_link_libraries(vlc-whisper-worker PRIVATE
     vw_protocol

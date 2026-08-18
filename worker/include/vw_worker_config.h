@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "vw_protocol_types.h"
+#include "vw_whisper_engine.h"
 
 typedef struct vw_worker_config {
   char model_path[VW_PATH_MAX_BYTES];
@@ -13,6 +14,8 @@ typedef struct vw_worker_config {
   char pipe_name[256];
   char log_file[512];  // --log-file override; empty = default temp-dir log
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
+  vw_worker_backend_t backend;  // --backend auto|gpu|cpu (default AUTO)
+  int gpu_device;               // --gpu-device <id>: ordinal into whisper's GPU/IGPU device list
 } vw_worker_config_t;
 
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);

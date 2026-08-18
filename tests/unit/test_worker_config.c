@@ -24,6 +24,8 @@ int main(void) {
     EXPECT(cfg.sample_rate == 16000u);
     EXPECT(cfg.pipe_name[0] == '\0');
     EXPECT(memcmp(cfg.auth_token, zeros, VW_AUTH_TOKEN_BYTES) == 0);
+    EXPECT(cfg.backend == VW_WORKER_BACKEND_AUTO);
+    EXPECT(cfg.gpu_device == 0);
   }
 
   // --- success: valid --token, --pipe, --model ---
@@ -56,6 +58,47 @@ int main(void) {
     EXPECT(cfg.log_file[0] == '\0');  // empty => default temp-dir log
   }
 
+  // --- success: --backend and --gpu-device parsing (step 17a) ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_gpu[] = {"vlc-whisper-worker", "--backend", "gpu", "--gpu-device", "1", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 5, argv_gpu) == 0);
+    EXPECT(cfg.backend == VW_WORKER_BACKEND_GPU);
+    EXPECT(cfg.gpu_device == 1);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_cpu[] = {"vlc-whisper-worker", "--backend", "cpu", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_cpu) == 0);
+    EXPECT(cfg.backend == VW_WORKER_BACKEND_CPU);
+    EXPECT(cfg.gpu_device == 0);  // untouched
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_auto[] = {"vlc-whisper-worker", "--backend", "auto", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 0);
+    EXPECT(cfg.backend == VW_WORKER_BACKEND_AUTO);
+  }
+
+  // --- failure: bad --backend value, negative --gpu-device, dangling flags ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_bad_backend[] = {"vlc-whisper-worker", "--backend", "cuda", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_bad_backend) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_neg_device[] = {"vlc-whisper-worker", "--gpu-device", "-1", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_neg_device) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_dangling[] = {"vlc-whisper-worker", "--backend", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_bad_device[] = {"vlc-whisper-worker", "--gpu-device", "abc", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_bad_device) == 2);
+  }
+
   // --- failure: --token too short ---
   {
     vw_worker_config_t cfg;
@@ -84,12 +127,24 @@ int main(void) {
     EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_unknown) == 2);
   }
 
-  // --- failure: dangling --token with no value ---
+  // --- failure: dangling options with no value ---
   {
     vw_worker_config_t cfg;
     vw_worker_config_init_defaults(&cfg);
-    char* argv_dangling[] = {"vlc-whisper-worker", "--pipe", "/tmp/vw.sock", "--token", NULL};
-    EXPECT(vw_worker_config_parse_args(&cfg, 4, argv_dangling) == 2);
+    char* argv_dangling_tok[] = {"vlc-whisper-worker", "--pipe", "/tmp/vw.sock", "--token", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 4, argv_dangling_tok) == 2);
+
+    char* argv_dangling_pipe[] = {"vlc-whisper-worker", "--pipe", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_pipe) == 2);
+
+    char* argv_dangling_model[] = {"vlc-whisper-worker", "--model", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_model) == 2);
+
+    char* argv_dangling_log[] = {"vlc-whisper-worker", "--log-file", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_log) == 2);
+
+    char* argv_dangling_gpu[] = {"vlc-whisper-worker", "--gpu-device", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_gpu) == 2);
   }
 
   // --- failure: NULL config ---

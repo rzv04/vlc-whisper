@@ -38,7 +38,7 @@ static int running_under_valgrind(void) { return 0; }
 
 int main(void) {
   // 1. Invalid or non-existent model path returns NULL cleanly
-  vw_whisper_engine_t* null_eng = vw_whisper_engine_init("no_such_model_file.bin");
+  vw_whisper_engine_t* null_eng = vw_whisper_engine_init("no_such_model_file.bin", VW_WORKER_BACKEND_CPU, 0);
   EXPECT(null_eng == NULL);
 
   // 2. Check for model file in CWD or build parent directories
@@ -67,7 +67,7 @@ int main(void) {
   }
 
   // 3. Model present: test engine init, silent transcribe, and get_text
-  vw_whisper_engine_t* eng = vw_whisper_engine_init(model_path);
+  vw_whisper_engine_t* eng = vw_whisper_engine_init(model_path, VW_WORKER_BACKEND_CPU, 0);
   EXPECT(eng != NULL);
 
   float pcm[16000] = {0};
