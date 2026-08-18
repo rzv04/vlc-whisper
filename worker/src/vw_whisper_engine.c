@@ -12,6 +12,7 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
 
   struct whisper_context_params cparams = whisper_context_default_params();
   cparams.use_gpu = (backend != VW_WORKER_BACKEND_CPU);
+  // Clamps negative gpu_device to 0 (CLI rejects <0, this guards direct API callers).
   cparams.gpu_device = (gpu_device >= 0) ? gpu_device : 0;
   struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
   if (!ctx) {
@@ -19,7 +20,7 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   }
   // whisper's GPU fallback is silent (always returns a valid context); make the effective
   // backend observable. whisper itself logs "no GPU found" at INFO when the GPU path degrades.
-  vw_log_event(cparams.use_gpu ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_INFO, "WORKER_ENGINE",
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE",
                cparams.use_gpu ? "inference backend: gpu (auto CPU fallback if no device)" : "inference backend: cpu");
 
   vw_whisper_engine_t* eng = (vw_whisper_engine_t*)calloc(1, sizeof(vw_whisper_engine_t));

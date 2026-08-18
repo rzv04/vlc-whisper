@@ -1,7 +1,7 @@
 # Diff Analysis: gemini/milestone-3-step-17a (GPU Vulkan & Seek Lifecycle)
 
-**31 files changed, +809 / -620 lines**  
-**Base**: `gemini/milestone-3`
+**18 files changed, +1073 / -433 lines vs current `gemini/milestone-3` (post fast-forward; previous header +809/-620 was vs pre-merge base — see note below)**  
+**Base**: `gemini/milestone-3` (at `1c3ff2c`, includes step-17 seek; for the cumulative 31-file report vs pre-17 base see git log)
 
 ---
 
@@ -1127,21 +1127,30 @@ The following trace outlines worker startup, Vulkan GPU initialization, audio st
 
 ### Bugs (Sorted by Priority)
 
-| Priority | Component / Location | Description | Impact | Proposed Fix |
+| Priority | Component / Location | Description | Impact | Proposed Fix / Status |
 |---|---|---|---|---|
-| **Medium** | `worker/CMakeLists.txt:34` | When cross-compiling with `VW_VULKAN_SDK`, `find_package(Vulkan)` can pick up host `/usr/include` from host `glslc`, causing header conflicts with MinGW CRT. | MinGW cross-build failure on `ggml-vulkan.cpp` | Explicitly set `Vulkan_INCLUDE_DIR` to `$ENV{VW_VULKAN_SDK}/mingw/include` in CMake when `VW_VULKAN_SDK` is defined. (Fixed in working tree). |
-| **Low** | `worker/src/vw_worker_config.c:78` | `strtol` return value check allowed values up to `LONG_MAX` before casting to `int`. | Possible integer overflow on out-of-range device numbers | Added explicit range check `id >= 0 && id <= 65535` before casting to `int`. (Fixed in working tree). |
+| **Medium** | `worker/CMakeLists.txt:34` | When cross-compiling with `VW_VULKAN_SDK`, `find_package(Vulkan)` can pick up host `/usr/include` from host `glslc`, causing header conflicts with MinGW CRT. | MinGW cross-build failure on `ggml-vulkan.cpp` | Explicitly set `Vulkan_INCLUDE_DIR` to `$ENV{VW_VULKAN_SDK}/mingw/include` in CMake when `VW_VULKAN_SDK` is defined. (**RESOLVED**). |
+| **Low** | `worker/src/vw_whisper_engine.c:22` | `vw_log_event(cparams.use_gpu ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_INFO, ...)` — redundant ternary over identical values. | Code hygiene / potential dead code warning | Collapsed to single `VW_LOG_LEVEL_INFO`. (**RESOLVED**). |
+| **Low** | `CMakePresets.json` testPresets | Three `*-cpu` configurePresets existed but were absent from `testPresets`. | `ctest --preset linux-x64-debug-cpu` failed with unknown preset | Added `linux-x64-debug-cpu`, `windows-x64-release-cpu`, and `windows-x64-debug-cpu` to `testPresets`. (**RESOLVED**). |
+| **Low** | `worker/include/vw_whisper_engine.h:8` | Header included `vw_worker_config.h` solely for `vw_worker_backend_t`. | Unnecessary coupling between engine abstraction and worker config | Moved `vw_worker_backend_t` to `vw_whisper_engine.h`; `vw_worker_config.h` includes `vw_whisper_engine.h`. (**RESOLVED**). |
+| **Low** | `worker/src/vw_worker_config.c:51-86` | Options with missing values fell through to `unknown option` error message. | Misleading CLI error reporting | Added explicit `missing value for <option>` checks for all flags; added unit tests in `test_worker_config.c`. (**RESOLVED**). |
+| **Low** | `worker/src/vw_whisper_engine.c:15` | Negative `gpu_device` values clamped to 0 without documentation. | Hides caller expectations | Added clarifying documentation comment for direct API callers. (**RESOLVED**). |
+| **Low** | `worker/src/vw_worker_config.c:78` | `strtol` return value check allowed values up to `LONG_MAX` before casting to `int`. | Possible integer overflow on out-of-range device numbers | Added explicit range check `id >= 0 && id <= 65535` before casting to `int`. (**RESOLVED**). |
 
 ### Architectural & Operational Risks
 
 | Category | Risk Description | Affected Files | Mitigation Strategy |
 |---|---|---|---|
-| **Resource Consumption** | Compiling Vulkan compute shaders (`glslc` + `vulkan-shaders-gen`) creates significant memory spikes during parallel builds (`ninja -j`), which can trigger OOM kills on hosts with <= 8 GB RAM. | `worker/CMakeLists.txt`, `README.md` | Documented build memory limits in `README.md` and `step17a_plan.md`, recommending `-j2` or `-j4` for GPU builds. Added explicit `*-cpu` presets for low-memory environments. |
+| **Resource Consumption** | Compiling Vulkan compute shaders (`glslc` + `vulkan-shaders-gen`) creates significant memory spikes during parallel builds (`ninja -j`), which can trigger OOM kills on hosts with <= 8 GB RAM. | `worker/CMakeLists.txt`, `README.md` | Documented build memory limits in `README.md` and `step17a_plan.md`, recommending `-j1` or `-j2` for GPU builds. Added explicit `*-cpu` presets for low-memory environments. |
 | **Runtime Dependency** | The Windows GPU worker (`vlc-whisper-worker.exe`) imports `vulkan-1.dll` at load time. On legacy Windows installations lacking Vulkan drivers, process loader fails before main. | `worker/CMakeLists.txt`, `README.md` | Documented runtime dependency; provided separate standalone `vlc-whisper-worker-cpu.exe` binary via `windows-x64-release-cpu` preset for loader-less machines. |
 
 ### Code Style & Quality Nitpicks
 
 | Issue Type | File & Line | Description | Recommendation |
 |---|---|---|---|
-| **Logging Clarity** | `worker/src/vw_whisper_engine.c:22` | Engine startup log specifies `"inference backend: gpu (auto CPU fallback if no device)"` when `use_gpu` is true. | Accurate and observable; transparent fallback is logged by whisper.cpp as `"no GPU found"`. |
-| **Naming Consistency** | `worker/include/vw_worker_config.h:12` | `vw_worker_backend_t` enum uses prefix `VW_WORKER_BACKEND_` matching project naming conventions. | Retain `vw_` symbol namespacing. |
+| **Tautological Ternary** | `worker/src/vw_whisper_engine.c:22` | Redundant `? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_INFO`. | Fixed by removing ternary branch. |
+| **Header Coupling** | `worker/include/vw_whisper_engine.h:8` | Whisper header coupled to `vw_worker_config.h`. | Fixed by moving enum definition to engine header. |
+| **CLI Dangling-Value UX** | `worker/src/vw_worker_config.c:51-86` | Option with no value misreported as `unknown option`. | Fixed with dedicated `missing value for <flag>` guards. |
+| **Silent gpu_device Clamp** | `worker/src/vw_whisper_engine.c:15` | Negatives silently remapped to 0. | Documented inline behavior. |
+| **Missing *-cpu testPresets** | `CMakePresets.json:133-149` | `*-cpu` builds had no `ctest --preset` entry. | Added test presets for all CPU configurations. |
+| **Naming Consistency** | `worker/include/vw_whisper_engine.h:11` | `vw_worker_backend_t` enum uses prefix `VW_WORKER_BACKEND_` matching project naming conventions. | Retained `vw_` symbol namespacing. |

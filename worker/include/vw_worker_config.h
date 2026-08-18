@@ -5,15 +5,7 @@
 #include <stdint.h>
 
 #include "vw_protocol_types.h"
-
-// Inference backend selection (step 17a). AUTO = use_gpu=true (whisper picks the first
-// GPU/IGPU device and transparently falls back to CPU when none exists); GPU forces the same
-// GPU-first path; CPU forces use_gpu=false (never consults GPU devices).
-typedef enum vw_worker_backend {
-  VW_WORKER_BACKEND_AUTO = 0,
-  VW_WORKER_BACKEND_GPU,
-  VW_WORKER_BACKEND_CPU,
-} vw_worker_backend_t;
+#include "vw_whisper_engine.h"
 
 typedef struct vw_worker_config {
   char model_path[VW_PATH_MAX_BYTES];

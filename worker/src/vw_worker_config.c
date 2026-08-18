@@ -49,18 +49,38 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
     return 2;
   }
   for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--token") == 0 && i + 1 < argc) {
+    if (strcmp(argv[i], "--token") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --token\n");
+        return 2;
+      }
       if (!vw_token_from_hex(argv[++i], config->auth_token)) {
         fprintf(stderr, "bad --token: expected 64 hex chars\n");
         return 2;
       }
-    } else if (strcmp(argv[i], "--pipe") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--pipe") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --pipe\n");
+        return 2;
+      }
       snprintf(config->pipe_name, sizeof(config->pipe_name), "%s", argv[++i]);
-    } else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--model") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --model\n");
+        return 2;
+      }
       snprintf(config->model_path, sizeof(config->model_path), "%s", argv[++i]);
-    } else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--log-file") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --log-file\n");
+        return 2;
+      }
       snprintf(config->log_file, sizeof(config->log_file), "%s", argv[++i]);
-    } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--backend") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --backend\n");
+        return 2;
+      }
       const char* b = argv[++i];
       if (strcmp(b, "auto") == 0) {
         config->backend = VW_WORKER_BACKEND_AUTO;
@@ -72,7 +92,11 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "bad --backend: expected auto|gpu|cpu, got '%s'\n", b);
         return 2;
       }
-    } else if (strcmp(argv[i], "--gpu-device") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--gpu-device") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --gpu-device\n");
+        return 2;
+      }
       char* end = NULL;
       long id = strtol(argv[++i], &end, 10);
       if (end == argv[i] || *end != '\0' || id < 0 || id > 65535) {

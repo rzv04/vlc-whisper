@@ -131,8 +131,36 @@
       }
     },
     {
+      "name": "windows-x64-release-cpu",
+      "configurePreset": "windows-x64-release-cpu",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-debug",
+      "configurePreset": "windows-x64-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-debug-cpu",
+      "configurePreset": "windows-x64-debug-cpu",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
       "name": "linux-x64-debug",
       "configurePreset": "linux-x64-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-x64-debug-cpu",
+      "configurePreset": "linux-x64-debug-cpu",
       "output": {
         "outputOnFailure": true
       }
