@@ -19,6 +19,19 @@
       }
     },
     {
+      "name": "windows-x64-release-cpu",
+      "displayName": "Windows x64 Release CPU-only (MinGW Cross)",
+      "description": "Cross-compile Windows x64 release worker without Vulkan (vlc-whisper-worker-cpu.exe, runs on loader-less machines)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-x64-release-cpu",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows-x64-mingw.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON",
+        "VW_WITH_VULKAN": "OFF"
+      }
+    },
+    {
       "name": "windows-x64-debug",
       "displayName": "Windows x64 Debug (MinGW Cross)",
       "description": "Cross-compile Windows x64 debug binaries with debug symbols",
@@ -31,6 +44,19 @@
       }
     },
     {
+      "name": "windows-x64-debug-cpu",
+      "displayName": "Windows x64 Debug CPU-only (MinGW Cross)",
+      "description": "Cross-compile Windows x64 debug worker without Vulkan (vlc-whisper-worker-cpu.exe, runs on loader-less machines)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-x64-debug-cpu",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows-x64-mingw.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON",
+        "VW_WITH_VULKAN": "OFF"
+      }
+    },
+    {
       "name": "linux-x64-debug",
       "displayName": "Linux x64 Debug (Host Native)",
       "description": "Native Linux x64 debug build for unit tests and local protocol checks",
@@ -39,6 +65,18 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "linux-x64-debug-cpu",
+      "displayName": "Linux x64 Debug CPU-only (Host Native)",
+      "description": "Native Linux x64 debug build without Vulkan (vlc-whisper-worker-cpu)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x64-debug-cpu",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON",
+        "VW_WITH_VULKAN": "OFF"
       }
     },
     {
@@ -60,12 +98,24 @@
       "configurePreset": "windows-x64-release"
     },
     {
+      "name": "windows-x64-release-cpu",
+      "configurePreset": "windows-x64-release-cpu"
+    },
+    {
       "name": "windows-x64-debug",
       "configurePreset": "windows-x64-debug"
     },
     {
+      "name": "windows-x64-debug-cpu",
+      "configurePreset": "windows-x64-debug-cpu"
+    },
+    {
       "name": "linux-x64-debug",
       "configurePreset": "linux-x64-debug"
+    },
+    {
+      "name": "linux-x64-debug-cpu",
+      "configurePreset": "linux-x64-debug-cpu"
     },
     {
       "name": "linux-x64-coverage",

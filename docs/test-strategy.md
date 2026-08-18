@@ -58,6 +58,7 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/integration/test_worker_lifecycle.c` (16): model-gated section sends PAUSE/RESUME mid-stream before STOP/SHUTDOWN, proving the worker survives both controls with exit 0.
 - `tests/unit/vw_test_worker_client.c` (17): fake server decodes the `STOP` payload and asserts `reason == VW_CTRL_REASON_SEEK_DISCONTINUITY`.
 - `tests/integration/test_worker_lifecycle.c` (17): model-gated section runs STOP(SEEK_DISCONTINUITY) → START (new session_id, new PTS epoch) → AUDIO → STOP → SHUTDOWN on one connection, proving the worker accepts the restart cycle and drops stale pre-seek audio (exit 0).
+- `tests/unit/test_worker_config.c` (17a): `--backend auto|gpu|cpu` and `--gpu-device` parsing (success + bad value/negative/dangling), backend defaults (AUTO, device 0). Engine tests force `VW_WORKER_BACKEND_CPU` for determinism. Build matrix smoke (manual): default preset links Vulkan; `*-cpu` preset emits `vlc-whisper-worker-cpu` with no Vulkan import; Windows GPU build requires `VW_VULKAN_SDK` pointing at the SDK root (imports `vulkan-1.dll`).
 
 ## Performance contract
 

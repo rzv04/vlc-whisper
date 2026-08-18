@@ -1,6 +1,7 @@
 #include "vw_worker_config.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Parse a 64-char hex string into a 32-byte token. Returns true on success.
@@ -38,6 +39,8 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
   strncpy(config->model_path, "models/ggml-tiny.en.bin", sizeof(config->model_path) - 1);
   strncpy(config->language, "en", sizeof(config->language) - 1);
   config->sample_rate = 16000;
+  config->backend = VW_WORKER_BACKEND_AUTO;
+  config->gpu_device = 0;
   return true;
 }
 
@@ -57,6 +60,26 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
       snprintf(config->model_path, sizeof(config->model_path), "%s", argv[++i]);
     } else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc) {
       snprintf(config->log_file, sizeof(config->log_file), "%s", argv[++i]);
+    } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+      const char* b = argv[++i];
+      if (strcmp(b, "auto") == 0) {
+        config->backend = VW_WORKER_BACKEND_AUTO;
+      } else if (strcmp(b, "gpu") == 0) {
+        config->backend = VW_WORKER_BACKEND_GPU;
+      } else if (strcmp(b, "cpu") == 0) {
+        config->backend = VW_WORKER_BACKEND_CPU;
+      } else {
+        fprintf(stderr, "bad --backend: expected auto|gpu|cpu, got '%s'\n", b);
+        return 2;
+      }
+    } else if (strcmp(argv[i], "--gpu-device") == 0 && i + 1 < argc) {
+      char* end = NULL;
+      long id = strtol(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0' || id < 0 || id > 65535) {
+        fprintf(stderr, "bad --gpu-device: expected a non-negative integer\n");
+        return 2;
+      }
+      config->gpu_device = (int)id;
     } else {
       fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;

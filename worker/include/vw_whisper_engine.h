@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "vw_worker_config.h"  // vw_worker_backend_t (backend selection, step 17a)
+
 typedef struct vw_whisper_engine {
   struct whisper_context* ctx;  // Opaque whisper.cpp context
   char* last_text;              // Concatenated UTF-8 output of last transcribe run
@@ -12,8 +14,10 @@ typedef struct vw_whisper_engine {
 } vw_whisper_engine_t;
 
 // Initializes whisper.cpp engine instance from the specified model file path (ADR-015: model-once lifetime).
+// backend selects inference: AUTO/GPU set use_gpu=true (whisper picks the first GPU/IGPU device and falls
+// back to CPU at runtime when none exists), CPU forces use_gpu=false. gpu_device is the GPU/IGPU ordinal.
 // Runs a silent warmup inference pass on load. Returns NULL if model file is missing or invalid.
-vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path);
+vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device);
 
 // Safely destroys whisper.cpp engine instance and frees associated model memory.
 void vw_whisper_engine_free(vw_whisper_engine_t* engine);

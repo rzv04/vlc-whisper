@@ -180,7 +180,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
     return 1;
   }
 
-  vw_whisper_engine_t* engine = vw_whisper_engine_init(config->model_path);
+  vw_whisper_engine_t* engine = vw_whisper_engine_init(config->model_path, config->backend, config->gpu_device);
   vw_log_event(engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
                engine ? "whisper engine loaded" : "whisper engine init FAILED (model missing/invalid)");
   vw_audio_buffer_t* audio_buf = vw_audio_buffer_create(160000);  // 10s at 16kHz
