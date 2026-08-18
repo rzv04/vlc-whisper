@@ -8,14 +8,17 @@
 
 typedef struct vw_caption_presenter {
   void* p_filter_ctx;
+  void* p_last_vout;            // Cached vout pointer to detect vout recreation and re-register SPU channels.
   int spu_channel_id;           // Registered VLC SPU channel ID; -1 when unregistered or unavailable.
-  bool spu_channel_registered;  // True if spu_channel_id >= 0 and successfully registered with vout.
+  bool spu_channel_registered;  // True if spu_channel_id >= 0 and successfully registered with current vout.
 } vw_caption_presenter_t;
 
 // Renders timed text directly onto the active VLC video output surface using OSD rendering as a fallback path.
 bool vw_caption_presenter_display(void* p_filter, const char* text, int64_t duration_us);
 
-// Dispatches a transcription segment to VLC SPU subpicture channel (or OSD fallback) using media timestamp mapping.
+// Dispatches a transcription segment to the VLC SPU subpicture channel as timed text in the OSD
+// clock domain (i_start = mdate()), the domain this VLC 3.0.23 build renders filter-pushed
+// subpictures against; falls back to vout_OSDText when the SPU channel is unavailable.
 bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
                                        int64_t input_time_us);
 

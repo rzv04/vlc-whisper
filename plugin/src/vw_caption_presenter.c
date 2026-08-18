@@ -114,7 +114,13 @@ static bool vw_caption_presenter_render_spu(vw_caption_presenter_t* presenter, v
   subpic->i_channel = presenter->spu_channel_id;
   subpic->i_start = (vlc_tick_t)start_tick;
   subpic->i_stop = (vlc_tick_t)stop_tick;
-  subpic->b_subtitle = false;  // Uses system clock (mdate) on private SPU channel without requiring subtitle ES track
+  // Render in the OSD clock domain: b_subtitle=false selects render_osd_date = mdate(), the
+  // clock this VLC 3.0.23 build demonstrably renders filter-pushed subpictures against (the
+  // subtitle clock render_subtitle_date is the displayed picture PTS and, per live testing,
+  // does not select these subpictures — they are dropped before region rendering). i_start/
+  // i_stop must therefore be mdate-based. Media-domain scheduling (b_subtitle=true) is the
+  // 17c look-ahead target, blocked on observing the subtitle clock's behavior.
+  subpic->b_subtitle = false;
   subpic->b_ephemer = true;
   subpic->b_absolute = false;
   subpic->b_fade = true;
@@ -156,6 +162,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   if (duration_us <= 0) {
     duration_us = 2000000LL;  // 2 seconds default duration
   }
+  (void)input_time_us;  // Reserved: media-domain scheduling anchor for 17c look-ahead (see render_spu).
 
   if (!presenter || !presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy
@@ -168,41 +175,37 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
     return false;
   }
 
-  // Register SPU channel on first vout acquisition
-  if (!presenter->spu_channel_registered) {
+  // Register or re-register SPU channel whenever vout instance changes (e.g. video resize/recreate) or is unregistered
+  if (!presenter->spu_channel_registered || presenter->p_last_vout != (void*)vout || presenter->spu_channel_id < 0) {
     int channel_id = vout_RegisterSubpictureChannel(vout);
     if (channel_id >= 0) {
       presenter->spu_channel_id = channel_id;
       presenter->spu_channel_registered = true;
-      vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_REGISTERED", "Registered SPU subpicture channel %d", channel_id);
+      presenter->p_last_vout = (void*)vout;
+      vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_REGISTERED", "Registered SPU subpicture channel %d on vout %p",
+                   channel_id, (void*)vout);
     } else {
       presenter->spu_channel_id = -1;
       presenter->spu_channel_registered = false;
+      presenter->p_last_vout = NULL;
       vw_log_event(VW_LOG_LEVEL_WARN, "PRESENTER_SPU_FAILED",
-                   "Failed to register SPU channel (%d); falling back to OSD", channel_id);
+                   "Failed to register SPU channel on vout %p (%d); falling back to OSD", (void*)vout, channel_id);
     }
   }
 
   bool rendered = false;
+  int64_t start_tick = 0;
+  int64_t stop_tick = 0;
   if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
-    // System-to-media timeline conversion:
-    // start_tick = mdate() + (segment->start_pts_us - input_time_us)
-    // stop_tick  = mdate() + (segment->end_pts_us - input_time_us)
+    // OSD clock domain (b_subtitle=false): the vout compares subpictures against render_osd_date
+    // = mdate() ALWAYS, so schedule at the current system date. This mirrors vout_OSDText's
+    // proven construction (milestones 11-16) while keeping the native SPU channel, its flush
+    // support, and no dependency on the user's "osd" setting. No S<->M conversion is possible
+    // here: the subtitle clock (picture PTS) is not usable for filter-pushed subpictures in
+    // this build (they are dropped before region rendering — see render_spu comment).
     int64_t now_tick = (int64_t)mdate();
-    int64_t start_tick;
-    int64_t stop_tick;
-    if (input_time_us >= 0) {
-      start_tick = now_tick + (segment->start_pts_us - input_time_us);
-      stop_tick = now_tick + (segment->end_pts_us - input_time_us);
-    } else {
-      start_tick = now_tick;
-      stop_tick = now_tick + duration_us;
-    }
-    // Guard: if stop_tick is in the past (e.g. batch inference latency), clamp to current time
-    if (stop_tick <= now_tick) {
-      start_tick = now_tick;
-      stop_tick = now_tick + (duration_us > 0 ? duration_us : 2000000LL);
-    }
+    start_tick = now_tick;
+    stop_tick = now_tick + (duration_us > 0 ? duration_us : 2000000LL);
     rendered = vw_caption_presenter_render_spu(presenter, vout, segment->text_utf8, start_tick, stop_tick);
   }
 
@@ -210,6 +213,12 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   if (!rendered) {
     vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)duration_us, segment->text_utf8);
     rendered = true;
+    vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_OSD_RENDER", "Rendered caption via OSD fallback: '%s'",
+                 segment->text_utf8);
+  } else {
+    vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_RENDER",
+                 "Rendered caption on SPU ch=%d vout=%p: '%s' (start=%lldus stop=%lldus)", presenter->spu_channel_id,
+                 (void*)vout, segment->text_utf8, (long long)start_tick, (long long)stop_tick);
   }
 
   vlc_object_release(VLC_OBJECT(vout));
@@ -244,6 +253,7 @@ void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
   vw_caption_presenter_blank(presenter);
   if (presenter) {
     presenter->p_filter_ctx = NULL;
+    presenter->p_last_vout = NULL;
     presenter->spu_channel_id = -1;
     presenter->spu_channel_registered = false;
   }

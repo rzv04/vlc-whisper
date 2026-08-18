@@ -380,8 +380,14 @@ static void* vw_plugin_sender_main(void* arg) {
             break;
           }
           sys->segments_received++;
+          vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEGMENT",
+                       "segment received: id=%llu '%s' start=%lld end=%lld is_final=%d",
+                       (unsigned long long)recv.segment.segment_id, recv.segment.text_utf8,
+                       (long long)recv.segment.start_pts_us, (long long)recv.segment.end_pts_us, recv.segment.is_final);
           // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
           // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
+          // input_time_us is reserved for media-domain scheduling (17c); the presenter renders
+          // in the OSD clock domain (mdate), which this VLC build displays reliably.
           vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us);
           break;
         case VW_MSG_STATUS:

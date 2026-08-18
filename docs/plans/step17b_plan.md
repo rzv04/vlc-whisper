@@ -15,20 +15,20 @@ Migrate caption presentation from crude OSD overlay text (`vout_OSDText`) to nat
   1. `plugin/include/vw_platform.h`: Define `VW_WEAK` symbol linkage macro once in this shared header (`__attribute__((weak))` on Linux, empty on Windows) to prevent per-TU macro duplication.
   2. `plugin/include/vw_caption_presenter.h`:
      - Extend `vw_caption_presenter_t` struct with `int spu_channel_id` (registered channel ID, default `-1`) and `bool spu_channel_registered` flag.
-     - Update presenter function signatures to accept media timestamp context: `vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment, int64_t input_time_us)`.
+     - Update presenter function signatures to accept media timestamp context: `vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment, int64_t input_time_us)` (anchor reserved for 17c media scheduling).
   3. `plugin/src/vw_caption_presenter.c`:
      - Register private SPU channel via `vout_RegisterSubpictureChannel(vout)` on first vout acquisition.
      - Validate channel ID contract: check `presenter->spu_channel_id >= 0`; if `< 0` (registration failed), set `spu_channel_registered = false` and fall back to `vout_OSDText`.
      - Construct structured `subpicture_t` carrying `video_format_Init(&fmt, VLC_CODEC_TEXT)` and `subpicture_region_New(&fmt)` with `text_segment_New(text)`.
      - Align subtitles cleanly at bottom center (`SUBPICTURE_ALIGN_BOTTOM`).
-     - Map media PTS to VLC system date ticks (`mdate() + (pts_us - input_time_us)`) with fallback clamping for delayed batch inference.
+     - Schedule captions in the OSD clock domain (`i_start = mdate()`, `i_stop = i_start + duration`) with `b_subtitle = false`, the configuration this VLC 3.0.23 build demonstrably renders filter-pushed subpictures against; media-domain scheduling (`b_subtitle = true`) is deferred to 17c (see Design §3).
      - Set `subpic->b_subtitle = true`, `subpic->b_ephemer = true`, `subpic->b_absolute = false`.
      - Submit subpictures via `vout_PutSubpicture(vout, subpic)` (transfers ownership to VLC core).
      - Provide cleanup: `subpicture_Delete(subpic)` on region allocation error; `subpicture_region_Delete` / `text_segment_Delete` on partial failure.
      - Flush private SPU channel on seek/blank via `vout_FlushSubpictureChannel(vout, presenter->spu_channel_id)`.
   4. `plugin/src/vw_whisper_module.c`:
      - In sender thread main loop, query current playback position `input_time_us` from the held input thread (`input_Control(input, INPUT_GET_TIME, &position_us)` / `vw_plugin_input_position_us(input)`).
-     - Pass `position_us` into `vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, position_us)` for system-to-media date conversion.
+     - Pass `position_us` into `vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, position_us)` (reserved media anchor for 17c).
   5. `plugin/libvlccore.def`: Export required VLC 3.0 SPU and timing symbols for MinGW Windows linking:
      - `vout_RegisterSubpictureChannel`
      - `vout_PutSubpicture`
@@ -100,12 +100,14 @@ if (subpic) {
 - **Teardown**: On `vw_caption_presenter_clear(presenter)`:
   - Flush the channel, reset `p_filter_ctx = NULL`, `spu_channel_id = -1`, `spu_channel_registered = false`.
 
-### 3. Real-Time Timestamp Mapping (System-to-Media Conversion)
-For real-time streaming:
-- Sender thread queries `mdate()` (current VLC system tick) and `input_time_us` (current media PTS from held `input_thread_t`).
-- `start_tick = mdate() + (segment->start_pts_us - input_time_us)`
-- `stop_tick = mdate() + (segment->end_pts_us - input_time_us)`
-- **Guard**: If `stop_tick <= mdate()` (e.g. delayed batch inference), clamp `start_tick = mdate()` and `stop_tick = mdate() + 2000000LL` (2s minimum display window).
+### 3. Real-Time Timestamp Mapping (OSD Clock Domain — empirical finding)
+VLC 3.0's audio output re-bases audio-filter block PTS into the **system-date domain** (`aout_DecPlay` compares `block->i_pts` against `mdate()`), so the worker's segment PTS are system-date ticks (µs since boot on Windows), NOT media timestamps. The vout renders subpictures against one of two clocks (`ThreadDisplayRenderPicture`): `render_subtitle_date` = displayed picture PTS (media) for `b_subtitle = true`, or `render_osd_date` = `mdate()` for `b_subtitle = false`.
+
+**Live testing finding (2026-08-18, VLC 3.0.23 Windows / d3d11va + direct3d11):** media-domain subpictures (`b_subtitle = true`, `i_start`/`i_stop` converted to the media timeline via `INPUT_GET_TIME`) are silently dropped before region rendering — the vout's `spu` log shows no "original picture size is undefined" warning, which MUST fire for any selected subpicture with unset original dimensions. The subtitle clock is therefore not usable for filter-pushed subpictures in this build. The OSD clock (`mdate()`) is the domain the earlier OSD milestones (11-16) demonstrated displaying, so:
+- Presenter schedules `start_tick = mdate()`, `stop_tick = mdate() + duration_us` with `b_subtitle = false` on the registered private SPU channel (native channel, flushable via `vout_FlushSubpictureChannel`, independent of the user's `osd` setting which only gates `vout_OSDText`).
+- `input_time_us` (INPUT_GET_TIME) stays in the signature as the reserved anchor for 17c media scheduling; 17c must first observe the subtitle clock's behavior (e.g. push a wide-window probe subpicture) before relying on media-domain timing.
+- The S→M conversion (`segment_pts - (system_now - input_time)`, offset stable while paused) is documented in `docs/vlc-api-essentials.md` §3.4 and remains correct in principle for builds where the subtitle clock tracks picture PTS.
+- **Expected log noise:** VLC emits `main warning: original picture size is undefined` once per caption. The presenter does not declare `i_original_picture_width/height` (no public API from an audio filter to learn the video source size); VLC falls back to the displayed picture's source size — which keeps text scaling correct — and caches it back into the heap subpicture, so the warning fires once per subpicture, not per frame. Silencing it would require ES plumbing (`INPUT_GET_ES_OBJECTS`) for cosmetic gain; revisit only if log hygiene matters.
 
 ### 4. Windows MinGW Symbol Linkage (`VW_WEAK` in Shared Header)
 Defined once in `plugin/include/vw_platform.h`:

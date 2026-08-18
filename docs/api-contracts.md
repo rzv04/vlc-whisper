@@ -17,9 +17,11 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 | Term / Abbreviation | Definition                                                                                                                                                 |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **PTS**             | **Presentation TimeStamp** — The exact position on the media playback timeline (not wall-clock time) at which audio, video, or captions must be presented. |
-| **`pts_us`**        | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$).                      |
-| **`duration_us`**   | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds.                                                    |
+| **`pts_us`**        | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$). |
+| **`duration_us`**   | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds. |
 | **IPC**             | **Inter-Process Communication** — Local authenticated binary message-mode transport (named pipe on Windows, Unix domain socket on Linux).                  |
+
+> **Wire `pts_us` domain (v1.0):** AUDIO chunk timestamps are stamped by the plugin from VLC's audio-filter block PTS, which VLC 3.0 re-bases into the **system-date domain** (µs since boot on Windows; `aout_DecPlay` compares block PTS against `mdate()`). The worker treats them as an opaque monotonic timeline — windows, VAD, and segment building only use deltas, and segment `start_pts_us`/`end_pts_us` round-trip unchanged. The plugin presents captions in the OSD clock domain (`i_start = mdate()`, the domain the vout renders filter-pushed subpictures against in the 3.0.23 Windows build) — never wall-clock *caption timing* in the media sense, and never media timestamps that the subtitle clock would misjudge. See `docs/vlc-api-essentials.md` §3.4/§7.
 
 ## Envelope
 

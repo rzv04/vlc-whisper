@@ -433,6 +433,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
           vw_protocol_encode_header(&seg_hdr, seg_hdr_buf, sizeof(seg_hdr_buf));
           vw_ipc_send(handle, seg_hdr_buf, sizeof(seg_hdr_buf));
           vw_ipc_send(handle, seg_payload, seg_len);
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEGMENT",
+                       "emitted segment id=%llu start=%lld end=%lld is_final=%d text='%s'",
+                       (unsigned long long)seg.segment_id, (long long)seg.start_pts_us, (long long)seg.end_pts_us,
+                       seg.is_final, seg.text_utf8 ? seg.text_utf8 : "");
         }
         if (seg.text_utf8) free(seg.text_utf8);
       }

@@ -31,6 +31,9 @@ static int g_mock_register_channel_return = 42;
 static int g_put_subpicture_calls = 0;
 static int g_osd_text_calls = 0;
 static int64_t g_mock_mdate = 100000000LL;  // 100s
+static int64_t g_last_subpic_start = 0;
+static int64_t g_last_subpic_stop = 0;
+static bool g_last_subpic_b_subtitle = false;
 
 vlc_tick_t mdate(void) { return (vlc_tick_t)g_mock_mdate; }
 
@@ -44,6 +47,9 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
   (void)vout;
   g_put_subpicture_calls++;
   if (subpic) {
+    g_last_subpic_start = subpic->i_start;
+    g_last_subpic_stop = subpic->i_stop;
+    g_last_subpic_b_subtitle = subpic->b_subtitle;
     if (subpic->p_region) {
       if (subpic->p_region->p_text) {
         text_segment_Delete(subpic->p_region->p_text);
@@ -152,25 +158,42 @@ int main(void) {
   vw_caption_segment_t empty_seg = {.text_utf8 = NULL};
   assert(!vw_caption_presenter_show_segment(&presenter, &empty_seg, 0));
 
-  // Test 6: SPU subpicture channel registration and rendering
+  (void)presenter;
+  (void)empty_seg;
+
+  // Test 6: SPU subpicture channel registration and rendering. Captions render in the OSD clock
+  // domain: i_start = mdate() (g_mock_mdate = 100s), i_stop = i_start + segment duration (2s),
+  // b_subtitle = false (render_osd_date = mdate() is the clock this VLC build renders against).
   filter_t fake_filter = {.obj.object_type = "vout"};
   vw_caption_presenter_t spu_presenter = {
       .p_filter_ctx = &fake_filter, .spu_channel_id = -1, .spu_channel_registered = false};
 
+  vw_caption_segment_t sys_segment = {.start_pts_us = 101000000LL,
+                                      .end_pts_us = 103000000LL,
+                                      .segment_id = 1,
+                                      .is_final = true,
+                                      .text_utf8 = "Hello Whisper AI"};
+
   g_register_spu_calls = 0;
   g_put_subpicture_calls = 0;
   g_mock_register_channel_return = 42;
+  g_mock_mdate = 100000000LL;
 
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &segment, 1000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 1000000LL));
   assert(g_register_spu_calls == 1);
   assert(spu_presenter.spu_channel_id == 42);
   assert(spu_presenter.spu_channel_registered == true);
   assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_start == 100000000LL);
+  assert(g_last_subpic_stop == 102000000LL);
+  assert(g_last_subpic_b_subtitle == false);
 
   // Subsequent call reuses already-registered channel
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &segment, 2000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 2000000LL));
   assert(g_register_spu_calls == 1);  // No duplicate registration call
   assert(g_put_subpicture_calls == 2);
+  assert(g_last_subpic_start == 100000000LL);
+  assert(g_last_subpic_stop == 102000000LL);
 
   // Test 7: SPU channel registration failure falls back to OSD gracefully
   vw_caption_presenter_t fallback_presenter = {
@@ -179,11 +202,13 @@ int main(void) {
   g_osd_text_calls = 0;
   g_put_subpicture_calls = 0;
 
-  assert(vw_caption_presenter_show_segment(&fallback_presenter, &segment, 1000000LL));
+  assert(vw_caption_presenter_show_segment(&fallback_presenter, &sys_segment, 1000000LL));
   assert(fallback_presenter.spu_channel_id == -1);
   assert(fallback_presenter.spu_channel_registered == false);
   assert(g_osd_text_calls == 1);  // OSD fallback was used
   assert(g_put_subpicture_calls == 0);
+
+  (void)fallback_presenter;
 
   // Test 8: Blank presenter flushes both SPU channel and OSD channel
   g_flush_calls = 0;
@@ -192,11 +217,34 @@ int main(void) {
   assert(spu_presenter.p_filter_ctx == &fake_filter);
   assert(g_flush_calls >= 2);  // SPU channel 42 + OSD channel 1
 
-  // Test 9: Clear presenter resets filter context and SPU channel
+  // Test 9: Clear presenter resets filter context, cached vout, and SPU channel
   vw_caption_presenter_clear(&spu_presenter);
   assert(spu_presenter.p_filter_ctx == NULL);
+  assert(spu_presenter.p_last_vout == NULL);
   assert(spu_presenter.spu_channel_id == -1);
   assert(spu_presenter.spu_channel_registered == false);
+
+  // Test 10: Vout recreation triggers SPU channel re-registration
+  spu_presenter.p_filter_ctx = &fake_filter;
+  g_register_spu_calls = 0;
+  g_mock_register_channel_return = 42;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 3000000LL));
+  assert(g_register_spu_calls == 1);
+  assert(spu_presenter.spu_channel_id == 42);
+  assert(spu_presenter.p_last_vout == (void*)&fake_filter);
+
+  // Simulate vout recreation: different vout pointer
+  filter_t recreated_filter = {.obj.object_type = "vout"};
+  spu_presenter.p_filter_ctx = &recreated_filter;
+  g_mock_register_channel_return = 43;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 4000000LL));
+  assert(g_register_spu_calls == 2);
+  assert(spu_presenter.spu_channel_id == 43);
+  assert(spu_presenter.p_last_vout == (void*)&recreated_filter);
+
+  (void)segment;
+  (void)sys_segment;
+  (void)spu_presenter;
 
   return 0;
 }
