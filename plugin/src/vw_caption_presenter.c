@@ -176,18 +176,23 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   }
 
   // Register or re-register SPU channel whenever vout instance changes (e.g. video resize/recreate) or is unregistered
-  if (!presenter->spu_channel_registered || presenter->p_last_vout != (void*)vout || presenter->spu_channel_id < 0) {
+  if (!presenter->spu_channel_registered || presenter->p_held_vout != (void*)vout || presenter->spu_channel_id < 0) {
+    if (presenter->p_held_vout) {
+      vlc_object_release(VLC_OBJECT((vout_thread_t*)presenter->p_held_vout));
+      presenter->p_held_vout = NULL;
+    }
     int channel_id = vout_RegisterSubpictureChannel(vout);
     if (channel_id >= 0) {
+      vlc_object_hold(VLC_OBJECT(vout));
+      presenter->p_held_vout = (void*)vout;
       presenter->spu_channel_id = channel_id;
       presenter->spu_channel_registered = true;
-      presenter->p_last_vout = (void*)vout;
       vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_REGISTERED", "Registered SPU subpicture channel %d on vout %p",
                    channel_id, (void*)vout);
     } else {
       presenter->spu_channel_id = -1;
       presenter->spu_channel_registered = false;
-      presenter->p_last_vout = NULL;
+      presenter->p_held_vout = NULL;
       vw_log_event(VW_LOG_LEVEL_WARN, "PRESENTER_SPU_FAILED",
                    "Failed to register SPU channel on vout %p (%d); falling back to OSD", (void*)vout, channel_id);
     }
@@ -213,12 +218,14 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   if (!rendered) {
     vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)duration_us, segment->text_utf8);
     rendered = true;
-    vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_OSD_RENDER", "Rendered caption via OSD fallback: '%s'",
-                 segment->text_utf8);
+    vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_OSD_RENDER",
+                 "Rendered caption via OSD fallback (text_len=%zu duration=%lldus)",
+                 segment->text_utf8 ? strlen(segment->text_utf8) : 0, (long long)duration_us);
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_RENDER",
-                 "Rendered caption on SPU ch=%d vout=%p: '%s' (start=%lldus stop=%lldus)", presenter->spu_channel_id,
-                 (void*)vout, segment->text_utf8, (long long)start_tick, (long long)stop_tick);
+                 "Rendered caption on SPU ch=%d vout=%p (text_len=%zu start=%lldus stop=%lldus)",
+                 presenter->spu_channel_id, (void*)vout, segment->text_utf8 ? strlen(segment->text_utf8) : 0,
+                 (long long)start_tick, (long long)stop_tick);
   }
 
   vlc_object_release(VLC_OBJECT(vout));
@@ -252,8 +259,11 @@ void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
   vw_caption_presenter_blank(presenter);
   if (presenter) {
+    if (presenter->p_held_vout) {
+      vlc_object_release(VLC_OBJECT((vout_thread_t*)presenter->p_held_vout));
+      presenter->p_held_vout = NULL;
+    }
     presenter->p_filter_ctx = NULL;
-    presenter->p_last_vout = NULL;
     presenter->spu_channel_id = -1;
     presenter->spu_channel_registered = false;
   }

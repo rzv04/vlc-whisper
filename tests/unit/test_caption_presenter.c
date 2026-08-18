@@ -217,10 +217,10 @@ int main(void) {
   assert(spu_presenter.p_filter_ctx == &fake_filter);
   assert(g_flush_calls >= 2);  // SPU channel 42 + OSD channel 1
 
-  // Test 9: Clear presenter resets filter context, cached vout, and SPU channel
+  // Test 9: Clear presenter resets filter context, held vout, and SPU channel
   vw_caption_presenter_clear(&spu_presenter);
   assert(spu_presenter.p_filter_ctx == NULL);
-  assert(spu_presenter.p_last_vout == NULL);
+  assert(spu_presenter.p_held_vout == NULL);
   assert(spu_presenter.spu_channel_id == -1);
   assert(spu_presenter.spu_channel_registered == false);
 
@@ -231,7 +231,7 @@ int main(void) {
   assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 3000000LL));
   assert(g_register_spu_calls == 1);
   assert(spu_presenter.spu_channel_id == 42);
-  assert(spu_presenter.p_last_vout == (void*)&fake_filter);
+  assert(spu_presenter.p_held_vout == (void*)&fake_filter);
 
   // Simulate vout recreation: different vout pointer
   filter_t recreated_filter = {.obj.object_type = "vout"};
@@ -240,7 +240,7 @@ int main(void) {
   assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 4000000LL));
   assert(g_register_spu_calls == 2);
   assert(spu_presenter.spu_channel_id == 43);
-  assert(spu_presenter.p_last_vout == (void*)&recreated_filter);
+  assert(spu_presenter.p_held_vout == (void*)&recreated_filter);
 
   (void)segment;
   (void)sys_segment;

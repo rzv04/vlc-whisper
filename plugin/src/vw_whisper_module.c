@@ -381,8 +381,9 @@ static void* vw_plugin_sender_main(void* arg) {
           }
           sys->segments_received++;
           vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEGMENT",
-                       "segment received: id=%llu '%s' start=%lld end=%lld is_final=%d",
-                       (unsigned long long)recv.segment.segment_id, recv.segment.text_utf8,
+                       "segment received: id=%llu text_len=%zu start=%lld end=%lld is_final=%d",
+                       (unsigned long long)recv.segment.segment_id,
+                       recv.segment.text_utf8 ? strlen(recv.segment.text_utf8) : 0,
                        (long long)recv.segment.start_pts_us, (long long)recv.segment.end_pts_us, recv.segment.is_final);
           // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
           // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
