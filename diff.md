@@ -1,1009 +1,427 @@
-# Diff Analysis: gemini/milestone-3-step-17a (GPU Vulkan & Seek Lifecycle)
+# Diff Analysis: Step 17b Native SPU Presentation & Subpicture Subsystem vs gemini/milestone-3
 
-**18 files changed, +1073 / -433 lines vs current `gemini/milestone-3` (post fast-forward; previous header +809/-620 was vs pre-merge base — see note below)**  
-**Base**: `gemini/milestone-3` (at `1c3ff2c`, includes step-17 seek; for the cumulative 31-file report vs pre-17 base see git log)
+**15 files changed, +595 / -58 lines**
+**Base**: `gemini/milestone-3`
 
 ---
 
 ## 1. File-by-File Analysis
 
-### 1.1 `.agents/AGENTS.md`
+### 1.1 `docs/api-contracts.md`
 
-**Why change**: Document Rule 16 requiring mandatory inspection of local dependency graph (`graphify-out/`) before planning or modifying code.
+**Why change**: Document the critical timing domain distinction between audio-filter block timestamps (system-date scale) and media position timestamps (`INPUT_GET_TIME`) discovered during SPU integration.
 
-**Responsibility before**: Core coding rules and architectural invariants up to Rule 15.  
-**After**: Added Rule 16 for codebase dependency graph analysis.
+**Responsibility before**: Documented IPC protocol framing, message structures, and wire layouts.
+**After**: Same, plus explicit timeline contract documentation regarding system-date block PTS vs media position.
 
-**Callers**: AI agents working in the repository.  
+**Callers**: Developers and AI agents implementing audio capture and IPC pacing.
+**Callees**: None (specification).
+
+**Happy path**: Developer reviews timing contracts before implementing or debugging presenter timestamp conversions.
+
+**Failure path**: Misinterpreting block timestamps as media-relative causes multi-hour timestamp offsets in downstream presentation.
+
+**Boundaries**:
+- Documentation invariant: Clock domain rules explicitly defined.
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | Clock domain distinction documented | `docs/api-contracts.md:L142-148` | N/A (Doc) | Done |
+
+**Assumptions/Tradeoffs**: Documents current VLC 3.0 audio output behavior where `aout_DecPlay` re-bases block timestamps against `mdate()`.
+
+---
+
+### 1.2 `docs/architecture.md`
+
+**Why change**: Update presentation architectural notes to document SPU subpicture scheduling in the OSD clock domain on private channels.
+
+**Responsibility before**: Outlined module interactions, realtime audio callback safety, and worker isolation.
+**After**: Same, with updated SPU channel scheduling details.
+
+**Callers**: Architecture documentation consumers.
 **Callees**: None.
 
-**Happy path**: AI agent inspects `graphify-out/` prior to planning changes.
+**Happy path**: Reviewer consults architecture to understand how captions flow from sender thread to SPU compositor without an internal caption queue.
 
 **Failure path**: N/A.
 
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | N/A |
-| **Authorization** | N/A |
-| **Concurrency** | N/A |
-| **I/O** | N/A |
-| **Persistence** | N/A |
+- Realtime callback safety: Audio filter callback remains non-blocking and allocation-free.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Include dependency graph reading directive | `.agents/AGENTS.md:L48` | Manual Inspection | ✅ done |
+|---|---|---|---|---|
+| 1 | SPU pipeline architecture documented | `docs/architecture.md:L154` | N/A (Doc) | Done |
 
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: Documents ADR-016 (zero internal plugin caption queue).
 
 ---
 
-### 1.2 `AGENTS.md`
+### 1.3 `docs/plans/milestone3_postmortem.md`
 
-**Why change**: Mirror `.agents/AGENTS.md` updates at the root level for agent consistency.
+**Why change**: Add Addendum documenting the 2026-08-18 Step 17b SPU bugfix trace (Empty SPU ruled out, system-date PTS domain discovered, subtitle-clock selection drop on Windows, OSD clock domain fix).
 
-**Responsibility before**: Repository rules up to Rule 15.  
-**After**: Contains Rule 16.
+**Responsibility before**: Postmortem of Milestone 3 branches prior to Step 17b.
+**After**: Includes postmortem addendum documenting the root cause of invisible subtitles on Windows.
 
-**Callers**: AI agents and contributors.  
+**Callers**: Engineering team and future AI agent sessions.
 **Callees**: None.
 
-**Happy path**: Agent loads root instructions.
+**Happy path**: Developer reads addendum to understand why `b_subtitle = false` and `mdate()` are required for reliable caption display on VLC 3.0.23 Windows.
 
 **Failure path**: N/A.
 
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Synchronize root AGENTS.md rules | `AGENTS.md:L48` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.3 `CMakePresets.json`
-
-**Why change**: Add dedicated CPU-only presets (`linux-x64-debug-cpu`, `windows-x64-release-cpu`, `windows-x64-debug-cpu`) that explicitly pass `VW_WITH_VULKAN=OFF`, providing a predictable low-memory build path that never invokes `glslc`.
-
-**Responsibility before**: Defined standard Linux and Windows debug/release/coverage presets with Vulkan enabled by default.  
-**After**: Defines explicit `*-cpu` configure, build, and test presets alongside GPU default presets.
-
-**Callers**: Developer running `cmake --preset <name>`.  
-**Callees**: CMake configuration parser.
-
-**Happy path**: Developer selects `windows-x64-release-cpu` to build `vlc-whisper-worker-cpu.exe` without requiring a Vulkan SDK.
-
-**Failure path**: Invalid preset name causes CMake to exit with error.
-
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | JSON schema format validation |
-| **Authorization** | N/A |
-| **Concurrency** | N/A |
-| **I/O** | N/A |
-| **Persistence** | N/A |
+- Historical accuracy: Explicitly noted as post-hoc addendum outside original timeline.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add `linux-x64-debug-cpu` preset | `CMakePresets.json:L70-L81` | CMake configure | ✅ done |
-| 2 | Add `windows-x64-release-cpu` preset | `CMakePresets.json:L21-L33` | CMake configure | ✅ done |
-| 3 | Add `windows-x64-debug-cpu` preset | `CMakePresets.json:L46-L58` | CMake configure | ✅ done |
+|---|---|---|---|---|
+| 1 | Postmortem addendum added | `docs/plans/milestone3_postmortem.md:L317-378` | N/A (Doc) | Done |
 
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: Preserves original postmortem text unchanged while isolating the new bugfix trace.
 
 ---
 
-### 1.4 `README.md`
+### 1.4 `docs/plans/step17b_plan.md`
 
-**Why change**: Document system prerequisites (Debian/Ubuntu `apt`, Fedora `dnf`), submodule cloning requirements (`--recursive`), preset matrix, Linux/Windows GPU vs CPU build steps, `$VW_VULKAN_SDK` MinGW layout, and Vulkan shader compile memory constraints.
+**Why change**: Implementation plan artifact for Step 17b per Rule 9 and `ai/task-template.md`.
 
-**Responsibility before**: High-level build instructions for Windows cross-compilation and testing.  
-**After**: Full reproducible developer guide for Linux and Windows targets with Vulkan GPU acceleration and CPU fallback options.
+**Responsibility before**: Did not exist.
+**After**: Full task breakdown, scope, architecture, acceptance criteria, and verification steps for Step 17b.
 
-**Callers**: Developers cloning and building the repository.  
+**Callers**: AI agents and developers implementing and verifying Step 17b.
 **Callees**: None.
 
-**Happy path**: Developer follows `README.md` to install prerequisites, clone with submodules, and compile the GPU or CPU worker.
+**Happy path**: Agent loads plan via `@docs/plans/step17b_plan.md` to guide implementation and verification.
 
 **Failure path**: N/A.
 
-**Boundaries**: N/A.
+**Boundaries**:
+- Rule 9 compliance: Follows task template format.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add OS package prerequisites | `README.md:L7-L31` | Documentation Review | ✅ done |
-| 2 | Add `--recursive` clone instructions | `README.md:L37-L48` | Documentation Review | ✅ done |
-| 3 | Document GPU vs CPU build workflows | `README.md:L60-L135` | Documentation Review | ✅ done |
-| 4 | Document shader compile memory limits | `README.md:L137-L144` | Documentation Review | ✅ done |
+|---|---|---|---|---|
+| 1 | Task plan created and maintained | `docs/plans/step17b_plan.md:L1-157` | N/A (Doc) | Done |
 
 **Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.5 `docs/api-contracts.md`
+### 1.5 `docs/roadmap.md`
 
-**Why change**: Update control frame contract documentation with `VW_CTRL_REASON_SEEK_DISCONTINUITY = 2U`.
+**Why change**: Mark deliverable 17b as complete per Rule 14.
 
-**Responsibility before**: Documented `STOP_SESSION` reasons up to Step 16 (`USER_STOP=1`, `MEDIA_END=3`).  
-**After**: Documents `SEEK_DISCONTINUITY=2` reason code for seek-triggered session restarts.
+**Responsibility before**: Deliverable 17b was unchecked.
+**After**: Deliverable 17b marked `[x]` with summary of shipped features.
 
-**Callers**: Developers reviewing wire protocol specifications.  
+**Callers**: Project tracking.
 **Callees**: None.
 
-**Happy path**: Developer verifies wire constant `2U` for seek discontinuity.
+**Happy path**: Roadmap reflects Step 17b completion and sets stage for Step 17c.
 
 **Failure path**: N/A.
 
-**Boundaries**: N/A.
+**Boundaries**:
+- Documentation synchronization.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Document `SEEK_DISCONTINUITY` in control reasons | `docs/api-contracts.md:L87` | Manual Inspection | ✅ done |
+|---|---|---|---|---|
+| 1 | Roadmap updated | `docs/roadmap.md:L53` | N/A (Doc) | Done |
 
 **Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.6 `docs/architecture.md`
+### 1.6 `docs/source-layout.md`
 
-**Why change**: Document Step 17 seek handling and Step 17a GPU acceleration architecture.
+**Why change**: Update `vw_caption_presenter.c` row description in plugin layout table per Rule 14.
 
-**Responsibility before**: Architecture specification up to Step 16 play/pause.  
-**After**: Documents sender thread seek restart epoch workflow, OSD blanking, and `ggml-vulkan` backend integration with transparent CPU fallback.
+**Responsibility before**: Described presenter as converting final segments into OSD caption cues.
+**After**: Describes presenter as VLC SPU subpicture channel rendering with OSD fallback.
 
-**Callers**: Developers and AI agents.  
+**Callers**: Developer onboarding.
 **Callees**: None.
 
-**Happy path**: Reviewer inspects architecture document for system layout.
+**Happy path**: Reviewer verifies source layout matches implementation.
 
 **Failure path**: N/A.
 
-**Boundaries**: N/A.
+**Boundaries**:
+- Documentation synchronization.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Document seek handling architecture | `docs/architecture.md:L75` | Manual Inspection | ✅ done |
-| 2 | Document GPU inference backend architecture | `docs/architecture.md:L85` | Manual Inspection | ✅ done |
+|---|---|---|---|---|
+| 1 | Source layout table updated | `docs/source-layout.md:L142` | N/A (Doc) | Done |
 
 **Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.7 `docs/plans/step-14-realtime-pcm-streaming.md` (Deleted)
+### 1.7 `docs/test-strategy.md`
 
-**Why change**: Clean up obsolete plan file.
+**Why change**: Document unit test contract for Step 17b in `test_caption_presenter.c`.
 
-**Responsibility before**: Step 14 implementation plan.  
-**After**: Deleted file.
+**Responsibility before**: Documented test coverage through Step 17a.
+**After**: Includes Step 17b SPU mocking, fallback, and channel flushing assertions.
 
-**Callers**: N/A.  
-**Callees**: N/A.
-
-**Happy path**: File removed from workspace.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Remove obsolete plan | Deleted | N/A | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.8 `docs/plans/step14c_plan.md` (Deleted)
-
-**Why change**: Clean up obsolete plan file.
-
-**Responsibility before**: Step 14c implementation plan.  
-**After**: Deleted file.
-
-**Callers**: N/A.  
-**Callees**: N/A.
-
-**Happy path**: File removed from workspace.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Remove obsolete plan | Deleted | N/A | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.9 `docs/plans/step15_plan.md` (Deleted)
-
-**Why change**: Clean up obsolete plan file.
-
-**Responsibility before**: Step 15 implementation plan.  
-**After**: Deleted file.
-
-**Callers**: N/A.  
-**Callees**: N/A.
-
-**Happy path**: File removed from workspace.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Remove obsolete plan | Deleted | N/A | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.10 `docs/plans/step16_plan.md` (Deleted)
-
-**Why change**: Clean up obsolete plan file.
-
-**Responsibility before**: Step 16 implementation plan.  
-**After**: Deleted file.
-
-**Callers**: N/A.  
-**Callees**: N/A.
-
-**Happy path**: File removed from workspace.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Remove obsolete plan | Deleted | N/A | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.11 `docs/plans/step17_restart_deprecation_plan.md`
-
-**Why change**: Provide architectural plan documenting seek session restart and deprecation analysis.
-
-**Responsibility before**: New file.  
-**After**: Technical design record for seek handling.
-
-**Callers**: AI agents and developers.  
+**Callers**: Test suite maintainers.
 **Callees**: None.
 
-**Happy path**: Reader consults plan file.
+**Happy path**: Test strategy documents exact test cases implemented.
 
 **Failure path**: N/A.
 
-**Boundaries**: N/A.
+**Boundaries**:
+- Test contract documentation.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Store Step 17 seek plan | `docs/plans/step17_restart_deprecation_plan.md:L1` | Manual Inspection | ✅ done |
+|---|---|---|---|---|
+| 1 | Test strategy updated | `docs/test-strategy.md:L62` | N/A (Doc) | Done |
 
 **Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.12 `docs/plans/step17a_plan.md`
+### 1.8 `docs/vlc-api-essentials.md`
 
-**Why change**: Provide technical plan for Step 17a (GPU Vulkan Acceleration default ON) per Rule 9.
+**Why change**: Document §3.4 audio-filter block PTS re-basing into system-date domain and two SPU clock domains in VLC 3.0.
 
-**Responsibility before**: New file.  
-**After**: Authoritative task plan and design record for Step 17a.
+**Responsibility before**: Documented object hierarchy, thread models, and OSD display.
+**After**: Detailed documentation of `aout_DecPlay` timestamp re-basing and SPU clock domain mechanics.
 
-**Callers**: AI agents and developers.  
+**Callers**: Plugin developers working with VLC 3.0 clock APIs.
 **Callees**: None.
 
-**Happy path**: Reader inspects `docs/plans/step17a_plan.md` for GPU acceleration requirements and verification gates.
+**Happy path**: Developer references §3.4 when working on timeline synchronization or look-ahead scheduling.
 
 **Failure path**: N/A.
 
-**Boundaries**: N/A.
+**Boundaries**:
+- API contract documentation.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Enforce Rule 9 task template for Step 17a | `docs/plans/step17a_plan.md:L1` | Manual Inspection | ✅ done |
+|---|---|---|---|---|
+| 1 | Clock domain reference added | `docs/vlc-api-essentials.md:L117-124` | N/A (Doc) | Done |
 
 **Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.13 `docs/roadmap.md`
+### 1.9 `plugin/include/vw_caption_presenter.h`
 
-**Why change**: Mark Step 17 (Seeking & Discontinuity support) and Step 17a (GPU Vulkan Acceleration) as completed per Rule 14.
+**Why change**: Add SPU channel fields (`p_last_vout`, `spu_channel_id`, `spu_channel_registered`) to `vw_caption_presenter_t`, update `vw_caption_presenter_show_segment` signature to accept `input_time_us`, and document all functions per Rule 11.
 
-**Responsibility before**: Roadmap with Step 17 and 17a unchecked.  
-**After**: Roadmap with Step 17 and 17a marked complete.
+**Responsibility before**: Simple struct holding only `p_filter_ctx`.
+**After**: Manages filter context, cached `vout` pointer for window recreation detection, SPU channel ID, and registration status.
 
-**Callers**: Project maintainers.  
+**Callers**: `vw_whisper_module.c`, `test_caption_presenter.c`.
+**Callees**: None (header).
+
+**Happy path**: Caller initializes presenter struct with `{0}`, passes to `show_segment`, and presenter caches channel state across calls.
+
+**Failure path**: If SPU registration fails, `spu_channel_id` is set to `-1` and `spu_channel_registered` to `false`.
+
+**Boundaries**:
+- Input validation: Channel IDs explicitly guarded (`spu_channel_id >= 0`).
+- Concurrency: Presenter operations run exclusively on the plugin background sender thread.
+
+**Acceptance map**:
+
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | SPU channel state fields declared | `vw_caption_presenter.h:L11-14` | `test_caption_presenter.c:L157` | Done |
+| 2 | Updated show_segment signature with Rule 11 comment | `vw_caption_presenter.h:L21-23` | `test_caption_presenter.c:L147` | Done |
+
+**Assumptions/Tradeoffs**: Presenter is owned by `filter_sys_t` and manipulated only from the sender thread.
+
+---
+
+### 1.10 `plugin/include/vw_platform.h`
+
+**Why change**: Define `VW_WEAK` symbol linkage macro in a shared header to resolve MinGW weak attribute linking differences without duplicating macros across TUs.
+
+**Responsibility before**: Platform OS wrappers (time, threads, processes).
+**After**: Same, plus `VW_WEAK` macro definition (`__attribute__((weak))` on Linux, empty on Windows).
+
+**Callers**: `vw_caption_presenter.c`, plugin sources.
 **Callees**: None.
 
-**Happy path**: Reviewer checks roadmap progress.
+**Happy path**: Linux builds emit weak symbol references; Windows MinGW builds use standard `extern` symbol imports backed by `libvlccore.def`.
 
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Update roadmap completion status | `docs/roadmap.md:L51-L53` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.14 `docs/test-strategy.md`
-
-**Why change**: Document Step 17 seek tests and Step 17a GPU worker CLI/engine tests per Rule 14.
-
-**Responsibility before**: Test inventory up to Step 16.  
-**After**: Test inventory updated with Step 17 seek tests and Step 17a backend config tests.
-
-**Callers**: Developers running test suites.  
-**Callees**: None.
-
-**Happy path**: Developer verifies test inventory.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add Step 17 & 17a test documentation | `docs/test-strategy.md:L59-L62` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.15 `docs/vlc-api-essentials.md`
-
-**Why change**: Update VLC API essentials document for discontinuity flags and position jump polling.
-
-**Responsibility before**: VLC API reference guide.  
-**After**: Updated guide explaining `BLOCK_FLAG_DISCONTINUITY` and `INPUT_GET_TIME` behavior.
-
-**Callers**: Plugin developers.  
-**Callees**: None.
-
-**Happy path**: Reader consults VLC API essentials guide.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Update VLC API guide | `docs/vlc-api-essentials.md:L140` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.16 `docs/whisper-api.md`
-
-**Why change**: Document `vw_whisper_engine` C17 engine wrapper types (`vw_worker_backend_t`), initialization parameters (`model_path`, `backend`, `gpu_device`), default behaviors, and updated Vulkan GPU usage pattern per Rule 14.
-
-**Responsibility before**: Documented third-party `whisper.cpp` C API and CPU-only usage pattern.  
-**After**: Added documentation for `vw_whisper_engine` wrapper API, `vw_worker_backend_t` enum values (`AUTO`, `GPU`, `CPU`), device ordinal selection, and Vulkan GPU execution flow with automatic CPU fallback.
-
-**Callers**: Worker developers and API consumers.  
-**Callees**: None.
-
-**Happy path**: Developer reviews `docs/whisper-api.md` for engine wrapper signatures and usage patterns.
-
-**Failure path**: N/A.
-
-**Boundaries**: N/A.
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Document `vw_whisper_engine` API & backend options | `docs/whisper-api.md:L774-L840` | Manual Inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.17 `plugin/include/vw_caption_presenter.h`
-
-**Why change**: Declare `vw_caption_presenter_blank()` for mid-session OSD blanking and document `vw_caption_presenter_clear()` as teardown-only.
-
-**Responsibility before**: Declared presenter display, show_segment, and clear functions.  
-**After**: Declares `vw_caption_presenter_blank()` and clarifies clear caller lifecycle (`vw_plugin_close`).
-
-**Callers**: `vw_whisper_module.c`, `vw_caption_presenter.c`, `test_caption_presenter.c`.  
-**Callees**: None.
-
-**Happy path**: `vw_whisper_module.c` calls `vw_caption_presenter_blank(&sys->presenter)` on seek restart.
-
-**Failure path**: N/A.
+**Failure path**: Missing `VW_WEAK` on Windows causes weak symbols to evaluate to NULL at runtime.
 
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Handles NULL presenter pointers |
-| **Authorization** | N/A |
-| **Concurrency** | Sender thread only |
-| **I/O** | N/A |
-| **Persistence** | N/A |
+- Portability: Win32 vs POSIX macro branches.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Declare `vw_caption_presenter_blank` | `plugin/include/vw_caption_presenter.h:L26` | `test_caption_presenter` | ✅ done |
+|---|---|---|---|---|
+| 1 | `VW_WEAK` macro defined | `vw_platform.h:L13,L16` | Build verification | Done |
 
 **Assumptions/Tradeoffs**: None.
 
 ---
 
-### 1.17 `plugin/libvlccore.def`
+### 1.11 `plugin/libvlccore.def`
 
-**Why change**: Export `vout_FlushSubpictureChannel` symbol for MinGW Windows linking.
+**Why change**: Export required VLC 3.0 SPU and timing symbols for Windows MinGW dynamic linking.
 
-**Responsibility before**: Exported standard VLC symbols for `libvlccore.dll`.  
-**After**: Includes `vout_FlushSubpictureChannel`.
+**Responsibility before**: Exported 14 symbols (OSD, logging, objects, config).
+**After**: Exported 21 symbols, adding `vout_RegisterSubpictureChannel`, `vout_PutSubpicture`, `subpicture_New`, `subpicture_Delete`, `subpicture_region_New`, `subpicture_region_Delete`, `text_segment_New`, `text_segment_Delete`, `mdate`.
 
-**Callers**: MinGW linker.  
-**Callees**: `libvlccore.dll`.
+**Callers**: Windows MinGW linker (`dlltool` generating `libvlccore.a` import library).
+**Callees**: `libvlccore.dll` runtime exports.
 
-**Happy path**: Linker resolves `vout_FlushSubpictureChannel` on Windows.
+**Happy path**: Windows cross-compilation resolves all SPU and timing function imports at link time without undefined symbol errors.
 
-**Failure path**: Linker error if symbol is missing.
+**Failure path**: Omitting a symbol causes link failure or runtime DLL import error.
 
-**Boundaries**: N/A.
+**Boundaries**:
+- Linkage: Exact symbol names matching VLC 3.0 `libvlccore.sym`.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Export `vout_FlushSubpictureChannel` | `plugin/libvlccore.def:L10` | Build verification | ✅ done |
+|---|---|---|---|---|
+| 1 | SPU symbols exported | `libvlccore.def:L11-19` | `windows-x64-release-cpu` build | Done |
 
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: Inline header functions (`input_GetVout`, `video_format_Init`) are excluded as they require no `.def` export.
 
 ---
 
-### 1.18 `plugin/src/vw_caption_presenter.c`
+### 1.12 `plugin/src/vw_caption_presenter.c`
 
-**Why change**: Implement `vw_caption_presenter_blank()` to erase active OSD subpictures mid-session without clearing filter context.
+**Why change**: Implement native VLC SPU subpicture channel rendering, text region construction, vout recreation re-registration, timestamp scheduling in the OSD clock domain, dual-channel flushing, and graceful OSD fallback.
 
-**Responsibility before**: Handled presenter display, vout lookup, and teardown clear.  
-**After**: Implements `vw_caption_presenter_blank()` using `vout_FlushSubpictureChannel(vout, VOUT_SPU_CHANNEL_OSD)` and 1ms blank OSD text.
+**Responsibility before**: Dispatched caption cues directly to `vout_OSDText` on channel 1.
+**After**: Registers private SPU channel via `vout_RegisterSubpictureChannel`, builds structured `subpicture_t` carrying `video_format_Init(&fmt, VLC_CODEC_TEXT)` and `text_segment_New(text)`, sets alignment (`SUBPICTURE_ALIGN_BOTTOM`), tracks `p_last_vout` to handle window recreation, flushes both SPU and OSD channels on blank/clear, and falls back to `vout_OSDText` on registration failure.
 
-**Callers**: `vw_whisper_module.c:L320`, `test_caption_presenter.c`.  
-**Callees**: `vw_caption_presenter_find_vout`, `vout_FlushSubpictureChannel`, `vout_OSDText`, `vlc_object_release`.
+**Callers**: `vw_whisper_module.c` (sender thread), unit tests.
+**Callees**: VLC Core APIs (`vout_RegisterSubpictureChannel`, `vout_PutSubpicture`, `vout_FlushSubpictureChannel`, `subpicture_New`, `subpicture_Delete`, `subpicture_region_New`, `subpicture_region_Delete`, `text_segment_New`, `text_segment_Delete`, `mdate`, `vout_OSDText`, `vlc_object_hold`, `vlc_object_release`).
 
-**Happy path**: `vw_caption_presenter_blank` finds vout, flushes channel 1, emits 1ms blank OSD text, releases vout, preserving `p_filter_ctx`.
+**Happy path**: Sender thread invokes `vw_caption_presenter_show_segment`. Presenter finds `vout`, registers private SPU channel 9, constructs `subpicture_t`, populates text region, sets `i_start = mdate()`, `i_stop = mdate() + duration`, calls `vout_PutSubpicture(vout, subpic)`, and logs `PRESENTER_SPU_RENDER`.
 
-**Failure path**: Returns false if presenter is NULL or vout cannot be found.
+**Failure path**: If SPU registration fails (`channel_id < 0`) or subpicture region allocation fails, presenter falls back to `vout_OSDText(vout, 1, ...)` and logs `PRESENTER_OSD_RENDER`.
 
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Null checks on `presenter` and `p_filter_ctx` |
-| **Authorization** | N/A |
-| **Concurrency** | Sender thread only; releases vout reference immediately |
-| **I/O** | OSD subpicture channel flush |
-| **Persistence** | None |
+- Input validation: NULL segment, NULL text, and negative duration checks.
+- Memory management: `vout_PutSubpicture` takes subpicture ownership; allocation failures call `subpicture_region_Delete` / `subpicture_Delete` before returning.
+- Concurrency: Invoked exclusively from single background sender thread.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Implement mid-session OSD blanking | `plugin/src/vw_caption_presenter.c:L125` | `test_caption_presenter` | ✅ done |
+|---|---|---|---|---|
+| 1 | Private SPU channel registration | `vw_caption_presenter.c:L172-187` | `test_caption_presenter.c:L168-177` | Done |
+| 2 | Subpicture text region construction | `vw_caption_presenter.c:L80-128` | `test_caption_presenter.c:L172-182` | Done |
+| 3 | Vout recreation re-registration | `vw_caption_presenter.c:L172` | `test_caption_presenter.c:L217-234` | Done |
+| 4 | OSD fallback on channel failure | `vw_caption_presenter.c:L208-213` | `test_caption_presenter.c:L186-196` | Done |
+| 5 | Dual-channel flushing | `vw_caption_presenter.c:L226-240` | `test_caption_presenter.c:L198-204` | Done |
 
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: Subpictures use `b_subtitle = false` in the OSD clock domain (`mdate()`) to ensure reliable display across all VLC 3.0 video output backends without requiring an active subtitle track.
 
 ---
 
-### 1.19 `plugin/src/vw_whisper_module.c`
+### 1.13 `plugin/src/vw_whisper_module.c`
 
-**Why change**: Implement seek/discontinuity epoch restart (`STOP` -> drain SPSC -> `START` with new `session_id`), position-jump detection (`VW_SEEK_JUMP_THRESHOLD_US = 1s`), pause baseline backfill, PTS fallback check (`VW_PTS_JUMP_THRESHOLD_US = 500ms`), and fallback candidate probing for `vlc-whisper-worker` / `vlc-whisper-worker-cpu` in `vw_plugin_resolve_worker_path`.
+**Why change**: Pass media position (`current_position_us`) from held `input_thread_t` into `vw_caption_presenter_show_segment`, initialize presenter SPU fields in `vw_plugin_open`, and add `PLUGIN_SEGMENT` diagnostic logging.
 
-**Responsibility before**: Audio callback and sender thread with play/pause lifecycle.  
-**After**: Audio callback with PTS jump fallback, sender thread with position-jump seek detection, OSD blanking, session epoch restart, and multi-candidate worker executable resolution (`vlc-whisper-worker` then `vlc-whisper-worker-cpu`).
+**Responsibility before**: Sender thread called `show_segment(&sys->presenter, &recv.segment)` without timing args.
+**After**: Tracks `current_position_us` via throttled (100ms) input poll, passes `current_position_us` to `show_segment`, logs segment arrival, and initializes `spu_channel_id = -1` in open.
 
-**Callers**: VLC module loader, VLC audio pipeline (`pf_audio_filter`), sender thread.  
-**Callees**: `vw_caption_presenter_blank`, `vw_worker_client_stop_session`, `vw_spsc_queue_pop`, `vw_worker_client_start_session`, `vw_plugin_find_input`, `input_GetState`, `vw_plugin_input_position_us`, `vw_plugin_probe_ancestors`.
+**Callers**: VLC Core (filter entry points, audio callback, sender thread).
+**Callees**: `vw_caption_presenter.h`, `vw_worker_client.h`, VLC Core APIs (`input_Control`, `input_GetState`).
 
-**Happy path**: Callback or sender poll detects seek, sets `discontinuity_pending = true`. Sender thread blanks OSD, sends `STOP_SESSION(SEEK_DISCONTINUITY)`, drains pre-seek PCM from SPSC queue, and sends `START_SESSION` with new session ID and PTS anchor. On startup, `vw_plugin_resolve_worker_path` checks for GPU worker `vlc-whisper-worker` and falls back to CPU worker `vlc-whisper-worker-cpu`.
+**Happy path**: Sender thread receives `VW_MSG_CAPTION_SEGMENT`, verifies session ID match, logs `PLUGIN_SEGMENT`, and forwards segment and position to `vw_caption_presenter_show_segment`.
 
-**Failure path**: Worker rejects restart; sender sets `worker_dead = true`, logs warning, breaks loop, and plugin degrades to audio passthrough.
+**Failure path**: Stale segments from previous seek epochs (`session_id` mismatch) are dropped with `PLUGIN_STALE_SEGMENT` debug log.
 
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | `p_block->i_pts >= VLC_TS_0` + `last_pts_us > 0` guards; `position_us >= 0` guards; threshold macros (1s / 500ms); candidate name array bounds |
-| **Authorization** | CSPRNG auth token verification |
-| **Concurrency** | Lock-free audio callback (Rule 4), writes only atomic bool/int64; sender thread executes restart sequence exclusively |
-| **I/O** | Non-blocking SPSC queue drain; IPC control frames |
-| **Persistence** | None |
+- Realtime callback safety: Audio filter callback remains completely decoupled from SPU rendering and logging.
+- Input validation: Session ID byte comparison guards against stale pre-seek segments.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Seek discontinuity session restart | `plugin/src/vw_whisper_module.c:L318-L335` | `test_worker_lifecycle` | ✅ done |
-| 2 | Paused seek baseline backfill | `plugin/src/vw_whisper_module.c:L274, L286` | Code Review | ✅ done |
-| 3 | Threshold macros | `plugin/src/vw_whisper_module.c:L57-L58` | Code Review | ✅ done |
-| 4 | Worker binary fallback probing (GPU then CPU) | `plugin/src/vw_whisper_module.c:L128, L148` | `test_plugin_load` | ✅ done |
+|---|---|---|---|---|
+| 1 | Position tracking and presenter dispatch | `vw_whisper_module.c:L268,L389` | `test_caption_presenter.c:L172` | Done |
+| 2 | Presenter SPU initialization in open | `vw_whisper_module.c:L531-533` | Unit tests | Done |
+| 3 | Pipeline diagnostic logging | `vw_whisper_module.c:L383-387` | Runtime logs | Done |
 
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: 100ms polling throttle protects against excess object-tree allocations while maintaining sub-second seek/pause reactivity.
 
 ---
 
-### 1.20 `protocol/include/vw_protocol_types.h`
+### 1.14 `tests/unit/test_caption_presenter.c`
 
-**Why change**: Add `VW_CTRL_REASON_SEEK_DISCONTINUITY = 2U` control reason constant.
+**Why change**: Provide mock VLC symbols for SPU and timing pipeline, assert SPU channel registration, text region construction, OSD fallback, dual-channel flushing, and vout recreation re-registration.
 
-**Responsibility before**: Protocol types up to Step 16.  
-**After**: Protocol types including `VW_CTRL_REASON_SEEK_DISCONTINUITY`.
+**Responsibility before**: Unit tested basic OSD display and clear functions against stub symbols.
+**After**: Full test suite covering 10 test cases including SPU channel lifecycle, subpicture creation, timestamp assertions, channel flushing, and vout pointer change re-registration.
 
-**Callers**: `vw_whisper_module.c`, `vw_worker_client.c`, `vw_worker.c`, unit tests.  
-**Callees**: None.
+**Callers**: CTest runner (`ctest --preset linux-x64-debug`).
+**Callees**: `vw_caption_presenter.c`, mock VLC APIs.
 
-**Happy path**: Code passes `VW_CTRL_REASON_SEEK_DISCONTINUITY` in control frame payload.
+**Happy path**: Standalone test executable runs all 10 assertions and exits 0 with 0 memory leaks under Valgrind.
 
-**Failure path**: N/A.
+**Failure path**: Assertion failure triggers `abort()` with exact line number.
 
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Fits in `uint16_t` |
-| **Authorization** | N/A |
-| **Concurrency** | Pure constants |
-| **I/O** | N/A |
-| **Persistence** | N/A |
+- Standalone isolation: Tests run without live VLC process or display server.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Define `VW_CTRL_REASON_SEEK_DISCONTINUITY` | `protocol/include/vw_protocol_types.h:L143` | `vw_test_worker_client` | ✅ done |
+|---|---|---|---|---|
+| 1 | SPU channel registration tested | `test_caption_presenter.c:L168-185` | Test 6 | Done |
+| 2 | OSD fallback tested | `test_caption_presenter.c:L186-196` | Test 7 | Done |
+| 3 | Dual-channel flushing tested | `test_caption_presenter.c:L198-204` | Test 8 | Done |
+| 4 | Presenter clear tested | `test_caption_presenter.c:L206-215` | Test 9 | Done |
+| 5 | Vout recreation re-registration tested | `test_caption_presenter.c:L217-234` | Test 10 | Done |
 
-**Assumptions/Tradeoffs**: None.
+**Assumptions/Tradeoffs**: Uses lightweight heap-allocated mock structures that emulate VLC SPU lifecycle.
 
 ---
 
-### 1.21 `tests/integration/test_worker_lifecycle.c`
+### 1.15 `worker/src/vw_worker.c`
 
-**Why change**: Assert multi-session restart (`START` -> `AUDIO` -> `STOP(SEEK_DISCONTINUITY)` -> `START` -> `AUDIO` -> `STOP` -> `SHUTDOWN`) with session ID epoch gating verification.
+**Why change**: Add diagnostic log `WORKER_SEGMENT` when completed caption segments are popped from the segment builder and emitted across IPC.
 
-**Responsibility before**: Single session streaming integration test.  
-**After**: Lifecycle test verifying multi-session epoch restarts and pre-seek audio rejection.
+**Responsibility before**: Transcribed audio and sent `VW_MSG_CAPTION_SEGMENT` frames without an emission log.
+**After**: Logs `WORKER_SEGMENT` with segment ID, start/end PTS, finality flag, and text snippet upon IPC dispatch.
 
-**Callers**: CTest harness (`ctest`).  
-**Callees**: `vw_worker_client_start_session`, `vw_worker_client_send_audio`, `vw_worker_client_stop_session`.
+**Callers**: Worker main loop.
+**Callees**: `vw_protocol_codec.h`, `vw_ipc.h`, `vw_log.h`.
 
-**Happy path**: Test starts session 1, sends audio, sends `STOP(SEEK_DISCONTINUITY)`, starts session 2 with new session ID, sends audio, stops session 2, shuts down client, and asserts worker process exits 0 cleanly.
+**Happy path**: Inference completes, segment builder pops segment, worker logs `WORKER_SEGMENT` and sends frame across IPC transport.
 
-**Failure path**: Test assertion fails if worker crashes or fails restart.
+**Failure path**: IPC write failure breaks worker event loop and triggers clean shutdown.
 
 **Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks response codes |
-| **Authorization** | Secret auth token |
-| **Concurrency** | Client + worker process IPC |
-| **I/O** | IPC transport |
-| **Persistence** | Temporary sockets cleaned up |
+- Privacy invariant: Logging does not persist raw PCM or transcripts to disk by default.
 
 **Acceptance map**:
 
 | # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Test multi-session epoch restart | `tests/integration/test_worker_lifecycle.c:L218` | `test_worker_lifecycle` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.22 `tests/unit/test_caption_presenter.c`
-
-**Why change**: Assert `vw_caption_presenter_blank()` mid-session behavior, `vw_caption_presenter_clear()` teardown behavior, and flush invocation counts on `fake_filter.obj.object_type = "vout"`.
-
-**Responsibility before**: Tested standalone display and segment presenter functions.  
-**After**: Unit test asserting `blank()` OSD channel flush on `channel == 1` (`VOUT_SPU_CHANNEL_OSD`) and context retention, and `clear()` context resetting.
-
-**Callers**: CTest harness (`ctest`).  
-**Callees**: `vw_caption_presenter_blank`, `vw_caption_presenter_clear`.
-
-**Happy path**: Test sets `.obj.object_type = "vout"`, calls `blank()`, asserts `g_flush_calls == 1 && g_flush_channel == 1` and `p_filter_ctx` retained; calls `clear()`, asserts `g_flush_calls == 2` and `p_filter_ctx == NULL`.
-
-**Failure path**: Test fails if flush is not called or context is lost on blank.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Handles NULL and non-NULL contexts |
-| **Authorization** | N/A |
-| **Concurrency** | Single-threaded test |
-| **I/O** | None |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Test `blank()` and `clear()` presenter functions | `tests/unit/test_caption_presenter.c:L90` | `test_caption_presenter` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.23 `tests/unit/test_whisper_engine.c`
-
-**Why change**: Update `test_whisper_engine` call site to match the new `vw_whisper_engine_init(model_path, backend, gpu_device)` signature.
-
-**Responsibility before**: Initialized engine with `model_path` only.  
-**After**: Passes `VW_WORKER_BACKEND_AUTO` and `gpu_device = 0` to engine init.
-
-**Callers**: CTest harness (`ctest`).  
-**Callees**: `vw_whisper_engine_init`, `vw_whisper_engine_transcribe`, `vw_whisper_engine_free`.
-
-**Happy path**: Test initializes engine with `VW_WORKER_BACKEND_AUTO`, transcribes test audio vector, verifies output, and frees engine.
-
-**Failure path**: Test fails if engine init returns NULL or transcription fails.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Validates engine init and transcription results |
-| **Authorization** | N/A |
-| **Concurrency** | Single-threaded test |
-| **I/O** | File model load |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Update engine test for backend params | `tests/unit/test_whisper_engine.c:L22` | `test_whisper_engine` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.24 `tests/unit/test_worker_config.c`
-
-**Why change**: Add unit tests for `--backend auto|gpu|cpu` and `--gpu-device <id>` CLI arguments, default values, and error cases (invalid backend string, negative device ID, non-numeric device ID, dangling flags).
-
-**Responsibility before**: Tested `--pipe`, `--token`, `--model`, `--log-file` arguments and error cases.  
-**After**: Tests `--backend` and `--gpu-device` flag parsing, default initialization (`AUTO` and `0`), and invalid flag rejection.
-
-**Callers**: CTest harness (`ctest`).  
-**Callees**: `vw_worker_config_init_defaults`, `vw_worker_config_parse_args`.
-
-**Happy path**: Test parses `--backend gpu --gpu-device 1`, asserts `backend == VW_WORKER_BACKEND_GPU` and `gpu_device == 1`. Tests `--backend cpu`, asserts `backend == VW_WORKER_BACKEND_CPU`. Tests `--backend auto`, asserts `backend == VW_WORKER_BACKEND_AUTO`.
-
-**Failure path**: Test passes `--backend cuda`, `--gpu-device -1`, `--gpu-device abc`, `--backend` (dangling), asserts return code `2`.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks enum bounds and integer ranges (0..65535) |
-| **Authorization** | N/A |
-| **Concurrency** | Single-threaded test |
-| **I/O** | None |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Test backend and GPU device success paths | `tests/unit/test_worker_config.c:L62-L80` | `test_worker_config` | ✅ done |
-| 2 | Test backend and GPU device failure paths | `tests/unit/test_worker_config.c:L83-L100` | `test_worker_config` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.25 `tests/unit/vw_test_worker_client.c`
-
-**Why change**: Assert `VW_CTRL_REASON_SEEK_DISCONTINUITY` framing against mock server.
-
-**Responsibility before**: Tested client session state machine up to Step 16.  
-**After**: Updated test suite asserting seek discontinuity reason codes.
-
-**Callers**: CTest harness (`ctest`).  
-**Callees**: `vw_worker_client_stop_session`.
-
-**Happy path**: Test calls `vw_worker_client_stop_session(client, VW_CTRL_REASON_SEEK_DISCONTINUITY)` and mock server receives `STOP_SESSION` frame with reason `2U`.
-
-**Failure path**: Test assertion fails if reason code is corrupted.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks reason code framing |
-| **Authorization** | N/A |
-| **Concurrency** | Mock server thread synchronization |
-| **I/O** | IPC socket pair |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Test `SEEK_DISCONTINUITY` reason framing | `tests/unit/vw_test_worker_client.c:L166` | `test_worker_client` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.26 `worker/CMakeLists.txt`
-
-**Why change**: Enable Vulkan GPU acceleration by default (`VW_WITH_VULKAN=ON`), detect Vulkan SDK and `glslc`, handle MinGW cross-compilation find paths via `$ENV{VW_VULKAN_SDK}` (with explicit include dir override), set distinct output binary names (`vlc-whisper-worker` vs `vlc-whisper-worker-cpu`), and fallback to CPU-only with a warning if Vulkan SDK is absent.
-
-**Responsibility before**: Pinned `GGML_VULKAN OFF` and built CPU-only worker.  
-**After**: `VW_WITH_VULKAN` option (default ON), `find_package(Vulkan COMPONENTS glslc)`, cross find path support, and output artifact naming.
-
-**Callers**: CMake build system.  
-**Callees**: `third_party/whisper.cpp`, `find_package(Vulkan)`.
-
-**Happy path**:
-1. Host native Linux: CMake finds system `libvulkan-dev` and `glslc`, sets `GGML_VULKAN=ON`, builds `vlc-whisper-worker` with Vulkan GPU backend.
-2. Windows MinGW cross: With `VW_VULKAN_SDK` set, CMake finds Windows `libvulkan-1.a` and headers, sets `Vulkan_INCLUDE_DIR` to avoid host include pollution, sets `GGML_VULKAN=ON`, builds `vlc-whisper-worker.exe`.
-
-**Failure path**:
-1. Vulkan SDK / glslc absent: Emits `WARNING: VW: VW_WITH_VULKAN=ON but no Vulkan SDK/glslc found — building CPU-only worker`, sets `GGML_VULKAN=OFF`, builds `vlc-whisper-worker-cpu`.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks `Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE` |
-| **Authorization** | N/A |
-| **Concurrency** | Multi-threaded build target configuration |
-| **I/O** | Toolchain discovery |
-| **Persistence** | Output binary generation |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add `VW_WITH_VULKAN` option (default ON) | `worker/CMakeLists.txt:L23` | CMake configure | ✅ done |
-| 2 | Vulkan SDK & glslc detection | `worker/CMakeLists.txt:L37-L43` | CMake configure | ✅ done |
-| 3 | MinGW cross find path & include isolation | `worker/CMakeLists.txt:L31-L35` | Windows build | ✅ done |
-| 4 | Output binary naming (`vlc-whisper-worker` vs `-cpu`) | `worker/CMakeLists.txt:L83-L87` | Build verification | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.27 `worker/include/vw_whisper_engine.h`
-
-**Why change**: Update `vw_whisper_engine_init` signature to accept `vw_worker_backend_t backend` and `int gpu_device`.
-
-**Responsibility before**: `vw_whisper_engine_init(const char* model_path)`.  
-**After**: `vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device)` with doc comment explaining backend selection and transparent CPU fallback.
-
-**Callers**: `worker/src/vw_worker.c`, unit tests.  
-**Callees**: None.
-
-**Happy path**: Caller passes backend enum and GPU device ordinal to engine initialization.
-
-**Failure path**: N/A.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Parameter typing |
-| **Authorization** | N/A |
-| **Concurrency** | Engine instance initialization |
-| **I/O** | N/A |
-| **Persistence** | N/A |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Update engine header signature and doc comment | `worker/include/vw_whisper_engine.h:L14-L18` | `test_whisper_engine` | ✅ done |
-
-**Assumptions/Tradeoffs**: Enforces Rule 11 (20-30 word header comments).
-
----
-
-### 1.28 `worker/include/vw_worker_config.h`
-
-**Why change**: Add `vw_worker_backend_t` enum (`VW_WORKER_BACKEND_AUTO = 0`, `VW_WORKER_BACKEND_GPU`, `VW_WORKER_BACKEND_CPU`) and `gpu_device` field to `vw_worker_config_t`.
-
-**Responsibility before**: Defined worker configuration struct for model path, pipe name, log file, token.  
-**After**: Includes `backend` and `gpu_device` fields.
-
-**Callers**: `worker/src/vw_worker_config.c`, `worker/src/vw_worker.c`, `tests/unit/test_worker_config.c`.  
-**Callees**: None.
-
-**Happy path**: Config struct holds parsed backend choice and GPU device index.
-
-**Failure path**: N/A.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Enum type safety |
-| **Authorization** | N/A |
-| **Concurrency** | Config struct passed by pointer |
-| **I/O** | N/A |
-| **Persistence** | N/A |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Add `vw_worker_backend_t` enum | `worker/include/vw_worker_config.h:L12-L16` | `test_worker_config` | ✅ done |
-| 2 | Add `backend` and `gpu_device` config fields | `worker/include/vw_worker_config.h:L25-L26` | `test_worker_config` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.29 `worker/src/vw_whisper_engine.c`
-
-**Why change**: Configure whisper.cpp context parameters `cparams.use_gpu` and `cparams.gpu_device` according to requested backend, and log startup backend information.
-
-**Responsibility before**: Created default context with CPU inference.  
-**After**: Sets `cparams.use_gpu = (backend != VW_WORKER_BACKEND_CPU)` and `cparams.gpu_device = (gpu_device >= 0) ? gpu_device : 0`, and logs `WORKER_ENGINE` with effective backend.
-
-**Callers**: `worker/src/vw_worker.c:L183`.  
-**Callees**: `whisper_context_default_params`, `whisper_init_from_file_with_params`, `vw_log_event`.
-
-**Happy path**:
-1. `backend == VW_WORKER_BACKEND_AUTO` or `GPU`: sets `cparams.use_gpu = true`, `whisper.cpp` selects first GPU/IGPU device, logs `"inference backend: gpu (auto CPU fallback if no device)"`, returns valid engine context.
-2. `backend == VW_WORKER_BACKEND_CPU`: sets `cparams.use_gpu = false`, logs `"inference backend: cpu"`, returns valid engine context.
-
-**Failure path**:
-1. Model file missing/invalid: `whisper_init_from_file_with_params` returns NULL; returns NULL gracefully.
-2. GPU unavailable at runtime: `whisper.cpp` internal `whisper_backend_init_gpu` logs `"no GPU found"` and falls back to CPU backend, returning a valid context.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Null check on `model_path`; clamps negative `gpu_device` to 0 |
-| **Authorization** | N/A |
-| **Concurrency** | Single engine instance created on worker main thread |
-| **I/O** | Model file read |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Set `cparams.use_gpu` and `cparams.gpu_device` | `worker/src/vw_whisper_engine.c:L14-L15` | `test_whisper_engine` | ✅ done |
-| 2 | Log effective backend startup message | `worker/src/vw_whisper_engine.c:L22-L23` | Log inspection | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.30 `worker/src/vw_worker.c`
-
-**Why change**: Pass `config->backend` and `config->gpu_device` to `vw_whisper_engine_init`, drain segment builder on `START_SESSION` to discard pre-seek hypotheses, clear audio buffer on `STOP`, and implement thread-safe `vw_worker_stop_reason_name` with `_Thread_local static char buf[16]`.
-
-**Responsibility before**: Single session CPU worker loop.  
-**After**: Multi-session worker loop supporting GPU backend initialization, seek epoch restarts, and thread-safe reason logging.
-
-**Callers**: `worker/src/main.c` (`main()`), integration tests.  
-**Callees**: `vw_whisper_engine_init`, `vw_worker_stop_reason_name`, `vw_audio_buffer_clear`, `vw_segment_builder_pop`, `vw_ipc_send`.
-
-**Happy path**:
-1. Startup: Initializes engine with `config->backend` and `config->gpu_device` (`:L183`).
-2. Multi-session: On `START_SESSION`, drains pre-seek hypotheses from builder (`:L323-L327`), adopts new `session_id`, replies `STARTED`. On `STOP_SESSION`, clears `audio_buf` (`:L404`), logs reason via `vw_worker_stop_reason_name`.
-
-**Failure path**:
-1. Invalid model on start: Rejects start with `E_MODEL_MISSING`.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Checks `session_id` match on incoming audio |
-| **Authorization** | Constant-time auth token comparison |
-| **Concurrency** | Single-writer main loop; `vw_worker_stop_reason_name` uses `_Thread_local static char buf[16]` |
-| **I/O** | Timed IPC socket operations |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Pass backend config to engine init | `worker/src/vw_worker.c:L183` | `test_worker_lifecycle` | ✅ done |
-| 2 | Drain segment builder on `START_SESSION` | `worker/src/vw_worker.c:L323-L327` | `test_worker_lifecycle` | ✅ done |
-| 3 | Thread-safe `vw_worker_stop_reason_name` | `worker/src/vw_worker.c:L41-L56` | `test_worker_ipc` | ✅ done |
-
-**Assumptions/Tradeoffs**: None.
-
----
-
-### 1.31 `worker/src/vw_worker_config.c`
-
-**Why change**: Parse `--backend <auto|gpu|cpu>` and `--gpu-device <id>` CLI arguments and set defaults.
-
-**Responsibility before**: Parsed `--pipe`, `--token`, `--model`, `--log-file`.  
-**After**: Parses `--backend` and `--gpu-device`, initializing defaults to `VW_WORKER_BACKEND_AUTO` and `gpu_device = 0`.
-
-**Callers**: `worker/src/main.c`, `tests/unit/test_worker_config.c`.  
-**Callees**: `strcmp`, `strtol`, `fprintf`.
-
-**Happy path**:
-1. No flags: `config->backend = VW_WORKER_BACKEND_AUTO`, `config->gpu_device = 0`.
-2. `--backend gpu --gpu-device 1`: sets `backend = VW_WORKER_BACKEND_GPU`, `gpu_device = 1`.
-
-**Failure path**:
-1. Unknown backend (e.g. `--backend cuda`): prints error, returns `2`.
-2. Invalid device ID (e.g. `--gpu-device -1` or `abc`): prints error, returns `2`.
-3. Dangling flag with missing argument: prints error, returns `2`.
-
-**Boundaries**:
-
-| Boundary type | What to check |
-| --- | --- |
-| **Input validation** | Strict string match on `auto|gpu|cpu`; `strtol` numeric check and range check `[0..65535]` |
-| **Authorization** | N/A |
-| **Concurrency** | Single-threaded argument parsing |
-| **I/O** | Error output to stderr |
-| **Persistence** | None |
-
-**Acceptance map**:
-
-| # | Criterion | Code | Test | Status |
-| --- | --- | --- | --- | --- |
-| 1 | Set backend and device defaults | `worker/src/vw_worker_config.c:L42-L43` | `test_worker_config` | ✅ done |
-| 2 | Parse `--backend auto|gpu|cpu` | `worker/src/vw_worker_config.c:L63-L74` | `test_worker_config` | ✅ done |
-| 3 | Parse `--gpu-device <id>` with bounds check | `worker/src/vw_worker_config.c:L75-L82` | `test_worker_config` | ✅ done |
+|---|---|---|---|---|
+| 1 | Worker segment emission log added | `vw_worker.c:L436-439` | `test_worker_lifecycle` | Done |
 
 **Assumptions/Tradeoffs**: None.
 
@@ -1011,142 +429,77 @@
 
 ## 2. Happy-Path Request Trace
 
-The following trace outlines worker startup, Vulkan GPU initialization, audio streaming, seek restart, and clean shutdown:
+End-to-end trace of a transcribed caption segment from worker emission to VLC SPU rendering:
 
-```text
-1. Worker Process Launch & Argument Parsing
-   └─ worker/src/main.c:main
-      ├─ Initializes defaults: worker/src/vw_worker_config.c:vw_worker_config_init_defaults
-      │  └─ backend = VW_WORKER_BACKEND_AUTO, gpu_device = 0
-      ├─ Parses CLI flags: worker/src/vw_worker_config.c:vw_worker_config_parse_args
-      │  └─ Extracts --pipe, --token, --model, and optional --backend/--gpu-device
-      └─ Launches worker event loop: worker/src/vw_worker.c:vw_worker_run (L183)
+1. **Worker Emission** ([`worker/src/vw_worker.c:L420-440`](file:///home/razvan/vlc-whisper/.worktrees/gemini/worker/src/vw_worker.c#L420-L440)):
+   - `vw_segment_builder_pop` extracts completed `vw_caption_segment_t`.
+   - `vw_protocol_encode_payload` encodes `VW_MSG_CAPTION_SEGMENT`.
+   - `vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEGMENT", ...)` logs segment dispatch.
+   - `vw_ipc_send` transmits header and payload over authenticated local socket/pipe.
 
-2. Whisper Engine & Vulkan GPU Initialization
-   └─ worker/src/vw_whisper_engine.c:vw_whisper_engine_init (L14)
-      ├─ Sets cparams.use_gpu = true (since backend != CPU)
-      ├─ Sets cparams.gpu_device = 0
-      ├─ Invokes whisper.cpp: whisper_init_from_file_with_params(model_path, cparams)
-      │  ├─ whisper.cpp queries Vulkan runtime (ggml-vulkan backend)
-      │  ├─ Selects first enumerated GPU/IGPU device and compiles compute pipelines
-      │  └─ Loads GGML model weights into GPU VRAM
-      ├─ Logs startup info: WORKER_ENGINE: "inference backend: gpu (auto CPU fallback if no device)"
-      └─ Spawns background IPC reader thread (vw_worker_reader_main)
+2. **Plugin Reception** ([`plugin/src/vw_whisper_module.c:L371-390`](file:///home/razvan/vlc-whisper/.worktrees/gemini/plugin/src/vw_whisper_module.c#L371-L390)):
+   - Background sender thread receives `VW_MSG_CAPTION_SEGMENT` via `vw_worker_client_receive_frame`.
+   - Verifies `recv.segment.session_id` matches active session epoch.
+   - Logs `[PLUGIN_SEGMENT]` with segment metadata.
+   - Dispatches to `vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us)`.
 
-3. Handshake & Session Start
-   └─ Plugin connects over authenticated IPC pipe and exchanges HELLO / HELLO_ACK
-   └─ Plugin sends START_SESSION with session_id and timeline_origin_pts_us
-   └─ Worker receives START_SESSION:
-      ├─ Drains stale hypotheses from segment builder: vw_segment_builder_pop (L323)
-      ├─ Copies session_id and sets session_active = true
-      └─ Transmits STARTED reply header over IPC
-
-4. Real-Time Audio Streaming & GPU Inference
-   └─ VLC filter callback captures 16kHz Mono S16LE PCM chunks into SPSC queue
-   └─ Plugin sender thread transmits VW_MSG_AUDIO_PCM frames over IPC
-   └─ Worker reader thread pushes audio frames into worker queue (vw_worker_queue_push)
-   └─ Worker main loop accumulates audio into audio_buf:
-      ├─ Evaluates VAD energy window
-      ├─ Executes GPU whisper inference: vw_whisper_engine_transcribe (L247)
-      ├─ Builds caption segment: vw_segment_builder_add_hypothesis
-      └─ Emits VW_MSG_CAPTION_SEGMENT frame over IPC to VLC plugin for OSD rendering
-
-5. Seek Discontinuity Epoch Restart
-   └─ User seeks in VLC -> callback/poll sets discontinuity_pending = true
-   └─ Plugin sender thread:
-      ├─ Erases active OSD: vw_caption_presenter_blank (L320)
-      ├─ Sends STOP_SESSION (reason=SEEK_DISCONTINUITY) over IPC (L321)
-      ├─ Drains stale pre-seek PCM from SPSC queue (L323)
-      └─ Sends START_SESSION with new session_id and resume_pts_us
-   └─ Worker receives STOP_SESSION:
-      ├─ Clears audio buffer: vw_audio_buffer_clear (L404)
-      └─ Logs: "WORKER_SESSION: session stopped (reason=SEEK_DISCONTINUITY)"
-   └─ Worker receives START_SESSION:
-      ├─ Drains builder pre-seek hypotheses (L323-L327)
-      ├─ Adopts new session_id and sets session_active = true
-      └─ Resumes GPU transcription for new media epoch
-
-6. Clean Teardown & Exit
-   └─ VLC stops -> plugin sends SHUTDOWN frame over IPC
-   └─ Worker reader receives SHUTDOWN, pushes to queue
-   └─ Worker main loop pops SHUTDOWN, breaks execution loop
-   └─ Frees engine (VRAM deallocated), unlinks socket, exits 0
-```
+3. **Presenter SPU Processing** ([`plugin/src/vw_caption_presenter.c:L150-220`](file:///home/razvan/vlc-whisper/.worktrees/gemini/plugin/src/vw_caption_presenter.c#L150-L220)):
+   - `vw_caption_presenter_find_vout` walks object hierarchy and retrieves held `vout_thread_t*`.
+   - Checks `!presenter->spu_channel_registered || presenter->p_last_vout != vout`.
+   - Calls `vout_RegisterSubpictureChannel(vout)` returning channel ID (e.g. `9`).
+   - Computes `start_tick = mdate()` and `stop_tick = start_tick + duration_us`.
+   - Calls `vw_caption_presenter_render_spu`:
+     - Allocates `subpic = subpicture_New(NULL)`.
+     - Initializes `video_format_Init(&fmt, VLC_CODEC_TEXT)` with `i_sar_num = 1; i_sar_den = 1;`.
+     - Allocates `region = subpicture_region_New(&fmt)`.
+     - Populates `region->p_text = text_segment_New(text)`.
+     - Sets `region->i_align = SUBPICTURE_ALIGN_BOTTOM`, `region->i_text_align = SUBPICTURE_ALIGN_BOTTOM`.
+     - Sets `subpic->b_subtitle = false`, `subpic->b_ephemer = true`, `subpic->b_fade = true`.
+     - Calls `vout_PutSubpicture(vout, subpic)` (transferring full ownership to VLC compositor).
+   - Logs `[PRESENTER_SPU_RENDER]` and releases held `vout` reference via `vlc_object_release`.
 
 ---
 
 ## 3. Most Important Failure Path
 
-### Failure Scenario: Worker Launches on Machine Lacking Physical Vulkan GPU or Driver
+Failure trace: **Video Output Recreation During Playback (Window Resize)**
 
-```text
-1. Worker Process Launch
-   └─ Worker starts with default configuration (--backend auto)
-   └─ worker/src/vw_whisper_engine.c:vw_whisper_engine_init (L14)
-      ├─ cparams.use_gpu is set to true
-      └─ Calls whisper_init_from_file_with_params(model_path, cparams)
-
-2. Whisper.cpp GPU Probing & Transparent CPU Fallback
-   └─ whisper.cpp:whisper_backend_init_gpu
-      ├─ Calls ggml_backend_vk_init(gpu_device)
-      ├─ Vulkan physical device enumeration returns 0 devices / driver missing
-      ├─ whisper.cpp logs: "no GPU found" (INFO)
-      ├─ whisper_backend_init_gpu returns NULL
-      └─ whisper.cpp falls back to whisper_backend_init(CPU)
-         └─ Appends standard CPU backend to context backend registry
-         └─ Loads GGML model weights into system RAM
-
-3. Worker Engine Initialization Success
-   └─ whisper_init_from_file_with_params returns a VALID whisper_context pointer
-   └─ vw_whisper_engine_init logs:
-      "WORKER_ENGINE: inference backend: gpu (auto CPU fallback if no device)"
-   └─ Engine successfully loaded and ready for transcription
-
-4. Normal Session Execution via CPU
-   └─ Worker receives START_SESSION and AUDIO_PCM frames
-   └─ Transcribes audio using CPU thread pool
-   └─ Emits CAPTION_SEGMENT frames to VLC plugin
-   └─ End-user receives real-time subtitles with zero crashes or connection failures
-```
+1. VLC video display module (`direct3d11` / X11) resizes window, destroying old `vout_thread_t` and creating a new instance at a new memory address.
+2. Next caption segment arrives at sender thread and enters `vw_caption_presenter_show_segment`.
+3. `vw_caption_presenter_find_vout` discovers new `vout` pointer (`vout != presenter->p_last_vout`).
+4. Presenter detects pointer mismatch at line 172.
+5. Invokes `vout_RegisterSubpictureChannel(new_vout)` to allocate a valid channel ID on the new `vout`.
+6. Updates `presenter->spu_channel_id = new_channel_id`, `presenter->p_last_vout = new_vout`.
+7. `vout_PutSubpicture` successfully queues the subpicture to the active compositor heap without silent drops.
 
 ---
 
 ## 4. Boundary Summary
 
-| Boundary type | Checks performed | Code Location | Finding / Guard Implementation |
-|---|---|---|---|
-| **Input validation** | CLI `--backend` validation | `vw_worker_config.c:L63-L74` | Rejects unknown backend strings with clear error and exit code 2. |
-| **Input validation** | CLI `--gpu-device` validation | `vw_worker_config.c:L75-L82` | Uses `strtol` to ensure non-negative integer and bounds check `[0..65535]`. |
-| **Input validation** | Engine Init Device Clamping | `vw_whisper_engine.c:L15` | Clamps negative `gpu_device` parameter values to 0. |
-| **Input validation** | Audio Callback PTS Fallback | `vw_whisper_module.c:L481` | Guards `p_block->i_pts >= VLC_TS_0` and `last_pts_us > 0` before checking `VW_PTS_JUMP_THRESHOLD_US` (500ms). |
-| **Input validation** | Position Jump Gates | `vw_whisper_module.c:L276, L295` | `position_us >= 0` guards and `VW_SEEK_JUMP_THRESHOLD_US` (1s) macro gate on continuous and paused checks. |
-| **Input validation** | Session ID Gating | `vw_worker.c:L343`<br>`vw_whisper_module.c:L357` | `session_id` memcmp gating drops stale pre-seek `AUDIO` frames and in-flight `SEGMENT` frames. |
-| **Authorization** | Auth Token Verification | `vw_worker.c:L30` | Secret 32-byte auth token validated using `verify_token_constant_time`. |
-| **Concurrency** | Lock-Free Callback | `vw_whisper_module.c:L475` | Callback is 100% lock-free (Rule 4), writing only atomic bool/int64 variables. |
-| **Concurrency** | Thread-Safe Stop Reason Logger | `worker/src/vw_worker.c:L51` | `vw_worker_stop_reason_name` uses `_Thread_local static char buf[16]` to guarantee thread safety. |
-| **I/O** | CMake Cross Find Path Isolation | `worker/CMakeLists.txt:L31-L35` | Sets `Vulkan_INCLUDE_DIR` to MinGW target path when `$ENV{VW_VULKAN_SDK}` is defined, preventing host `/usr/include` header pollution. |
-| **I/O** | OSD Channel Flush | `vw_caption_presenter.c:L125` | `vw_caption_presenter_blank` uses `vout_FlushSubpictureChannel` and 1ms OSD blanking to erase active subpictures mid-session. |
-| **Persistence** | Socket & File Cleanup | `vw_whisper_module.c:L411`<br>`vw_worker.c:L440` | Socket files and pipe handles unlinked and closed on teardown. Zero transcript/PCM data written to disk (Rule 5). |
+| Boundary Type | Implementation & Defense Mechanism | Verification / Test |
+|---|---|---|
+| **Input Validation** | NULL checks on presenter, segment, and UTF-8 text pointers. Zero/negative duration defaults to 2,000,000 µs (2s). Past-timestamp clamp guards `stop_tick <= now_tick`. | `test_caption_presenter.c:L130-154` |
+| **Authorization** | Session ID validation on sender thread (`memcmp` against `client->session_id`) discards stale pre-seek segments. | `test_worker_lifecycle` |
+| **Concurrency** | Presenter state is owned exclusively by the background sender thread. No shared locks with realtime audio callback. `vout` references are held and released cleanly. | Valgrind memcheck, TSAN |
+| **I/O & SPU** | Graceful fallback to `vout_OSDText` on channel registration failure (`< 0`) or subpicture allocation error. Dual-channel flush on seek. | `test_caption_presenter.c:L186-204` |
+| **Persistence / Memory** | SPU ownership transferred to VLC core on `vout_PutSubpicture`. On any allocation failure before put, `subpicture_region_Delete` and `subpicture_Delete` clean up allocations. | Valgrind 0 leaks |
 
 ---
 
 ## 5. Acceptance Criterion → Code Mapping
 
-| # | Criterion | Code Implementation | Test Assertion | Status |
+| # | Acceptance Criterion | Source Location | Test Assertion | Status |
 |---|---|---|---|---|
-| 1 | Default build on Vulkan host produces GPU worker | `worker/CMakeLists.txt:L23` (`VW_WITH_VULKAN=ON`) | `test_whisper_engine` + PE header inspection (`vulkan-1.dll`) | ✅ done |
-| 2 | `--backend cpu` produces CPU-only worker | `worker/src/vw_worker_config.c:L70`<br>`worker/src/vw_whisper_engine.c:L14` | `tests/unit/test_worker_config.c:L71` | ✅ done |
-| 3 | `--backend gpu` / `auto` transparent fallback to CPU | `worker/src/vw_whisper_engine.c:L14` | `whisper.cpp` built-in fallback + `test_whisper_engine` | ✅ done |
-| 4 | `--gpu-device <id>` selects GPU device | `worker/src/vw_worker_config.c:L75`<br>`worker/src/vw_whisper_engine.c:L15` | `tests/unit/test_worker_config.c:L65` | ✅ done |
-| 5 | Host without Vulkan SDK builds CPU-only with warning | `worker/CMakeLists.txt:L42` | CMake configure without SDK | ✅ done |
-| 6 | Explicit CPU presets provided | `CMakePresets.json:L21, L46, L70` | CMake configure `*-cpu` presets | ✅ done |
-| 7 | Full reproducible README instructions | `README.md:L7-L144` | Manual documentation review | ✅ done |
-| 8 | Seek during playback: OSD clears immediately | `plugin/src/vw_caption_presenter.c:L125`<br>`plugin/src/vw_whisper_module.c:L320` | `tests/unit/test_caption_presenter.c:L90` | ✅ done |
-| 9 | Pre-seek hypotheses discarded on `START_SESSION` | `worker/src/vw_worker.c:L323-L327` | `tests/integration/test_worker_lifecycle.c:L218` | ✅ done |
-| 10 | Pre-seek audio discarded from SPSC queue | `plugin/src/vw_whisper_module.c:L323-L324` | `tests/integration/test_worker_lifecycle.c:L223` | ✅ done |
-| 11 | C17, Google C style, no project C++ | All `.c`/`.h` files | `clang-format --dry-run --Werror` | ✅ done |
-| 12 | 100% CTest pass rate (16/16 targets) | CMake & CTest suite | All 16 targets passing | ✅ done |
-| 13 | Zero memory leaks under Valgrind | `ctest -T memcheck` | Valgrind memcheck clean | ✅ done |
+| 1 | Register private SPU channel with vout | `vw_caption_presenter.c:L173` | `test_caption_presenter.c:L172` | Done |
+| 2 | Construct subpicture with `VLC_CODEC_TEXT` and `text_segment_New` | `vw_caption_presenter.c:L91-105` | `test_caption_presenter.c:L174` | Done |
+| 3 | Set bottom-center alignment (`SUBPICTURE_ALIGN_BOTTOM`) | `vw_caption_presenter.c:L108-109` | `test_caption_presenter.c:L175` | Done |
+| 4 | Schedule in OSD clock domain (`mdate()`) with duration bounds | `vw_caption_presenter.c:L188-204` | `test_caption_presenter.c:L176-178` | Done |
+| 5 | Re-register SPU channel on vout pointer change (`p_last_vout`) | `vw_caption_presenter.c:L172` | `test_caption_presenter.c:L217-234` | Done |
+| 6 | Graceful fallback to `vout_OSDText` on channel failure | `vw_caption_presenter.c:L208-213` | `test_caption_presenter.c:L186-196` | Done |
+| 7 | Dual-channel flushing on blank and teardown | `vw_caption_presenter.c:L226-240` | `test_caption_presenter.c:L198-204` | Done |
+| 8 | Define shared `VW_WEAK` macro in `vw_platform.h` | `vw_platform.h:L13,L16` | Cross-build linkage | Done |
+| 9 | Export SPU & timing symbols in `libvlccore.def` | `libvlccore.def:L11-19` | Windows MinGW build | Done |
+| 10 | Update all documentation (Roadmap, Layout, Strategy, Contracts, Essentials) | `docs/*.md` | Doc inspection | Done |
 
 ---
 
@@ -1154,30 +507,19 @@ The following trace outlines worker startup, Vulkan GPU initialization, audio st
 
 ### Bugs (Sorted by Priority)
 
-| Priority | Component / Location | Description | Impact | Proposed Fix / Status |
+| Priority | Component / Location | Description | Impact | Proposed Fix |
 |---|---|---|---|---|
-| **Medium** | `worker/CMakeLists.txt:34` | When cross-compiling with `VW_VULKAN_SDK`, `find_package(Vulkan)` can pick up host `/usr/include` from host `glslc`, causing header conflicts with MinGW CRT. | MinGW cross-build failure on `ggml-vulkan.cpp` | Explicitly set `Vulkan_INCLUDE_DIR` to `$ENV{VW_VULKAN_SDK}/mingw/include` in CMake when `VW_VULKAN_SDK` is defined. (**RESOLVED**). |
-| **Low** | `worker/src/vw_whisper_engine.c:22` | `vw_log_event(cparams.use_gpu ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_INFO, ...)` — redundant ternary over identical values. | Code hygiene / potential dead code warning | Collapsed to single `VW_LOG_LEVEL_INFO`. (**RESOLVED**). |
-| **Low** | `CMakePresets.json` testPresets | Three `*-cpu` configurePresets existed but were absent from `testPresets`. | `ctest --preset linux-x64-debug-cpu` failed with unknown preset | Added `linux-x64-debug-cpu`, `windows-x64-release-cpu`, and `windows-x64-debug-cpu` to `testPresets`. (**RESOLVED**). |
-| **Low** | `worker/include/vw_whisper_engine.h:8` | Header included `vw_worker_config.h` solely for `vw_worker_backend_t`. | Unnecessary coupling between engine abstraction and worker config | Moved `vw_worker_backend_t` to `vw_whisper_engine.h`; `vw_worker_config.h` includes `vw_whisper_engine.h`. (**RESOLVED**). |
-| **Low** | `worker/src/vw_worker_config.c:51-86` | Options with missing values fell through to `unknown option` error message. | Misleading CLI error reporting | Added explicit `missing value for <option>` checks for all flags; added unit tests in `test_worker_config.c`. (**RESOLVED**). |
-| **Low** | `worker/src/vw_whisper_engine.c:15` | Negative `gpu_device` values clamped to 0 without documentation. | Hides caller expectations | Added clarifying documentation comment for direct API callers. (**RESOLVED**). |
-| **Low** | `worker/src/vw_worker_config.c:78` | `strtol` return value check allowed values up to `LONG_MAX` before casting to `int`. | Possible integer overflow on out-of-range device numbers | Added explicit range check `id >= 0 && id <= 65535` before casting to `int`. (**RESOLVED**). |
+| **Low** | `plugin/src/vw_caption_presenter.c:L172` | Heap address reuse edge case: if a destroyed `vout_thread_t` is immediately reallocated at the exact same memory address, `presenter->p_last_vout != (void*)vout` would evaluate to false. | In rare rapid allocation recycling, SPU channel re-registration might be delayed until the next distinct pointer. | Presenter could verify channel validity or track a generation counter if VLC core exposes one. Currently low impact as allocator address reuse across window recreations is rare. |
 
 ### Architectural & Operational Risks
 
 | Category | Risk Description | Affected Files | Mitigation Strategy |
 |---|---|---|---|
-| **Resource Consumption** | Compiling Vulkan compute shaders (`glslc` + `vulkan-shaders-gen`) creates significant memory spikes during parallel builds (`ninja -j`), which can trigger OOM kills on hosts with <= 8 GB RAM. | `worker/CMakeLists.txt`, `README.md` | Documented build memory limits in `README.md` and `step17a_plan.md`, recommending `-j1` or `-j2` for GPU builds. Added explicit `*-cpu` presets for low-memory environments. |
-| **Runtime Dependency** | The Windows GPU worker (`vlc-whisper-worker.exe`) imports `vulkan-1.dll` at load time. On legacy Windows installations lacking Vulkan drivers, process loader fails before main. | `worker/CMakeLists.txt`, `README.md` | Documented runtime dependency; provided separate standalone `vlc-whisper-worker-cpu.exe` binary via `windows-x64-release-cpu` preset for loader-less machines. |
+| **Roadmap Boundary** | Step 17b schedules subpictures at `mdate()` (OSD clock domain) for reactive live streaming. Step 17c (Look-Ahead Source Decoding) will produce future segments that cannot be timestamped at `mdate()`. | `vw_caption_presenter.c`, `docs/plans/step17b_plan.md` | Step 17c will implement either plugin-side pacing or subtitle-clock channel probing as documented in `milestone3_postmortem.md` addendum. |
+| **VLC SPU Warning** | VLC logs `main warning: original picture size is undefined` once per caption because `subpic->i_original_picture_width/height` are 0. | `vw_caption_presenter.c` | VLC core automatically substitutes source video dimensions (`fmt_src->i_visible_width/height`); text rendering scales properly. |
 
 ### Code Style & Quality Nitpicks
 
 | Issue Type | File & Line | Description | Recommendation |
 |---|---|---|---|
-| **Tautological Ternary** | `worker/src/vw_whisper_engine.c:22` | Redundant `? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_INFO`. | Fixed by removing ternary branch. |
-| **Header Coupling** | `worker/include/vw_whisper_engine.h:8` | Whisper header coupled to `vw_worker_config.h`. | Fixed by moving enum definition to engine header. |
-| **CLI Dangling-Value UX** | `worker/src/vw_worker_config.c:51-86` | Option with no value misreported as `unknown option`. | Fixed with dedicated `missing value for <flag>` guards. |
-| **Silent gpu_device Clamp** | `worker/src/vw_whisper_engine.c:15` | Negatives silently remapped to 0. | Documented inline behavior. |
-| **Missing *-cpu testPresets** | `CMakePresets.json:133-149` | `*-cpu` builds had no `ctest --preset` entry. | Added test presets for all CPU configurations. |
-| **Naming Consistency** | `worker/include/vw_whisper_engine.h:11` | `vw_worker_backend_t` enum uses prefix `VW_WORKER_BACKEND_` matching project naming conventions. | Retained `vw_` symbol namespacing. |
+| **Compiler Warning** | `tests/unit/test_caption_presenter.c:L140-155` | Unused variables when assertions are compiled out in Release mode (`NDEBUG`). | Added `(void)` casts after assertions to maintain zero-warning builds across both Debug and Release configurations. |

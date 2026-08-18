@@ -8,22 +8,26 @@
 
 typedef struct vw_caption_presenter {
   void* p_filter_ctx;
+  void* p_held_vout;   // Retained vout reference ensuring lifetime safety and protecting against pointer address reuse.
+  int spu_channel_id;  // Registered VLC SPU channel ID; -1 when unregistered or unavailable.
+  bool spu_channel_registered;  // True if spu_channel_id >= 0 and successfully registered with current vout.
 } vw_caption_presenter_t;
 
-// Renders timed subtitle text directly onto the active VLC video output surface using OSD rendering, walking the
-// parent object hierarchy to locate the target vout thread.
+// Renders timed fallback caption text directly onto the active VLC video output surface using OSD rendering,
+// locating the target vout thread safely through the parent filter hierarchy when SPU presentation is unavailable.
 bool vw_caption_presenter_display(void* p_filter, const char* text, int64_t duration_us);
 
-// Dispatches a validated timed transcription segment structure to the video output overlay, extracting its
-// microsecond duration bounds and formatting UTF-8 text for display.
-bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment);
+// Dispatches a transcription segment to the VLC SPU channel as timed text in the OSD clock domain
+// (i_start = mdate()), falling back gracefully to vout_OSDText if SPU channel registration fails.
+bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
+                                       int64_t input_time_us);
 
-// Blanks the active OSD overlay while retaining the filter context, allowing later caption
-// segments to render after a mid-session seek. No-op when no filter context is set.
+// Blanks active caption overlays by flushing both private SPU and OSD channels while preserving the filter context,
+// ensuring safe subtitle erasure across user seeks before upcoming segments arrive.
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter);
 
-// Blanks the active OSD overlay and resets the filter context during module teardown,
-// preventing subsequent segment rendering through the presenter. Never mid-session.
+// Flushes active caption channels, releases any held video output references, and resets filter and channel context
+// exclusively during module teardown, never during mid-session seeks or timeline resets.
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter);
 
 #endif  // VW_CAPTION_PRESENTER_H_

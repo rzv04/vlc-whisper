@@ -311,3 +311,67 @@ To implement these feature sets cleanly and verifiably on `gemini/milestone-3`, 
 - **Postmortem Report File**: `docs/plans/milestone3_postmortem.md`
 - **Native Test Suite**: 13/13 tests passing on `gemini/milestone-3` baseline.
 - **Memcheck Output**: 0 memory leaks, 100% tests passed under Valgrind.
+
+---
+
+## Addendum: Step 17b SPU Bugfix Trace (Newer Iteration — 2026-08-18)
+
+> **Timeline note:** this section documents the bugfix trace of the **step-17b re-implementation** on
+> `gemini/milestone-3-step-17b` (commits `98d64d8` feat, `34e13cf` fix). It was written **after** the
+> postmortem above and is **not part of the postmortem's original timeline**. The two postmortem
+> findings re-encountered here ("Empty SPU Subpicture", MinGW weak symbols) are referenced as such;
+> the root-cause chain below is new.
+
+### Symptom
+Pipeline fully working — worker running GPU inference, segments emitted over IPC, presenter logging
+`PRESENTER_SPU_RENDER` on the registered channel — yet **no captions on screen** in live VLC
+3.0.23 (Windows, d3d11va hardware decode + direct3d11 display).
+
+### Step 1 — postmortem's "Empty SPU" bug ruled out
+The postmortem's documented cause (subpicture pushed with `p_region = NULL`) was already fixed in the
+17b code: regions carry `subpicture_region_New(VLC_CODEC_TEXT)` + `text_segment_New()`. Construction
+matches the postmortem's canonical pattern field-for-field (verified against `vout_OSDText`'s own
+region construction). Not the failure.
+
+### Step 2 — clock-domain mixup (S-domain PTS vs media position)
+Worker segment PTS are **not** media timestamps. VLC 3.0's audio output re-bases audio-filter block
+PTS into the **system-date domain** (`aout_DecPlay` in `src/audio_output/dec.c` computes
+`advance = block->i_pts - mdate()`; µs since boot on Windows — worker logs showed `~19874s`/`~21133s`
+≈ boot uptime), while `input_Control(INPUT_GET_TIME)` returns the media position. The presenter's
+`mdate() + (segment_pts - input_time)` subtracted hours of offset → subpictures scheduled ~5.5h in
+the future → `SpuSelectSubpictures` "Too early, come back next monday" forever.
+Fix: S→M conversion `media_t = segment_pts - (system_now - input_time)` with `system_now` = last
+audio-filter block PTS (frozen while paused, keeping the offset stable). Logs then showed correct
+media-range times (`start=8400000us stop=16400000us`) — **but captions were still invisible**.
+
+### Step 3 — subtitle-clock selection drop (root cause)
+With correct media-domain times and `b_subtitle = true`, the subpictures are still dropped **before
+region rendering**. Decisive evidence: the `-vv` VLC log contains **no `main warning: original
+picture size is undefined`**, which MUST fire for any selected subpicture with unset
+`i_original_picture_*` (ours are 0). Therefore `SpuSelectSubpictures` never selects them: the
+subtitle clock (`render_subtitle_date` = displayed picture PTS) does not accept filter-pushed
+subpictures in this build. Full static trace of `spu_PutSubpicture` → selection gates →
+`SpuRenderSubpictures` → freetype → d3d11 quad path shows every stage passes only if the render
+date matches the subpicture's clock domain.
+
+### Step 4 — fix: OSD clock domain
+Render captions in the **OSD clock domain**: `b_subtitle = false` + `i_start = mdate()` +
+`i_stop = i_start + duration`, on the registered private SPU channel
+(`vout_RegisterSubpictureChannel`, no ES/track gating in 3.0.23). `render_osd_date = mdate()`
+**always** — no fallback ambiguity — and this is exactly the configuration the OSD milestones
+(11-16) demonstrated displaying (`vout_OSDText` self-timestamps at `mdate()`). Verified live:
+captions display on SPU channel 9 at bottom center; flush/blank on seek intact.
+
+### Known residual & deferred work
+- **`main warning: original picture size is undefined` (once per caption)** — intended; the
+  presenter cannot learn the video source size via a public API, VLC falls back to the correct
+  source size and caches it back into the heap subpicture (text scaling stays correct). See
+  `docs/plans/step17b_plan.md` §3.
+- **Media-domain scheduling (`b_subtitle = true`) is the 17c look-ahead prerequisite** — blocked on
+  probing the subtitle clock (e.g. pushing a wide-window probe subpicture) before relying on it.
+  The S→M conversion math is preserved in `docs/vlc-api-essentials.md` §3.4.
+
+### Evidence
+- Commits: `98d64d8` (feat 17b base), `34e13cf` (fix, 10 files).
+- 16/16 ctest, clang-format clean, Valgrind 0 errors (only pre-existing libgomp still-reachable
+  noise), Windows MinGW cross-build links (`libvlc_whisper_plugin.dll`).
