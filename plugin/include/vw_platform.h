@@ -10,8 +10,10 @@
 // Platform process handle type
 #if defined(_WIN32)
 typedef void* vw_process_t;
+#define VW_WEAK
 #else
 typedef int vw_process_t;
+#define VW_WEAK __attribute__((weak))
 #endif
 
 // Generates cryptographically secure random bytes and fills the provided buffer with them.

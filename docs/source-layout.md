@@ -139,7 +139,7 @@ The `models/` directory serves as the local offline store for GGML model files a
 | `vw_audio_capture.c`     | Receive/normalize PCM and associate monotonic media PTS                   |
 | `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |
 | `vw_worker_client.c`     | Launch worker, IPC connect, HELLO handshake, send/receive, cleanup        |
-| `vw_caption_presenter.c` | Convert final worker segments into VLC caption cues                       |
+| `vw_caption_presenter.c` | VLC SPU subpicture channel rendering (`vout_RegisterSubpictureChannel`/`vout_PutSubpicture`/`VLC_CODEC_TEXT`/`text_segment_New`) with OSD fallback |
 | `vw_log.c`               | Privacy-safe diagnostics; never log PCM/transcript by default             |
 | `vw_platform_win32.c`    | Windows: paths, handles, BCrypt CSPRNG, process spawn, timing helpers     |
 | `vw_platform_linux.c`    | Linux/Unix: random bytes, posix_spawn, timing helpers                     |

@@ -250,8 +250,9 @@ static void* vw_plugin_sender_main(void* arg) {
   // and STATUS/ERROR flow and worker death is still detected.
   bool paused = false;
   int64_t last_pause_poll_us = 0;
-  int64_t last_position_us = -1;    // -1 = no baseline yet (first poll only samples)
-  int64_t paused_position_us = -1;  // media position captured at the pause transition
+  int64_t last_position_us = -1;     // -1 = no baseline yet (first poll only samples)
+  int64_t paused_position_us = -1;   // media position captured at the pause transition
+  int64_t current_position_us = -1;  // latest sampled media position for SPU timing
   while (atomic_load(&sys->sender_running) && !atomic_load(&sys->worker_dead)) {
     // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
     // state only changes at human timescale (8s windows make 100ms detection lag irrelevant).
@@ -264,6 +265,7 @@ static void* vw_plugin_sender_main(void* arg) {
       input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
       now_paused = input != NULL && input_GetState(input) == PAUSE_S;
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
+      if (position_us >= 0) current_position_us = position_us;
 
       // Seek detection while PAUSED: the audio callback never runs (no blocks flow) so
       // BLOCK_FLAG_DISCONTINUITY never arrives, and the input time variable is clock-driven so
@@ -380,7 +382,7 @@ static void* vw_plugin_sender_main(void* arg) {
           sys->segments_received++;
           // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
           // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
-          vw_caption_presenter_show_segment(&sys->presenter, &recv.segment);
+          vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us);
           break;
         case VW_MSG_STATUS:
           sys->status_received++;
@@ -522,6 +524,8 @@ static int vw_plugin_open(vlc_object_t* obj) {
   p_filter->fmt_out.audio = p_filter->fmt_in.audio;
 
   sys->presenter.p_filter_ctx = p_filter;  // sender thread renders SEGMENT frames via this context
+  sys->presenter.spu_channel_id = -1;
+  sys->presenter.spu_channel_registered = false;
 
   vw_log_set_sink(vw_plugin_log_sink, obj);
 

@@ -8,22 +8,21 @@
 
 typedef struct vw_caption_presenter {
   void* p_filter_ctx;
+  int spu_channel_id;           // Registered VLC SPU channel ID; -1 when unregistered or unavailable.
+  bool spu_channel_registered;  // True if spu_channel_id >= 0 and successfully registered with vout.
 } vw_caption_presenter_t;
 
-// Renders timed subtitle text directly onto the active VLC video output surface using OSD rendering, walking the
-// parent object hierarchy to locate the target vout thread.
+// Renders timed text directly onto the active VLC video output surface using OSD rendering as a fallback path.
 bool vw_caption_presenter_display(void* p_filter, const char* text, int64_t duration_us);
 
-// Dispatches a validated timed transcription segment structure to the video output overlay, extracting its
-// microsecond duration bounds and formatting UTF-8 text for display.
-bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment);
+// Dispatches a transcription segment to VLC SPU subpicture channel (or OSD fallback) using media timestamp mapping.
+bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
+                                       int64_t input_time_us);
 
-// Blanks the active OSD overlay while retaining the filter context, allowing later caption
-// segments to render after a mid-session seek. No-op when no filter context is set.
+// Blanks active SPU and OSD caption channels while preserving the filter context, safe for mid-session seeks.
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter);
 
-// Blanks the active OSD overlay and resets the filter context during module teardown,
-// preventing subsequent segment rendering through the presenter. Never mid-session.
+// Flushes caption channels and resets filter and channel context during module teardown, never mid-session.
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter);
 
 #endif  // VW_CAPTION_PRESENTER_H_
