@@ -202,15 +202,16 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   int64_t start_tick = 0;
   int64_t stop_tick = 0;
   if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
-    // OSD clock domain (b_subtitle=false): the vout compares subpictures against render_osd_date
-    // = mdate() ALWAYS, so schedule at the current system date. This mirrors vout_OSDText's
-    // proven construction (milestones 11-16) while keeping the native SPU channel, its flush
-    // support, and no dependency on the user's "osd" setting. No S<->M conversion is possible
-    // here: the subtitle clock (picture PTS) is not usable for filter-pushed subpictures in
-    // this build (they are dropped before region rendering — see render_spu comment).
     int64_t now_tick = (int64_t)mdate();
-    start_tick = now_tick;
-    stop_tick = now_tick + (duration_us > 0 ? duration_us : 2000000LL);
+    int64_t lead_us = 0;
+    if (input_time_us > 0 && segment->start_pts_us > input_time_us) {
+      int64_t diff = segment->start_pts_us - input_time_us;
+      if (diff <= 60000000LL) {  // Valid look-ahead horizon (up to 60s)
+        lead_us = diff;
+      }
+    }
+    start_tick = now_tick + lead_us;
+    stop_tick = start_tick + (duration_us > 0 ? duration_us : 2000000LL);
     rendered = vw_caption_presenter_render_spu(presenter, vout, segment->text_utf8, start_tick, stop_tick);
   }
 

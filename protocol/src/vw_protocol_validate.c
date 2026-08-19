@@ -109,6 +109,11 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
     case VW_MSG_SHUTDOWN:
     case VW_MSG_STARTED:
       return true;
+    case VW_MSG_POSITION: {
+      const vw_msg_position_t* p = (const vw_msg_position_t*)payload;
+      if (p->playback_rate <= 0.0f || p->playback_rate > 16.0f) return false;
+      return true;
+    }
     case VW_MSG_CAPTION_SEGMENT: {
       const vw_caption_segment_t* p = (const vw_caption_segment_t*)payload;
       if (p->end_pts_us <= p->start_pts_us) return false;

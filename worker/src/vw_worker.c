@@ -10,9 +10,11 @@
 #include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
+#include "vw_source_decoder.h"
 #include "vw_worker_queue.h"
 
 #ifdef _WIN32
+#include <mfapi.h>
 #include <process.h>
 #else
 #include <unistd.h>
@@ -161,11 +163,18 @@ int vw_worker_run(const vw_worker_config_t* config) {
     return 1;
   }
 
+#ifdef _WIN32
+  MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
+#endif
+
   vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker started (pid %d)", (int)getpid());
   vw_ipc_handle_t* handle = vw_ipc_listen(config->pipe_name);
   if (!handle) {
     vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_LIFECYCLE", "vw_ipc_listen FAILED for %s; worker exiting",
                  config->pipe_name);
+#ifdef _WIN32
+    MFShutdown();
+#endif
     return 1;
   }
   vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "listening on %s", config->pipe_name);
@@ -177,6 +186,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
   float* window_samples = (float*)malloc(VW_WINDOW_SAMPLES * sizeof(float));
   if (!window_samples) {
     vw_ipc_close(handle);
+#ifdef _WIN32
+    MFShutdown();
+#endif
     return 1;
   }
 
@@ -191,6 +203,13 @@ int vw_worker_run(const vw_worker_config_t* config) {
   bool paused = false;  // PAUSE suspends window accumulation; RESUME clears it (step 16)
   uint32_t sequence = 1;
 
+  // Source Look-Ahead Mode State
+  vw_source_decoder_t* source_decoder = NULL;
+  bool source_mode = false;
+  int64_t current_playback_pts_us = 0;
+  int64_t decoded_pts_us = 0;
+  const int64_t lead_target_us = 30000000LL;  // 30s look-ahead horizon
+
   vw_worker_queue_t* queue = vw_worker_queue_create(32);
   if (!queue) {
     free(window_samples);
@@ -198,6 +217,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
     if (builder) vw_segment_builder_free(builder);
     if (engine) vw_whisper_engine_free(engine);
     vw_ipc_close(handle);
+#ifdef _WIN32
+    MFShutdown();
+#endif
     return 1;
   }
 
@@ -212,14 +234,25 @@ int vw_worker_run(const vw_worker_config_t* config) {
     if (builder) vw_segment_builder_free(builder);
     if (engine) vw_whisper_engine_free(engine);
     vw_ipc_close(handle);
+#ifdef _WIN32
+    MFShutdown();
+#endif
     return 1;
   }
   vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_READER", "reader thread started; draining pipe into frame queue");
 
   while (atomic_load(&running)) {
     vw_worker_frame_t frame;
+    bool has_frame = false;
+
     while (atomic_load(&running)) {
       if (vw_worker_queue_pop(queue, &frame)) {
+        has_frame = true;
+        break;
+      }
+      // If we have look-ahead decoding work to do, don't sleep
+      if (session_active && source_mode && source_decoder && !paused &&
+          (decoded_pts_us < current_playback_pts_us + lead_target_us)) {
         break;
       }
       vw_platform_sleep_ms(5);
@@ -228,192 +261,290 @@ int vw_worker_run(const vw_worker_config_t* config) {
       break;
     }
 
-    union {
-      vw_msg_hello_t hello;
-      vw_msg_start_t start;
-      vw_msg_audio_t audio;
-      vw_msg_control_t control;
-      vw_msg_status_t status;
-    } payload_decoded;
+    if (has_frame) {
+      union {
+        vw_msg_hello_t hello;
+        vw_msg_start_t start;
+        vw_msg_audio_t audio;
+        vw_msg_control_t control;
+        vw_msg_status_t status;
+        vw_msg_position_t position;
+      } payload_decoded;
 
-    memset(&payload_decoded, 0, sizeof(payload_decoded));
+      memset(&payload_decoded, 0, sizeof(payload_decoded));
 
-    bool valid_payload = false;
-    if (vw_protocol_decode_payload(frame.type, frame.payload, frame.payload_len, &payload_decoded)) {
-      if (vw_protocol_validate_payload(frame.type, &payload_decoded)) {
-        valid_payload = true;
-      }
-    }
-
-    // also enforce after receiving
-    if (!valid_payload && frame.payload_len > 0) {
-      vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_PROTOCOL", "invalid payload (type=%u len=%u); exiting", frame.type,
-                   frame.payload_len);
-      free(frame.payload);
-      break;  // Invalid payload
-    }
-
-    if (!authenticated) {
-      if (frame.type != VW_MSG_HELLO) {
-        vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_AUTH", "first frame was not HELLO (type=%u); rejecting", frame.type);
-        free(frame.payload);
-        break;  // First message must be HELLO
-      }
-      if (!verify_token_constant_time(config->auth_token, payload_decoded.hello.auth_token)) {
-        vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_AUTH", "HELLO token mismatch; rejecting connection");
-        free(frame.payload);
-        break;  // Auth failed
-      }
-      authenticated = true;
-      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_AUTH", "HELLO authenticated; replying HELLO_ACK");
-
-      // Reply HELLO_ACK with the negotiated version and supported capabilities
-      vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
-                                .selected_minor = VW_PROTOCOL_VERSION_MINOR,
-                                .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO,
-                                .worker_version = VW_WORKER_VERSION,
-                                .worker_version_length = VW_WORKER_VERSION_LENGTH};
-      uint8_t ack_payload[256];
-      size_t ack_len = 0;
-      if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, ack_payload, sizeof(ack_payload), &ack_len)) {
-        free(frame.payload);
-        break;
-      }
-      vw_frame_header_t ack_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                   .major = VW_PROTOCOL_VERSION_MAJOR,
-                                   .type = VW_MSG_HELLO_ACK,
-                                   .payload_length = (uint32_t)ack_len,
-                                   .sequence = 1};
-      uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
-      if (!vw_protocol_encode_header(&ack_hdr, ack_hdr_buf, sizeof(ack_hdr_buf))) {
-        free(frame.payload);
-        break;
-      }
-      vw_ipc_send(handle, ack_hdr_buf, sizeof(ack_hdr_buf));
-      vw_ipc_send(handle, ack_payload, ack_len);
-
-      free(frame.payload);
-      continue;
-    }
-
-    switch (frame.type) {
-      case VW_MSG_START_SESSION: {
-        if (session_active) {
-          break;  // Duplicate START without STOP — ignore
+      bool valid_payload = false;
+      if (vw_protocol_decode_payload(frame.type, frame.payload, frame.payload_len, &payload_decoded)) {
+        if (vw_protocol_validate_payload(frame.type, &payload_decoded)) {
+          valid_payload = true;
         }
-        if (payload_decoded.start.sample_rate != VW_AUDIO_SAMPLE_RATE) {
-          vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_AUDIO_FORMAT (rate=%u)",
-                       payload_decoded.start.sample_rate);
-          send_error(handle, payload_decoded.start.session_id.bytes, E_AUDIO_FORMAT, 1,
-                     "Unsupported sample rate (expected 16000)", &sequence);
+      }
+
+      // also enforce after receiving
+      if (!valid_payload && frame.payload_len > 0) {
+        vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_PROTOCOL", "invalid payload (type=%u len=%u); exiting", frame.type,
+                     frame.payload_len);
+        free(frame.payload);
+        break;  // Invalid payload
+      }
+
+      if (!authenticated) {
+        if (frame.type != VW_MSG_HELLO) {
+          vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_AUTH", "first frame was not HELLO (type=%u); rejecting", frame.type);
+          free(frame.payload);
+          break;  // First message must be HELLO
+        }
+        if (!verify_token_constant_time(config->auth_token, payload_decoded.hello.auth_token)) {
+          vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_AUTH", "HELLO token mismatch; rejecting connection");
+          free(frame.payload);
+          break;  // Auth failed
+        }
+        authenticated = true;
+        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_AUTH", "HELLO authenticated; replying HELLO_ACK");
+
+        // Reply HELLO_ACK with the negotiated version and supported capabilities (including SOURCE_MODE)
+        vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
+                                  .selected_minor = VW_PROTOCOL_VERSION_MINOR,
+                                  .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE,
+                                  .worker_version = VW_WORKER_VERSION,
+                                  .worker_version_length = VW_WORKER_VERSION_LENGTH};
+        uint8_t ack_payload[256];
+        size_t ack_len = 0;
+        if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, ack_payload, sizeof(ack_payload), &ack_len)) {
+          free(frame.payload);
           break;
         }
-        if (!engine) {
-          // Model absent or invalid: reply with ERROR frame (recoverable = 0)
-          vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_MODEL_MISSING");
-          send_error(handle, payload_decoded.start.session_id.bytes, E_MODEL_MISSING, 0,
-                     "Whisper model file missing or invalid", &sequence);
+        vw_frame_header_t ack_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                     .major = VW_PROTOCOL_VERSION_MAJOR,
+                                     .type = VW_MSG_HELLO_ACK,
+                                     .payload_length = (uint32_t)ack_len,
+                                     .sequence = 1};
+        uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
+        if (!vw_protocol_encode_header(&ack_hdr, ack_hdr_buf, sizeof(ack_hdr_buf))) {
+          free(frame.payload);
           break;
         }
+        vw_ipc_send(handle, ack_hdr_buf, sizeof(ack_hdr_buf));
+        vw_ipc_send(handle, ack_payload, ack_len);
 
-        memcpy(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
-        session_active = true;
-        // Discard any segment-builder hypothesis left over from the previous epoch: it was
-        // produced from pre-seek audio and would otherwise be stamped with the NEW session_id
-        // and rendered post-seek. Drain-pop reuses the ownership contract (caller frees text).
-        if (builder) {
-          vw_caption_segment_t stale_seg;
-          while (vw_segment_builder_pop(builder, &stale_seg)) {
-            if (stale_seg.text_utf8) free(stale_seg.text_utf8);
+        free(frame.payload);
+        continue;
+      }
+
+      switch (frame.type) {
+        case VW_MSG_START_SESSION: {
+          if (session_active) {
+            break;  // Duplicate START without STOP — ignore
           }
+          if (payload_decoded.start.sample_rate != VW_AUDIO_SAMPLE_RATE) {
+            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_AUDIO_FORMAT (rate=%u)",
+                         payload_decoded.start.sample_rate);
+            send_error(handle, payload_decoded.start.session_id.bytes, E_AUDIO_FORMAT, 1,
+                       "Unsupported sample rate (expected 16000)", &sequence);
+            break;
+          }
+          if (!engine) {
+            // Model absent or invalid: reply with ERROR frame (recoverable = 0)
+            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_MODEL_MISSING");
+            send_error(handle, payload_decoded.start.session_id.bytes, E_MODEL_MISSING, 0,
+                       "Whisper model file missing or invalid", &sequence);
+            break;
+          }
+
+          memcpy(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
+          session_active = true;
+          // Discard any segment-builder hypothesis left over from the previous epoch
+          if (builder) {
+            vw_caption_segment_t stale_seg;
+            while (vw_segment_builder_pop(builder, &stale_seg)) {
+              if (stale_seg.text_utf8) free(stale_seg.text_utf8);
+            }
+          }
+
+          // Check if source_url is supplied for Ahead-of-Time Look-Ahead Decoding
+          if (source_decoder) {
+            vw_source_decoder_close(source_decoder);
+            source_decoder = NULL;
+            source_mode = false;
+          }
+          if (payload_decoded.start.source_url_len > 0 && payload_decoded.start.source_url[0] != '\0') {
+            vw_source_decoder_info_t sinfo = {0};
+            source_decoder = vw_source_decoder_open(payload_decoded.start.source_url, &sinfo);
+            if (source_decoder) {
+              source_mode = true;
+              current_playback_pts_us = payload_decoded.start.timeline_origin_pts_us;
+              decoded_pts_us = current_playback_pts_us;
+              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SOURCE",
+                           "source look-ahead mode ACTIVE for '%s' (dur=%lldus fmt=%s)",
+                           payload_decoded.start.source_url, (long long)sinfo.duration_us, sinfo.container_format);
+            } else {
+              source_mode = false;
+              vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SOURCE",
+                           "failed to open source url '%s'; falling back to live PCM stream",
+                           payload_decoded.start.source_url);
+            }
+          } else {
+            source_mode = false;
+          }
+
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent)");
+
+          // Reply STARTED (header-only)
+          vw_frame_header_t started_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                           .major = VW_PROTOCOL_VERSION_MAJOR,
+                                           .type = VW_MSG_STARTED,
+                                           .payload_length = 0,
+                                           .sequence = ++sequence};
+          uint8_t started_hdr_buf[sizeof(vw_frame_header_t)];
+          vw_protocol_encode_header(&started_hdr, started_hdr_buf, sizeof(started_hdr_buf));
+          vw_ipc_send(handle, started_hdr_buf, sizeof(started_hdr_buf));
+          break;
         }
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent)");
 
-        // Reply STARTED (header-only)
-        vw_frame_header_t started_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                         .major = VW_PROTOCOL_VERSION_MAJOR,
-                                         .type = VW_MSG_STARTED,
-                                         .payload_length = 0,
-                                         .sequence = ++sequence};
-        uint8_t started_hdr_buf[sizeof(vw_frame_header_t)];
-        vw_protocol_encode_header(&started_hdr, started_hdr_buf, sizeof(started_hdr_buf));
-        vw_ipc_send(handle, started_hdr_buf, sizeof(started_hdr_buf));
-        break;
-      }
+        case VW_MSG_POSITION: {
+          if (!session_active) break;
+          current_playback_pts_us = payload_decoded.position.current_pts_us;
+          if (payload_decoded.position.flags & VW_POSITION_FLAG_PAUSED) {
+            paused = true;
+          } else {
+            paused = false;
+          }
 
-      case VW_MSG_AUDIO_PCM: {
-        if (!session_active || paused ||
-            memcmp(payload_decoded.audio.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES) != 0) {
-          break;  // paused: drop AUDIO (plugin suspends forwarding; defensive if any slip through)
-        }
-
-        const int16_t* pcm16 = (const int16_t*)payload_decoded.audio.pcm_data;
-        size_t sample_count = payload_decoded.audio.pcm_bytes / sizeof(int16_t);
-        int64_t pts_us = payload_decoded.audio.start_pts_us;
-
-        if (audio_buf && pcm16 && sample_count > 0) {
-          vw_audio_buffer_append_s16le(audio_buf, pcm16, sample_count, pts_us);
-
-          // 8-second window with 2-second hop
-          while (vw_audio_buffer_get_count(audio_buf) >= VW_WINDOW_SAMPLES) {
-            int64_t window_pts_us = 0;
-            size_t read_cnt = vw_audio_buffer_get_samples(audio_buf, window_samples, VW_WINDOW_SAMPLES, &window_pts_us);
-
-            if (read_cnt > 0 && engine) {
-              if (vw_vad_detect_speech_energy(window_samples, read_cnt, VW_VAD_ENERGY_THRESHOLD)) {
-                vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE", "speech window @%lldus; transcribing",
-                             (long long)window_pts_us);
-                if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
-                  const char* text = vw_whisper_engine_get_text(engine);
-                  if (text && text[0] != '\0' && builder) {
-                    // Calculate duration in microseconds based on sample count and sample rate
-                    int64_t duration_us = (int64_t)(((double)read_cnt / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
-                    vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
-                  }
-                } else {
-                  vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_INFERENCE", "whisper_full FAILED @%lldus",
-                               (long long)window_pts_us);
+          if (source_mode && source_decoder) {
+            int64_t diff = payload_decoded.position.current_pts_us - decoded_pts_us;
+            if ((payload_decoded.position.flags & VW_POSITION_FLAG_SEEK) || diff < -2000000LL || diff > 10000000LL) {
+              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEEK", "re-seeking source decoder to %lldus",
+                           (long long)payload_decoded.position.current_pts_us);
+              vw_source_decoder_seek(source_decoder, payload_decoded.position.current_pts_us);
+              decoded_pts_us = payload_decoded.position.current_pts_us;
+              if (audio_buf) vw_audio_buffer_clear(audio_buf);
+              if (builder) {
+                vw_caption_segment_t stale_seg;
+                while (vw_segment_builder_pop(builder, &stale_seg)) {
+                  if (stale_seg.text_utf8) free(stale_seg.text_utf8);
                 }
               }
             }
-            vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
           }
+          break;
         }
-        break;
+
+        case VW_MSG_AUDIO_PCM: {
+          if (!session_active || paused || source_mode ||
+              memcmp(payload_decoded.audio.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES) != 0) {
+            break;  // dropped if paused, inactive, or in source mode
+          }
+
+          const int16_t* pcm16 = (const int16_t*)payload_decoded.audio.pcm_data;
+          size_t sample_count = payload_decoded.audio.pcm_bytes / sizeof(int16_t);
+          int64_t pts_us = payload_decoded.audio.start_pts_us;
+
+          if (audio_buf && pcm16 && sample_count > 0) {
+            vw_audio_buffer_append_s16le(audio_buf, pcm16, sample_count, pts_us);
+
+            // 8-second window with 2-second hop
+            while (vw_audio_buffer_get_count(audio_buf) >= VW_WINDOW_SAMPLES) {
+              int64_t window_pts_us = 0;
+              size_t read_cnt =
+                  vw_audio_buffer_get_samples(audio_buf, window_samples, VW_WINDOW_SAMPLES, &window_pts_us);
+
+              if (read_cnt > 0 && engine) {
+                if (vw_vad_detect_speech_energy(window_samples, read_cnt, VW_VAD_ENERGY_THRESHOLD)) {
+                  vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE", "speech window @%lldus; transcribing",
+                               (long long)window_pts_us);
+                  if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
+                    const char* text = vw_whisper_engine_get_text(engine);
+                    if (text && text[0] != '\0' && builder) {
+                      int64_t duration_us = (int64_t)(((double)read_cnt / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
+                      vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
+                    }
+                  } else {
+                    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_INFERENCE", "whisper_full FAILED @%lldus",
+                                 (long long)window_pts_us);
+                  }
+                }
+              }
+              vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
+            }
+          }
+          break;
+        }
+
+        case VW_MSG_PAUSE: {
+          if (!session_active) break;
+          paused = true;
+          if (audio_buf) vw_audio_buffer_clear(audio_buf);
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "paused; window cleared, transcription suspended");
+          break;
+        }
+
+        case VW_MSG_RESUME: {
+          if (!session_active) break;
+          paused = false;
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "resumed; transcription active");
+          break;
+        }
+
+        case VW_MSG_STOP_SESSION: {
+          session_active = false;
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped (reason=%s)",
+                       vw_worker_stop_reason_name(payload_decoded.control.reason));
+          if (source_decoder) {
+            vw_source_decoder_close(source_decoder);
+            source_decoder = NULL;
+            source_mode = false;
+          }
+          if (audio_buf) vw_audio_buffer_clear(audio_buf);
+          break;
+        }
+
+        case VW_MSG_SHUTDOWN:
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "shutdown requested; exiting");
+          if (source_decoder) {
+            vw_source_decoder_close(source_decoder);
+            source_decoder = NULL;
+            source_mode = false;
+          }
+          atomic_store(&running, false);
+          break;
+
+        default:
+          break;
       }
 
-      case VW_MSG_PAUSE: {
-        if (!session_active) break;
-        paused = true;
-        // Drop the in-flight analysis window: a window spanning the pause gap would mix
-        // pre-pause and post-resume audio. The session timeline (PTS epoch) is preserved.
-        if (audio_buf) vw_audio_buffer_clear(audio_buf);
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "paused; window cleared, transcription suspended");
-        break;
+      free(frame.payload);
+    }
+
+    // Ahead-of-Time Look-Ahead Decoding Step
+    if (session_active && source_mode && source_decoder && !paused &&
+        (decoded_pts_us < current_playback_pts_us + lead_target_us)) {
+      int16_t decode_chunk[32000];  // 2 seconds at 16kHz
+      int64_t chunk_pts_us = -1;
+      size_t samples_read = vw_source_decoder_read_s16le(source_decoder, decode_chunk, 32000, &chunk_pts_us);
+      if (samples_read > 0) {
+        int64_t actual_pts = (chunk_pts_us >= 0) ? chunk_pts_us : decoded_pts_us;
+        vw_audio_buffer_append_s16le(audio_buf, decode_chunk, samples_read, actual_pts);
+        decoded_pts_us = actual_pts + (int64_t)((samples_read * 1000000ULL) / 16000ULL);
+
+        while (vw_audio_buffer_get_count(audio_buf) >= VW_WINDOW_SAMPLES) {
+          int64_t window_pts_us = 0;
+          size_t read_cnt = vw_audio_buffer_get_samples(audio_buf, window_samples, VW_WINDOW_SAMPLES, &window_pts_us);
+          if (read_cnt > 0 && engine) {
+            if (vw_vad_detect_speech_energy(window_samples, read_cnt, VW_VAD_ENERGY_THRESHOLD)) {
+              vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE", "lookahead speech window @%lldus; transcribing",
+                           (long long)window_pts_us);
+              if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
+                const char* text = vw_whisper_engine_get_text(engine);
+                if (text && text[0] != '\0' && builder) {
+                  int64_t duration_us = (int64_t)(((double)read_cnt / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
+                  vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
+                }
+              }
+            }
+          }
+          vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
+        }
       }
-
-      case VW_MSG_RESUME: {
-        if (!session_active) break;
-        paused = false;
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "resumed; transcription active");
-        break;
-      }
-
-      case VW_MSG_STOP_SESSION: {
-        session_active = false;
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped (reason=%s)",
-                     vw_worker_stop_reason_name(payload_decoded.control.reason));
-        if (audio_buf) vw_audio_buffer_clear(audio_buf);
-        break;
-      }
-
-      case VW_MSG_SHUTDOWN:
-        vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "shutdown requested; exiting");
-        atomic_store(&running, false);
-        break;
-
-      default:
-        break;
     }
 
     // Drain completed caption segments from builder and emit over IPC
@@ -441,17 +572,18 @@ int vw_worker_run(const vw_worker_config_t* config) {
         if (seg.text_utf8) free(seg.text_utf8);
       }
     }
-
-    free(frame.payload);
   }
 
-  // Shutdown order (review-corrected): stop the reader first, join it (bounded by its 3s receive
-  // timeout), and only then close the handle. Closing an fd another thread is blocked recv()-ing on
-  // is a POSIX portability trap, so the timeout — not the close — is what unblocks the reader.
+  // Shutdown order
   atomic_store(&running, false);
   vw_platform_thread_join(reader_thread);
   const uint64_t dropped_audio_us = vw_worker_queue_get_dropped_audio_us(queue);
   vw_worker_queue_destroy(queue);
+
+  if (source_decoder) {
+    vw_source_decoder_close(source_decoder);
+    source_decoder = NULL;
+  }
 
   free(window_samples);
   if (audio_buf) vw_audio_buffer_free(audio_buf);
@@ -459,6 +591,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
   if (engine) vw_whisper_engine_free(engine);
 
   vw_ipc_close(handle);
+#ifdef _WIN32
+  MFShutdown();
+#endif
   vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LIFECYCLE", "worker exiting (rc=%d, dropped_audio_us=%llu)",
                authenticated ? 0 : 1, (unsigned long long)dropped_audio_us);
   return authenticated ? 0 : 1;

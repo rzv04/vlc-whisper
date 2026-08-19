@@ -30,7 +30,7 @@ vlc-whisper/
 │   │   ├── vw_plugin.h                        # Core module structs, capabilities, and setup declarations
 │   │   ├── vw_session.h                       # Playback session lifecycle & discontinuity state machine
 │   │   ├── vw_audio_capture.h                 # Decoded PCM extraction & monotonic media PTS assignment
-│   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC OSD/subtitle cues
+│   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC SPU/OSD caption cues
 │   │   ├── vw_worker_client.h                 # Authenticated IPC client, worker process supervisor
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
 │   │   └── vw_platform.h                      # OS abstraction: CSPRNG, timing, process spawning
@@ -38,7 +38,7 @@ vlc-whisper/
 │       ├── vw_whisper_module.c               # Entry point: VLC module descriptor, open/close hooks
 │       ├── vw_session.c                       # Session lifecycle logic (start, pause, resume, seek reset)
 │       ├── vw_audio_capture.c                 # Audio callback handler & PCM format normalization
-│       ├── vw_caption_presenter.c             # Schedules and renders timed text captions in VLC
+│       ├── vw_caption_presenter.c             # Schedules and renders timed text captions via SPU with OSD fallback
 │       ├── vw_worker_client.c                 # Worker process launcher, IPC client & HELLO handshake
 │       ├── vw_queue.c                         # Non-blocking lock-free SPSC queue implementation
 │       ├── vw_platform_win32.c                # Windows: paths, BCrypt CSPRNG, process spawn, timing
@@ -47,6 +47,7 @@ vlc-whisper/
 │   ├── CMakeLists.txt                         # Builds vlc-whisper-worker executable and links whisper.cpp
 │   ├── include/
 │   │   ├── vw_worker.h                        # Main worker event loop and IPC message dispatcher
+│   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
 │   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
 │   │   ├── vw_whisper_engine.h                # C wrapper around third-party whisper.cpp API
 │   │   ├── vw_vad.h                           # Voice activity detection state and windowing logic
@@ -55,7 +56,9 @@ vlc-whisper/
 │   │   └── vw_worker_config.h                 # Model path validation and worker configuration settings
 │   ├── src/
 │   │   ├── main.c                             # Worker executable entry point: CLI parsing & signal handling
-│   │   ├── vw_worker.c                        # Worker IPC state machine & message processing loop
+│   │   ├── vw_worker.c                        # Worker IPC state machine, look-ahead decoding & message loop
+│   │   ├── vw_source_decoder_mf.c             # Windows Media Foundation native audio source demuxer
+│   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
 │   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
 │   │   ├── vw_whisper_engine.c                # Model loading & whisper_full inference execution
 │   │   ├── vw_vad.c                           # Speech boundary detection & active window calculation
@@ -89,6 +92,7 @@ vlc-whisper/
 │   ├── unit/                                  # Isolated component tests
 │   │   ├── test_protocol_codec.c              # Serialization & frame encoding unit tests
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
+│   │   ├── test_source_decoder.c              # Media Foundation / FFmpeg native source demuxer tests
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
 │   │   ├── test_audio_buffer.c                # PCM ring buffer float32 conversion & overflow tests
@@ -139,7 +143,7 @@ The `models/` directory serves as the local offline store for GGML model files a
 | `vw_audio_capture.c`     | Receive/normalize PCM and associate monotonic media PTS                   |
 | `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |
 | `vw_worker_client.c`     | Launch worker, IPC connect, HELLO handshake, send/receive, cleanup        |
-| `vw_caption_presenter.c` | VLC SPU subpicture channel rendering (`vout_RegisterSubpictureChannel`/`vout_PutSubpicture`/`VLC_CODEC_TEXT`/`text_segment_New`) with OSD fallback |
+| `vw_caption_presenter.c` | VLC SPU subpicture channel rendering (`vout_RegisterSubpictureChannel`/`vout_PutSubpicture`/`VLC_CODEC_TEXT`/`text_segment_New`) with OSD fallback and look-ahead future SPU scheduling |
 | `vw_log.c`               | Privacy-safe diagnostics; never log PCM/transcript by default             |
 | `vw_platform_win32.c`    | Windows: paths, handles, BCrypt CSPRNG, process spawn, timing helpers     |
 | `vw_platform_linux.c`    | Linux/Unix: random bytes, posix_spawn, timing helpers                     |
@@ -151,7 +155,9 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | File                   | Responsibility                                                     |
 | ---------------------- | ------------------------------------------------------------------ |
 | `main.c`               | Parse arguments, initialize, run, and return meaningful exit codes |
-| `vw_worker.c`          | IPC event loop, protocol dispatch, worker state transitions        |
+| `vw_worker.c`          | IPC event loop, protocol dispatch, look-ahead decoding & state     |
+| `vw_source_decoder_mf.c` | Windows Media Foundation native audio demuxer & resampler        |
+| `vw_source_decoder_ffmpeg.c` | Linux FFmpeg native audio demuxer & resampler                |
 | `vw_whisper_engine.c`  | Whisper C API adapter, model load/unload, inference calls          |
 | `vw_vad.c`             | Voice-activity detection state and window decisions                |
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
@@ -177,7 +183,8 @@ typedef enum vw_message_type {
     VW_MSG_STATUS = 9,
     VW_MSG_ERROR = 10,
     VW_MSG_SHUTDOWN = 11,
-    VW_MSG_STARTED = 12
+    VW_MSG_STARTED = 12,
+    VW_MSG_POSITION = 13
 } vw_message_type_t;
 ```
 

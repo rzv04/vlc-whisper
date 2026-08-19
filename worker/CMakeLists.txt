@@ -53,6 +53,16 @@ find_package(OpenMP)
 
 add_subdirectory(third_party/whisper.cpp)
 
+if(WIN32)
+    set(VW_SOURCE_DECODER_SRCS src/vw_source_decoder_mf.c)
+else()
+    set(VW_SOURCE_DECODER_SRCS src/vw_source_decoder_ffmpeg.c)
+    find_package(PkgConfig)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(FFMPEG IMPORTED_TARGET libavformat libavcodec libswresample libavutil)
+    endif()
+endif()
+
 add_executable(vlc-whisper-worker
     src/main.c
     src/vw_worker.c
@@ -62,9 +72,15 @@ add_executable(vlc-whisper-worker
     src/vw_audio_buffer.c
     src/vw_worker_config.c
     src/vw_worker_queue.c
+    ${VW_SOURCE_DECODER_SRCS}
     ../plugin/src/vw_platform_linux.c
     ../plugin/src/vw_platform_win32.c
 )
+
+if(FFMPEG_FOUND AND NOT WIN32)
+    target_compile_definitions(vlc-whisper-worker PRIVATE -DVW_WITH_FFMPEG)
+    target_link_libraries(vlc-whisper-worker PRIVATE PkgConfig::FFMPEG)
+endif()
 
 target_include_directories(vlc-whisper-worker PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -95,8 +111,8 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 )
 
 if(WIN32)
-    # vw_platform_win32.c uses BCryptGenRandom for the auth token (same as the test targets).
-    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt)
+    # Windows Media Foundation and BCrypt libraries
+    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
 endif()
 
 if(OpenMP_CXX_FOUND AND NOT WIN32)

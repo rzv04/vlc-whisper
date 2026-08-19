@@ -18,6 +18,7 @@ typedef struct vw_worker_client {
   uint8_t session_id[16];
   uint32_t sequence;
   bool session_active;
+  uint32_t worker_capabilities;
 } vw_worker_client_t;
 
 // Spawns worker process if executable_path is non-NULL, connects over IPC, and performs HELLO/HELLO_ACK handshake.
@@ -26,8 +27,15 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                         const char* model_path);
 
-// Starts a new captioning session by sending a START frame to the worker and waiting up to 5s for STARTED confirmation.
-bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id);
+// Starts a new captioning session by transmitting a START frame with media origin and optional source URL over
+// IPC, waiting for confirmation from worker.
+bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,
+                                    const char* source_url);
+
+// Encodes and transmits a playback position and pacing update over IPC to throttle look-ahead worker decoding,
+// adjusting buffer horizons and handling seeks.
+bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
+                                    float playback_rate, uint32_t flags);
 
 // Encodes and sends a PCM audio chunk over the IPC pipe to the worker during an active caption session.
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk);

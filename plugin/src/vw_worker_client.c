@@ -189,6 +189,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
+  client->worker_capabilities = ack.capability_flags;
   free(ack_payload);
   if (!ack_ok) goto fail;
 
@@ -220,7 +221,8 @@ void vw_worker_client_disconnect(vw_worker_client_t* client) {
   }
 }
 
-bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id) {
+bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,
+                                    const char* source_url) {
   if (!client || !client->pipe_handle || client->session_active) return false;
 
   if (!vw_platform_get_random_bytes(client->session_id, sizeof(client->session_id))) return false;
@@ -229,10 +231,14 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
                           .sample_rate = 16000,
                           .channels = 1,
                           .sample_format = VW_AUDIO_FORMAT_S16,
-                          .source_kind = VW_SOURCE_LOCAL_FILE};
+                          .source_kind = source_url ? VW_SOURCE_LOCAL_FILE : VW_SOURCE_LIVE_AUDIO};
   memcpy(start.session_id.bytes, client->session_id, 16);
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);
   strncpy(start.language, "en", sizeof(start.language) - 1);
+  if (source_url) {
+    strncpy(start.source_url, source_url, sizeof(start.source_url) - 1);
+    start.source_url_len = (uint16_t)strlen(start.source_url);
+  }
 
   uint8_t payload_buf[1024];
   size_t payload_len = 0;
@@ -322,6 +328,36 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   // STARTED confirming a session the worker never accepted.
   vw_worker_client_drop_transport(client);
   return false;
+}
+
+bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
+                                    float playback_rate, uint32_t flags) {
+  if (!client || !client->pipe_handle || !client->session_active) return false;
+
+  vw_msg_position_t pos = {.current_pts_us = current_pts_us,
+                           .input_time_us = input_time_us,
+                           .playback_rate = playback_rate > 0.0f ? playback_rate : 1.0f,
+                           .flags = flags};
+  memcpy(pos.session_id.bytes, client->session_id, 16);
+
+  uint8_t payload_buf[64];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_POSITION, &pos, payload_buf, sizeof(payload_buf), &payload_len)) return false;
+
+  vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
+                           .major = VW_PROTOCOL_VERSION_MAJOR,
+                           .type = VW_MSG_POSITION,
+                           .payload_length = (uint32_t)payload_len,
+                           .sequence = ++client->sequence};
+
+  uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
+  if (!vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf)) ||
+      !vw_ipc_send(client->pipe_handle, payload_buf, payload_len)) {
+    vw_worker_client_drop_transport(client);
+    return false;
+  }
+  return true;
 }
 
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk) {

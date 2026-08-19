@@ -72,11 +72,13 @@ IDLE -> STARTING -> READY -> PLAYING <-> PAUSED -> STOPPING -> IDLE
 
 A session is identified by a random 128-bit `session_id`; each playback start creates a new one. `sequence` is monotonic per direction. The plugin ignores stale session messages. A pause sends `PAUSE`, stops forwarding audio, and clears partial captions; final captions already scheduled may remain until their end PTS. Resume sends `RESUME`. Stop clears all generated captions before closing IPC.
 
-MVP seeking & discontinuity policy (shipped, step 17): when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), discards the SPSC queue, and starts a new session epoch (new `session_id`, `timeline_origin_pts_us` = post-seek PTS anchor) seamlessly without disabling captions or interrupting VLC media playback. Detection is realtime-safe (atomics only in the filter callback; teardown/restart on the sender thread). **MVP placeholder**: the full session restart per seek is intended to be superseded by a dedicated `SEEK`/`POSITION` protocol v1.1 message in steps 17c/17d (fire-and-forget seek; worker re-seeks its own demuxer; no blocking handshake, no teardown, no session regeneration). Note: the 8s analysis window still refills for seeks outside the decoded look-ahead horizon, but at demux/decode speed (≈2–5× realtime) instead of the MVP's playback-rate 8s refill — near-instant only inside the horizon. The epoch gating, builder/audio-buffer discard, and position-jump detection survive into that design. See `docs/plans/step17_restart_deprecation_plan.md`.
+MVP seeking & discontinuity policy (shipped, step 17; upgraded in step 17c):
+- In **Live Streaming Mode**, when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), discards the SPSC queue, and starts a new session epoch seamlessly without disabling captions or interrupting VLC media playback.
+- In **Look-Ahead Source Mode (Step 17c)**, the worker natively decodes the local source file ahead of the playhead (maintaining a 30s horizon). The plugin extracts the media URL (`input_item_GetURI`) and periodically sends `POSITION` messages to pace worker decoding. On seek events, the plugin transmits a `POSITION` message with `VW_POSITION_FLAG_SEEK`; the worker repositions its native demuxer (`IMFSourceReader::SetCurrentPosition` on Windows / `av_seek_frame` on Linux) and clears in-flight hypotheses without tearing down the worker process or IPC pipe.
 
 ## IPC protocol
 
-Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit authentication token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
+Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit authentication token passed only on the worker command line/handle setup. Linux maps the same framed byte protocol to a Unix-domain socket. Bind only locally; no TCP fallback.
 
 ### Transport Timeouts & Return Semantics
 
@@ -99,8 +101,9 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 
 | Type                      | Direction                | Required payload                                                                       |
 | ------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| `HELLO` / `HELLO_ACK`     | both                     | version range, 32-byte token, capabilities                                             |
-| `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin |
+| `HELLO` / `HELLO_ACK`     | both                     | version range, 32-byte token, capabilities (`VW_CAPABILITY_SOURCE_MODE`)               |
+| `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin, optional `source_url` |
+| `POSITION`                | plugin -> worker         | session ID, `current_pts_us`, `input_time_us`, `playback_rate`, `flags` (SEEK/PAUSED)  |
 | `AUDIO`                   | plugin -> worker         | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes                   |
 | `PAUSE`, `RESUME`, `STOP` | plugin -> worker         | session ID, reason where applicable                                                    |
 | `SEGMENT`                 | worker -> plugin         | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence                    |

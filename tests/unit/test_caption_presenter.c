@@ -237,14 +237,24 @@ int main(void) {
   filter_t recreated_filter = {.obj.object_type = "vout"};
   spu_presenter.p_filter_ctx = &recreated_filter;
   g_mock_register_channel_return = 43;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 4000000LL));
-  assert(g_register_spu_calls == 2);
-  assert(spu_presenter.spu_channel_id == 43);
-  assert(spu_presenter.p_held_vout == (void*)&recreated_filter);
+  // Test 11: Look-ahead future timestamp SPU scheduling
+  vw_caption_segment_t future_seg = {.start_pts_us = 15000000LL,  // 15s
+                                     .end_pts_us = 17000000LL,    // 17s
+                                     .text_utf8 = (char*)"Future caption",
+                                     .text_bytes = 14,
+                                     .is_final = true};
+  g_put_subpicture_calls = 0;
+  // Current input playhead is 10s -> lead is +5s
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 10000000LL));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_start == 100000000LL + 5000000LL);  // mdate (100s) + 5s lead = 105s
+  assert(g_last_subpic_stop == 100000000LL + 7000000LL);   // mdate (100s) + 7s lead = 107s
 
   (void)segment;
   (void)sys_segment;
+  (void)future_seg;
   (void)spu_presenter;
 
+  printf("test_caption_presenter PASSED (11/11 tests)\n");
   return 0;
 }

@@ -26,6 +26,22 @@ add_vw_test(test_caption_timing unit/test_caption_timing.c)
 add_vw_test(test_caption_presenter unit/test_caption_presenter.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_caption_presenter.c)
 target_compile_definitions(test_caption_presenter PRIVATE __PLUGIN__ MODULE_STRING="vlc_whisper" _GNU_SOURCE)
 
+if(WIN32)
+    set(VW_SOURCE_DECODER_SRCS ${CMAKE_SOURCE_DIR}/worker/src/vw_source_decoder_mf.c)
+else()
+    set(VW_SOURCE_DECODER_SRCS ${CMAKE_SOURCE_DIR}/worker/src/vw_source_decoder_ffmpeg.c)
+    find_package(PkgConfig)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(FFMPEG IMPORTED_TARGET libavformat libavcodec libswresample libavutil)
+    endif()
+endif()
+
+add_vw_test(test_source_decoder unit/test_source_decoder.c ${VW_SOURCE_DECODER_SRCS})
+if(FFMPEG_FOUND AND NOT WIN32)
+    target_compile_definitions(test_source_decoder PRIVATE -DVW_WITH_FFMPEG)
+    target_link_libraries(test_source_decoder PRIVATE PkgConfig::FFMPEG)
+endif()
+
 add_vw_test(test_worker_config unit/test_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
 add_vw_test(test_audio_buffer unit/test_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c)
 
@@ -33,11 +49,19 @@ add_vw_test(test_whisper_engine unit/test_whisper_engine.c ${CMAKE_SOURCE_DIR}/w
 target_link_libraries(test_whisper_engine PRIVATE whisper)
 set_tests_properties(test_whisper_engine PROPERTIES SKIP_RETURN_CODE 77)
 
-add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_worker_ipc PRIVATE whisper)
+if(FFMPEG_FOUND AND NOT WIN32)
+    target_compile_definitions(test_worker_ipc PRIVATE -DVW_WITH_FFMPEG)
+    target_link_libraries(test_worker_ipc PRIVATE PkgConfig::FFMPEG)
+endif()
 
-add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_worker_lifecycle PRIVATE whisper)
+if(FFMPEG_FOUND AND NOT WIN32)
+    target_compile_definitions(test_worker_lifecycle PRIVATE -DVW_WITH_FFMPEG)
+    target_link_libraries(test_worker_lifecycle PRIVATE PkgConfig::FFMPEG)
+endif()
 
 add_vw_test(test_worker_client unit/vw_test_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 
@@ -48,9 +72,10 @@ else()
 endif()
 
 if(WIN32)
-    # vw_platform_win32.c uses BCryptGenRandom for the auth token
-    target_link_libraries(test_worker_ipc PRIVATE bcrypt)
-    target_link_libraries(test_worker_lifecycle PRIVATE bcrypt)
+    # Windows Media Foundation and BCrypt libraries
+    target_link_libraries(test_source_decoder PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
+    target_link_libraries(test_worker_ipc PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
+    target_link_libraries(test_worker_lifecycle PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
     target_link_libraries(test_worker_client PRIVATE bcrypt)
     target_link_libraries(test_platform PRIVATE bcrypt)
 endif()

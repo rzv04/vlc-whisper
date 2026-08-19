@@ -100,6 +100,31 @@ int main(void) {
   EXPECT(decoded_seg.is_final == true);
   EXPECT_EQ_STR(decoded_seg.text_utf8, "text");
 
+  // START with source_url
+  vw_msg_start_t start_url = {.sample_rate = 16000, .channels = 1, .source_kind = VW_SOURCE_LOCAL_FILE};
+  strcpy(start_url.model_id, "tiny.en");
+  strcpy(start_url.language, "en");
+  strcpy(start_url.source_url, "file:///path/to/video.mp4");
+  start_url.source_url_len = (uint16_t)strlen(start_url.source_url);
+  EXPECT(vw_protocol_encode_payload(VW_MSG_START_SESSION, &start_url, buffer, sizeof(buffer), &written));
+  vw_msg_start_t decoded_start_url = {0};
+  EXPECT(vw_protocol_decode_payload(VW_MSG_START_SESSION, buffer, written, &decoded_start_url));
+  EXPECT(decoded_start_url.sample_rate == 16000);
+  EXPECT_EQ_STR(decoded_start_url.model_id, "tiny.en");
+  EXPECT_EQ_STR(decoded_start_url.source_url, "file:///path/to/video.mp4");
+  EXPECT(decoded_start_url.source_url_len == strlen("file:///path/to/video.mp4"));
+
+  // POSITION
+  vw_msg_position_t pos = {
+      .current_pts_us = 12345000LL, .input_time_us = 12300000LL, .playback_rate = 1.0f, .flags = VW_POSITION_FLAG_SEEK};
+  EXPECT(vw_protocol_encode_payload(VW_MSG_POSITION, &pos, buffer, sizeof(buffer), &written));
+  vw_msg_position_t decoded_pos = {0};
+  EXPECT(vw_protocol_decode_payload(VW_MSG_POSITION, buffer, written, &decoded_pos));
+  EXPECT(decoded_pos.current_pts_us == 12345000LL);
+  EXPECT(decoded_pos.input_time_us == 12300000LL);
+  EXPECT(decoded_pos.playback_rate == 1.0f);
+  EXPECT(decoded_pos.flags == VW_POSITION_FLAG_SEEK);
+
   // STARTED & SHUTDOWN
   EXPECT(vw_protocol_encode_payload(VW_MSG_STARTED, NULL, buffer, sizeof(buffer), &written));
   EXPECT(written == 0);
