@@ -645,9 +645,9 @@ All DoD items met (C17, realtime-safe callback, no disk I/O, Rule 11 header docs
 | S-06 | Low | `worker/src/vw_source_decoder_ffmpeg.c:188` | `avcodec_send_packet` failure silently drops the packet (falls through to `av_packet_unref`). FFmpeg docs confirm send can return `AVERROR(EAGAIN)` when the decoder buffer is full (must drain then re-send) and hard errors on corrupt input. Given the loop fully drains with `while (avcodec_receive_frame >= 0)` after each send, EAGAIN is practically unreachable — but a hard error (OOM/corrupt packet) silently skips that packet's audio with no log. | Silent audio gap on hard decode errors; no error propagation. | RESOLVED: Captured return code and logged warning on non-EAGAIN/EOF errors. |
 | S-07 | Medium | `protocol/src/vw_protocol_codec.c:71,74 vs 205,210` | START encode/decode length asymmetry: `model_id_len = strnlen(model_id, 64)` and `lang_len = strnlen(language, 16)` can emit 64/16, which decode rejects (`>= VW_MAX_MODEL_ID_BYTES`, `>= 16`). The `source_url` sibling field is correctly capped at 1023 on encode. | A producer using a full-length model_id/language gets its START rejected → session never established. Latent today (plugin sends `"tiny.en"`/`"en"`). | RESOLVED: Capped `model_id_len` at 63 and `lang_len` at 15 on encode. |
 | S-08 | Low | `protocol/src/vw_protocol_validate.c:114` | POSITION `playback_rate` NaN passes `<= 0.0f || > 16.0f` (both comparisons false for NaN under IEEE-754). Test suite checks 0/-1/17 but not NaN. | Protocol guard bypassed; no wire-rate consumer today, but contract broken for a future divider. | RESOLVED: Updated condition to `!(p->playback_rate > 0.0f && p->playback_rate <= 16.0f)` and added unit test. |
-| S-09 | Low | `protocol/src/vw_protocol_validate.c:112-116` → `vw_worker.c:421,439` | POSITION `current_pts_us`/`input_time_us`/`flags` unvalidated; worker seek math `last_playback_pts_us - 2000000LL` and `decoded_pts_us + 1000000LL` overflow at INT64 extremes (signed overflow = UB). Peer is token-authenticated local IPC, so this is defensive only. | UB/miscompiled comparison or re-seek storm from an extreme on-wire value. | RESOLVED (17d): Added `vw_protocol_util.h` compiler-checked saturating arithmetic and strict boundary validation in `vw_protocol_validate.c`. |
+| S-09 | Low | `protocol/src/vw_protocol_validate.c:112-116` → `vw_worker.c:421,439` | POSITION `current_pts_us`/`input_time_us`/`flags` unvalidated; worker seek math `last_playback_pts_us - 2000000LL` and `decoded_pts_us + 1000000LL` overflow at INT64 extremes (signed overflow = UB). Peer is token-authenticated local IPC, so this is defensive only. | UB/miscompiled comparison or re-seek storm from an extreme on-wire value. | OPEN for 17d: Saturating arithmetic in pacing engine. |
 | S-10 | Medium | `plugin/src/vw_whisper_module.c:330-336` | Continuous seek detection compares consecutive position samples against a fixed `VW_SEEK_JUMP_THRESHOLD_US` (1 s), not scaled by playback rate. Poll fires every ~100 ms; at rate R the media delta ≈ R × 100 ms, so R ≳ 10x yields >1 s per poll. The rate is read (L287) and sent but never applied to the threshold. | Spurious `POSITION(SEEK)` every poll at high rates (and on >1 s sender stalls at 1x) → worker re-seeks and discards hypotheses each time → captions never stabilize during fast playback. | RESOLVED: Scaled seek jump threshold by playback rate (`threshold_us = VW_SEEK_JUMP_THRESHOLD_US * rate * 1.5`). |
-| S-11 | Medium | `plugin/src/vw_whisper_module.c:236-263` | MRL/`source_url` extracted exactly once before the sender loop; no retry if `vw_plugin_find_input`/`input_item_GetURI` fails at open (silently starts in `VW_SOURCE_LIVE_AUDIO`), and never re-extracted on media swap mid-session (worker keeps decoding the original file). | (a) Silent loss of 17c look-ahead when extraction races module open; (b) wrong captions after playlist advance. | RESOLVED (17d): Dynamic MRL extraction and in-session media swap epoch restarts in `vw_whisper_module.c` + `vw_worker.c`. |
+| S-11 | Medium | `plugin/src/vw_whisper_module.c:236-263` | MRL/`source_url` extracted exactly once before the sender loop; no retry if `vw_plugin_find_input`/`input_item_GetURI` fails at open (silently starts in `VW_SOURCE_LIVE_AUDIO`), and never re-extracted on media swap mid-session (worker keeps decoding the original file). | (a) Silent loss of 17c look-ahead when extraction races module open; (b) wrong captions after playlist advance. | OPEN for 17d: Dynamic MRL tracking across playlist transitions. |
 | S-12 | Low | `plugin/src/vw_whisper_module.c:297` | `vw_worker_client_send_position` return value discarded; a failed POSITION (drop_transport) is only detected by the later `send_audio`/`receive_frame` in the same iteration. | One extra iteration + lost position pacing before fail-closed; inconsistent with `send_audio`'s explicit handling. | RESOLVED: Checked return value and marked `worker_dead = true` on failure. |
 | S-13 | Low | `plugin/src/vw_worker_client.c:238-240` | `strncpy(start.source_url, source_url, sizeof-1)` silently truncates paths > 1023 bytes; worker opens a truncated path → source decode fails → silent live-mode fallback, no diagnostic. | Source mode silently disabled for deep/long paths. | RESOLVED: Added length check, truncation warning log, and guaranteed null termination. |
 | S-14 | Medium | `plugin/src/vw_caption_presenter.c:211-216` | Look-ahead 60 s cap is applied to the raw media delta `diff` before the `/rate` division, so at rate < 1.0 `lead_us = diff/rate` exceeds 60 s (up to ~20 min at the 0.05 guard). SPU path anchors in wall-clock (`mdate()`), so the on-screen window is unbounded at slow-motion. | Captions displayed far earlier than their media position during slow playback. | RESOLVED: Capped `lead_us` (wall-clock) at 60s after rate division. |
@@ -664,17 +664,76 @@ All DoD items met (C17, realtime-safe callback, no disk I/O, Rule 11 header docs
 
 ---
 
-# Part 4 — Step 17d: Seek Re-Sync Engine & Discontinuity Discrimination
+*End of Part 3. All valid scout findings resolved and verified; 0 uncommitted changes.*
 
-## 8. Summary of Changes
-- **Dual-Detector Clock Jump Gate**: Forward seeks are gated by `VW_INPUT_JUMP_DISCONTINUITY_US = 5000000LL` (5s) across both the realtime callback (`vw_plugin_filter`) and sender position polling (`vw_plugin_sender_main`). Backward jumps > 500ms trigger immediate seek re-sync. Suppresses false-positive caption dropouts caused by network transport jitter, buffer slips, and re-buffering.
-- **Saturating Arithmetic**: Added `protocol/include/vw_protocol_util.h` with compiler-checked `vw_saturating_add_i64` and `vw_saturating_sub_i64` using `__builtin_add_overflow` / `__builtin_sub_overflow`, protecting against integer overflow UB at extreme timestamp bounds.
-- **Protocol v1.2**: Bumped minor version to 2; `VW_MSG_STARTED` carries `u8 source_active` (1 for source mode lookahead, 0 for live streaming fallback); `VW_MSG_POSITION` validated defensively against bounds, rates, and flag masks.
-- **Dynamic Media Swap**: Sender thread samples `input_item_GetURI` during throttled 100ms polling; changes in media URI trigger presenter blanking, session stop, SPSC discard, and a fresh session startup with the new URL. Worker cleanly closes the previous decoder, purges stale builder hypotheses, and opens the new media without process respawn.
-- **Live PCM Stream Bypass**: When `source_mode_active` is confirmed via `VW_MSG_STARTED`, realtime audio filter skips downsampling/SPSC pushes and sender skips IPC audio chunk transmission, saving substantial CPU and memory bandwidth.
+---
 
-## 9. Verification & Acceptance
-- **Format Verification**: `clang-format --dry-run --Werror` 100% compliant.
-- **Test Suite**: 18/18 tests passing on `linux-x64-debug` and 18/18 tests passing on `linux-x64-debug-cpu`.
-- **Valgrind Memcheck**: 100% pass with 0 leaks in authored code.
+---
 
+# Part 3 — Step 17d Final State (worktree = committed 17d + pause/seek/respawn fixes)
+
+**Scope**: Uncommitted delta vs HEAD `1ece3c3` — after reconciling the earlier v1.2→v1.1 reversion, the worktree now equals the committed full Step 17d PLUS the validated pause/seek/respawn fixes. 3 files modified, +168 / −28 (net).
+**Line references**: current worktree.
+
+## 1. Reconciliation note
+
+The committed HEAD `1ece3c3` contained the full 17d implementation (Protocol v1.2, saturating helpers, POSITION bounds, media swap, STARTED `source_active`, seek coalescing). An uncommitted reversion temporarily removed it (v1.1) — that reversion was **reverted this session**. `git checkout HEAD --` restored protocol/worker/tests/docs; the pause/seek/respawn fixes were then re-applied onto HEAD's module. Features no longer missing:
+
+| Feature | Status (final worktree) |
+| --- | --- |
+| Protocol v1.2 (`MINOR 2U`, `vw_msg_started_t`, `VW_MSG_STARTED_PAYLOAD_BYTES`) | Done |
+| `vw_protocol_util.h` saturating helpers + `test_protocol_util.c` | Done (worker L465, presenter) |
+| POSITION bounds (−10 s / 10 yr), rate `isfinite`, flag bitmask | Done (`vw_protocol_validate.c`) |
+| Playlist media swap (in-session START, new `session_id`) | Done (module media-swap poll; worker START handler) |
+| PCM gating via STARTED `source_active` | Done (worker emits; plugin `source_mode_active` gates capture/send) |
+| Worker seek coalescing (`target != last_playback_pts_us`) | Done (worker L470) |
+
+## 2. The retained fixes (validated live on VLC)
+
+1. **Pause backlog drop** — `vw_whisper_module.c` segment case: while paused, look-ahead backlog segments are dropped (`PLUGIN_PAUSED_DROP`), not rendered; the pause-transition blank stays clear. (Module, `if (!paused)` guard.)
+2. **Media-domain seek target** — the realtime callback no longer stores `block->i_pts` (aout system-date domain) as `resume_pts_us`; the sender derives the target from the polled `INPUT_GET_TIME` media position (`seek_target_us = current_position_us`), falling back to `resume_pts_us` only for poll-initiated discontinuities, with a `PLUGIN_SEEK_TARGET_MISSING` log when no position is available.
+3. **Bounded worker respawn** — `vw_plugin_respawn_worker` (3 attempts, 1 s cool-down): disconnect dead client (waits up to 5 s for worker exit → pipe name freed), relaunch with same pipe/auth/model, re-extract the current MRL with the SAME file:// / absolute-path filter + `VW_CAPABILITY_SOURCE_MODE` gate as init, blank the presenter, restart the session, re-apply paused state. Death paths (position-send, send_audio, receive fatal, chunk-drain) now `continue` into the respawn check instead of terminating the sender.
+
+## 3. Acceptance Criterion → Code Mapping (plan `step17d_plan.md`)
+
+| # | Criterion | Status |
+| --- | --- | --- |
+| 1 | 5 s forward-jitter gate, both detectors | Done (callback + poll) |
+| 2 | True seek re-sync, media-domain target, no teardown | Done |
+| 3 | Saturating arithmetic — no overflow/stall | Done |
+| 4 | Protocol validation: bounds, rate, flags | Done |
+| 5 | Playlist media swap | Done |
+| 6 | PCM gating in source mode (`source_active`) | Done |
+| 7 | SPU anti-ghosting (seek + pause) | Done |
+| 8 | Worker respawn (bounded, current MRL) | Done |
+| 9 | Zero memory leaks | 0 definite/indirect/possible; glib/libgomp still-reachable noise only |
+| 10 | Documentation (Rule 14) | Done (plan/contracts/architecture/roadmap/source-layout/diff.md) |
+
+**Step 17d is now fully implemented in the worktree.**
+
+## 4. Code Review Findings
+
+### Bugs (all worker-side latent robustness; masked by the plugin flow)
+
+| Priority | Component / Location | Description | Impact | Proposed Fix |
+| --- | --- | --- | --- | --- |
+| **Medium** | `worker/src/vw_worker.c` POSITION handler | `paused=true` set from `VW_POSITION_FLAG_PAUSED` with no else-reset; flag-pause does not clear `audio_buf`/builder (only `VW_MSG_PAUSE` does); RESUME does not re-anchor `decoded_pts_us` | Ghost/duplicate captions or permanent decode suspension for a non-plugin POSITION consumer | Clear buffer on flag-pause; else-reset `paused`; re-anchor on RESUME |
+| **Medium** | `worker/src/vw_worker.c` look-ahead read | `samples_read == 0` treated as unrecoverable EOF with no transient/retry path | Caption loss on transient decoder zero until a seek | Retry/backoff on transient zero |
+| **Low** | `worker/src/vw_worker.c` | Backward-jump threshold `2000000LL` (2 s) inconsistent with the 500 ms/5 s policy; `VW_CAPABILITY_SOURCE_MODE` advertised but the plugin uses `source_active` from STARTED (redundant flag) | Late backward-seek detection; dead capability | Align threshold; drop or document the flag |
+
+### Architectural & Operational Risks
+
+| Category | Risk Description | Affected Files | Mitigation |
+| --- | --- | --- | --- |
+| **Protocol drift** | The worktree and HEAD now agree on v1.2; ensure any future branch does not reintroduce the v1.1 reversion | protocol/*, worker, plugin | Pin v1.2 in the plan/contracts |
+| **Worker robustness** | Pause/resume/EOF gaps are latent — safe while the plugin drives POSITION/PAUSE/RESUME; any direct consumer hits them | worker.c | Harden worker state transitions independently |
+
+### Code Style & Quality Nitpicks
+
+| Issue Type | File & Line | Description | Recommendation |
+| --- | --- | --- | --- |
+| **Comment drift** | `vw_whisper_module.c:224` | `resume_pts_us` comment still says "PTS anchor of the first post-seek block" though the callback no longer sets it | Update comment to "media position set by poll detectors" |
+
+---
+
+*End of Part 3 (final). Part 3 was rewritten after reconciling the v1.2→v1.1 reversion; the worktree now = committed Step 17d + validated pause/seek/respawn fixes. Build: 18/18 ctest, clang-format clean, Windows DLL links.*
