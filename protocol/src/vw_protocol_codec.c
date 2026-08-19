@@ -69,9 +69,11 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_FIELD(p->channels);
       ENC_FIELD(p->sample_format);
       uint16_t model_id_len = (uint16_t)strnlen(p->model_id, VW_MAX_MODEL_ID_BYTES);
+      if (model_id_len >= VW_MAX_MODEL_ID_BYTES) model_id_len = VW_MAX_MODEL_ID_BYTES - 1;
       ENC_FIELD(model_id_len);
       ENC_BYTES(p->model_id, model_id_len);
       uint16_t lang_len = (uint16_t)strnlen(p->language, 16);
+      if (lang_len >= 16) lang_len = 15;
       ENC_FIELD(lang_len);
       ENC_BYTES(p->language, lang_len);
       ENC_FIELD(p->source_kind);

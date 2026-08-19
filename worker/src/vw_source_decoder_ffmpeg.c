@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "vw_log.h"
 #include "vw_source_decoder.h"
 
 #ifdef VW_WITH_FFMPEG
@@ -185,7 +186,8 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
     }
 
     if (decoder->pkt->stream_index == decoder->audio_stream_idx) {
-      if (avcodec_send_packet(decoder->codec_ctx, decoder->pkt) >= 0) {
+      int send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
+      if (send_ret >= 0) {
         while (avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
           AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
           int64_t frame_pts = decoder->frame->pts;
@@ -229,6 +231,8 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
             }
           }
         }
+      } else if (send_ret != AVERROR(EAGAIN) && send_ret != AVERROR_EOF) {
+        vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
       }
     }
     av_packet_unref(decoder->pkt);

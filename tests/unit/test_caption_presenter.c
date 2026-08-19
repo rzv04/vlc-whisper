@@ -32,6 +32,7 @@ static int g_mock_register_channel_return = 42;
 static int g_put_subpicture_calls = 0;
 static int g_osd_text_calls = 0;
 static int64_t g_mock_mdate = 100000000LL;  // 100s
+static float g_mock_rate = 1.0f;
 static int64_t g_last_subpic_start = 0;
 static int64_t g_last_subpic_stop = 0;
 static bool g_last_subpic_b_subtitle = false;
@@ -127,7 +128,7 @@ int var_Get(vlc_object_t* p_obj, const char* psz_name, vlc_value_t* p_val) {
   (void)p_obj;
   (void)psz_name;
   if (p_val) {
-    p_val->f_float = 1.0f;
+    p_val->f_float = g_mock_rate;
   }
   return VLC_SUCCESS;
 }
@@ -189,7 +190,7 @@ int main(void) {
   g_mock_register_channel_return = 42;
   g_mock_mdate = 100000000LL;
 
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 1000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0));
   assert(g_register_spu_calls == 1);
   assert(spu_presenter.spu_channel_id == 42);
   assert(spu_presenter.spu_channel_registered == true);
@@ -199,7 +200,7 @@ int main(void) {
   assert(g_last_subpic_b_subtitle == false);
 
   // Subsequent call reuses already-registered channel
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 2000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0));
   assert(g_register_spu_calls == 1);  // No duplicate registration call
   assert(g_put_subpicture_calls == 2);
   assert(g_last_subpic_start == 100000000LL);
@@ -247,24 +248,42 @@ int main(void) {
   filter_t recreated_filter = {.obj.object_type = "vout"};
   spu_presenter.p_filter_ctx = &recreated_filter;
   g_mock_register_channel_return = 43;
-  // Test 11: Look-ahead future timestamp SPU scheduling
+  // Test 11: Look-ahead future timestamp SPU scheduling (1.0x rate)
   vw_caption_segment_t future_seg = {.start_pts_us = 15000000LL,  // 15s
                                      .end_pts_us = 17000000LL,    // 17s
                                      .text_utf8 = (char*)"Future caption",
                                      .text_bytes = 14,
                                      .is_final = true};
   g_put_subpicture_calls = 0;
+  g_mock_rate = 1.0f;
   // Current input playhead is 10s -> lead is +5s
   assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 10000000LL));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_start == 100000000LL + 5000000LL);  // mdate (100s) + 5s lead = 105s
   assert(g_last_subpic_stop == 100000000LL + 7000000LL);   // mdate (100s) + 7s lead = 107s
 
+  // Test 12: Playback rate scaling on future SPU scheduling
+  // 2.0x playback rate: 10s media lead -> 5s wall-clock lead; 2s duration -> 1s wall-clock duration
+  g_mock_rate = 2.0f;
+  g_put_subpicture_calls = 0;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 5000000LL));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_start == 100000000LL + 5000000LL);  // 100s + (10s media / 2.0) = 105s
+  assert(g_last_subpic_stop == 100000000LL + 6000000LL);   // 105s + (2s media / 2.0) = 106s
+
+  // 0.5x playback rate: 10s media lead -> 20s wall-clock lead; 2s duration -> 4s wall-clock duration
+  g_mock_rate = 0.5f;
+  g_put_subpicture_calls = 0;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 5000000LL));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_start == 100000000LL + 20000000LL);  // 100s + (10s media / 0.5) = 120s
+  assert(g_last_subpic_stop == 100000000LL + 24000000LL);   // 120s + (2s media / 0.5) = 124s
+
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (11/11 tests)\n");
+  printf("test_caption_presenter PASSED (12/12 tests)\n");
   return 0;
 }

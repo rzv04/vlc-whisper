@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "vw_protocol.h"
 #include "vw_test.h"
 
@@ -150,6 +152,9 @@ int main(void) {
   EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
 
   pos.playback_rate = 17.0f;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.playback_rate = NAN;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
 
   // Validate SHUTDOWN / STARTED

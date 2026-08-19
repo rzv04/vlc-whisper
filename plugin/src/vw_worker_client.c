@@ -236,7 +236,13 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);
   strncpy(start.language, "en", sizeof(start.language) - 1);
   if (source_url) {
+    size_t url_len = strlen(source_url);
+    if (url_len >= sizeof(start.source_url)) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_START_URL", "source_url too long (%zu >= %zu); truncating", url_len,
+                   sizeof(start.source_url));
+    }
     strncpy(start.source_url, source_url, sizeof(start.source_url) - 1);
+    start.source_url[sizeof(start.source_url) - 1] = '\0';
     start.source_url_len = (uint16_t)strlen(start.source_url);
   }
 

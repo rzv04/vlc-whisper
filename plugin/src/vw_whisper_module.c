@@ -294,8 +294,12 @@ static void* vw_plugin_sender_main(void* arg) {
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
       if (position_us >= 0) {
         current_position_us = position_us;
-        vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
-                                       now_paused ? VW_POSITION_FLAG_PAUSED : 0);
+        if (!vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
+                                            now_paused ? VW_POSITION_FLAG_PAUSED : 0)) {
+          atomic_store(&sys->worker_dead, true);
+          if (input) vlc_object_release((vlc_object_t*)input);
+          break;
+        }
       }
 
       // Seek detection while PAUSED: the audio callback never runs (no blocks flow) so
@@ -326,9 +330,10 @@ static void* vw_plugin_sender_main(void* arg) {
       }
 
       // Continuous seek detection via input position (covers unflagged playing-case seeks and
-      // paused seeks in builds where the time variable does advance). >1s forward/backward jump.
-      if (position_us >= 0 && last_position_us >= 0 &&
-          llabs(position_us - last_position_us) > VW_SEEK_JUMP_THRESHOLD_US) {
+      // paused seeks in builds where the time variable does advance). Scale threshold with playback rate.
+      int64_t seek_threshold_us =
+          (int64_t)(VW_SEEK_JUMP_THRESHOLD_US * (playback_rate > 1.0f ? (playback_rate * 1.5f) : 1.0f));
+      if (position_us >= 0 && last_position_us >= 0 && llabs(position_us - last_position_us) > seek_threshold_us) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; seek signaled",
                      (long long)(position_us - last_position_us));
         atomic_store(&sys->discontinuity_pending, true);
@@ -357,7 +362,8 @@ static void* vw_plugin_sender_main(void* arg) {
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity at %lldus; blanking presenter",
                    (long long)resume_pts_us);
       vw_caption_presenter_blank(&sys->presenter);  // erase captions on seek
-      vw_worker_client_send_position(sys->client, resume_pts_us, resume_pts_us, 1.0f, VW_POSITION_FLAG_SEEK);
+      vw_worker_client_send_position(sys->client, resume_pts_us, resume_pts_us, 1.0f,
+                                     (paused ? VW_POSITION_FLAG_PAUSED : 0) | VW_POSITION_FLAG_SEEK);
       vw_audio_chunk_t stale;
       while (vw_spsc_queue_pop(sys->queue, &stale)) {
       }  // discard pre-seek live audio chunks
