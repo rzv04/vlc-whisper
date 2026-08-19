@@ -277,10 +277,12 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
   if (input && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
     input_item_t* item = input_GetItem(input);
     if (item) {
-      const char* uri = input_item_GetURI(item);
+      char* uri = input_item_GetURI(item);
       if (uri &&
           (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' || (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
-        source_url = strdup(uri);
+        source_url = uri;
+      } else {
+        free(uri);
       }
     }
     vlc_object_release(VLC_OBJECT(input));
@@ -288,6 +290,7 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
   vw_caption_presenter_blank(&sys->presenter);  // erase stale captions from the dead epoch
   bool started = vw_worker_client_start_session(sys->client, 0, "tiny.en", source_url);
   free(source_url);
+  atomic_store(&sys->source_mode_active, vw_worker_client_is_source_active(sys->client));
   if (!started) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL", "worker rejected respawn session");
     vw_worker_client_disconnect(sys->client);
