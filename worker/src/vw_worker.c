@@ -10,6 +10,7 @@
 #include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
+#include "vw_protocol_util.h"
 #include "vw_source_decoder.h"
 #include "vw_worker_queue.h"
 
@@ -265,7 +266,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
       // If we have look-ahead decoding work to do (and haven't hit EOF), don't sleep
       if (session_active && source_mode && source_decoder && !paused && !source_eof &&
-          (decoded_pts_us < current_playback_pts_us + lead_target_us)) {
+          (decoded_pts_us < vw_saturating_add_i64(current_playback_pts_us, lead_target_us))) {
         break;
       }
       vw_platform_sleep_ms(5);
@@ -347,7 +348,24 @@ int vw_worker_run(const vw_worker_config_t* config) {
       switch (frame.type) {
         case VW_MSG_START_SESSION: {
           if (session_active) {
-            break;  // Duplicate START without STOP — ignore
+            if (memcmp(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES) == 0) {
+              break;  // Duplicate START for the active session — ignore
+            }
+            // Media swap or new epoch detected mid-session: cleanly close old session
+            vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION",
+                         "media swap / new epoch detected (restarting worker session)");
+            if (source_decoder) {
+              vw_source_decoder_close(source_decoder);
+              source_decoder = NULL;
+            }
+            if (audio_buf) vw_audio_buffer_clear(audio_buf);
+            if (builder) {
+              vw_caption_segment_t stale_seg;
+              while (vw_segment_builder_pop(builder, &stale_seg)) {
+                if (stale_seg.text_utf8) free(stale_seg.text_utf8);
+              }
+            }
+            session_active = false;
           }
           if (payload_decoded.start.sample_rate != VW_AUDIO_SAMPLE_RATE) {
             vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_AUDIO_FORMAT (rate=%u)",
@@ -398,23 +416,35 @@ int vw_worker_run(const vw_worker_config_t* config) {
               vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SOURCE",
                            "failed to open source url '%s'; falling back to live PCM stream",
                            payload_decoded.start.source_url);
+              send_error(handle, payload_decoded.start.session_id.bytes, E_SOURCE_OPEN, 1,
+                         "Failed to open source MRL; falling back to live PCM stream", &sequence);
             }
           } else {
             source_mode = false;
             source_eof = false;
           }
 
-          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent)");
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent source_active=%d)",
+                       source_mode ? 1 : 0);
 
-          // Reply STARTED (header-only)
+          // Reply STARTED with 1-byte payload indicating source_active status
+          vw_msg_started_t started_payload = {.source_active = source_mode ? 1 : 0};
+          uint8_t started_payload_buf[1];
+          size_t started_written = 0;
+          vw_protocol_encode_payload(VW_MSG_STARTED, &started_payload, started_payload_buf, sizeof(started_payload_buf),
+                                     &started_written);
+
           vw_frame_header_t started_hdr = {.magic = VW_PROTOCOL_MAGIC,
                                            .major = VW_PROTOCOL_VERSION_MAJOR,
                                            .type = VW_MSG_STARTED,
-                                           .payload_length = 0,
+                                           .payload_length = (uint32_t)started_written,
                                            .sequence = ++sequence};
           uint8_t started_hdr_buf[sizeof(vw_frame_header_t)];
           vw_protocol_encode_header(&started_hdr, started_hdr_buf, sizeof(started_hdr_buf));
           vw_ipc_send(handle, started_hdr_buf, sizeof(started_hdr_buf));
+          if (started_written > 0) {
+            vw_ipc_send(handle, started_payload_buf, started_written);
+          }
           break;
         }
 
@@ -430,11 +460,14 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
           if (source_mode && source_decoder) {
             bool seek_flag = (payload_decoded.position.flags & VW_POSITION_FLAG_SEEK) != 0;
-            bool backward_jump = (last_playback_pts_us >= 0 &&
-                                  (payload_decoded.position.current_pts_us < last_playback_pts_us - 2000000LL));
-            bool forward_past_decoded = (payload_decoded.position.current_pts_us > decoded_pts_us + 1000000LL);
+            bool backward_jump =
+                (last_playback_pts_us >= 0 &&
+                 payload_decoded.position.current_pts_us < vw_saturating_sub_i64(last_playback_pts_us, 2000000LL));
+            bool forward_past_decoded =
+                (payload_decoded.position.current_pts_us > vw_saturating_add_i64(decoded_pts_us, 1000000LL));
 
-            if (seek_flag || backward_jump || forward_past_decoded) {
+            if ((seek_flag || backward_jump || forward_past_decoded) &&
+                payload_decoded.position.current_pts_us != last_playback_pts_us) {
               vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEEK",
                            "re-seeking source decoder to %lldus (flag=%d back=%d fwd=%d)",
                            (long long)payload_decoded.position.current_pts_us, (int)seek_flag, (int)backward_jump,
@@ -544,7 +577,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
     // Ahead-of-Time Look-Ahead Decoding Step
     if (session_active && source_mode && source_decoder && !paused && !source_eof &&
-        (decoded_pts_us < current_playback_pts_us + lead_target_us)) {
+        (decoded_pts_us < vw_saturating_add_i64(current_playback_pts_us, lead_target_us))) {
       int16_t decode_chunk[32000];  // 2 seconds at 16kHz
       int64_t chunk_pts_us = -1;
       size_t samples_read = vw_source_decoder_read_s16le(source_decoder, decode_chunk, 32000, &chunk_pts_us);

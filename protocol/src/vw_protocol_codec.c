@@ -140,8 +140,12 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
       break;
     }
+    case VW_MSG_STARTED: {
+      const vw_msg_started_t* p = (const vw_msg_started_t*)payload;
+      ENC_FIELD(p->source_active);
+      break;
+    }
     case VW_MSG_SHUTDOWN:
-    case VW_MSG_STARTED:
       break;
     default:
       return false;
@@ -281,8 +285,12 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       DEC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
       break;
     }
+    case VW_MSG_STARTED: {
+      vw_msg_started_t* p = (vw_msg_started_t*)out_payload;
+      DEC_FIELD(p->source_active);
+      break;
+    }
     case VW_MSG_SHUTDOWN:
-    case VW_MSG_STARTED:
       break;
     default:
       return false;

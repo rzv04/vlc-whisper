@@ -4,7 +4,7 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=1` (Protocol v1.1); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=2` (Protocol v1.2); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
@@ -82,9 +82,9 @@ Example semantic value, shown as JSON only for readability:
 }
 ```
 
-### STARTED
+### STARTED (v1.2)
 
-Worker to plugin. Payload: Empty (header only). Confirms session initialization and effective settings after `START`.
+Worker to plugin. Payload: `u8 source_active` (1 if source file look-ahead mode initialized successfully; 0 if live streaming mode). Confirms session initialization and effective settings after `START`.
 
 ### CONTROL MESSAGES (`PAUSE`, `RESUME`, `STOP`)
 
@@ -107,7 +107,7 @@ Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 
 Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_code`, `u8 recoverable`, `char message[256]` (safe redacted UTF-8 message).
 
 - If `recoverable == 0`: Fatal failure. Plugin disables captions for item, closes transport; VLC media playback continues uninterrupted.
-- If `recoverable == 1`: Non-fatal warning (e.g. `E_BACKPRESSURE`); plugin logs diagnostic, session continues.
+- If `recoverable == 1`: Non-fatal warning (e.g. `E_BACKPRESSURE`, `E_SOURCE_OPEN`); plugin logs diagnostic, session continues.
 
 ## Error catalog
 
@@ -122,6 +122,7 @@ Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_cod
 | `E_DISCONTINUITY`    | Seek/rate/source timeline changed | Clear captions and end MVP session gracefully                                  |
 | `E_WORKER_CRASH`     | Worker exit/pipe close            | Clear captions; one bounded restart only before first audio, otherwise disable |
 | `E_INTERNAL`         | Unclassified worker failure       | Disable captions; offer redacted diagnostics                                   |
+| `E_SOURCE_OPEN`      | Native source demuxer open failed | Non-fatal; plugin falls back transparently to live PCM stream capture          |
 
 ## Compatibility rules
 

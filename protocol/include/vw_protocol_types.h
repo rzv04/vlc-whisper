@@ -11,8 +11,8 @@
 //   Offset 20: uint8_t payload[payload_length]  ← serialized vw_msg_xxx_t fields
 //
 // header.type selects which struct serializes/deserializes the payload bytes.
-// Zero-payload messages (VW_MSG_SHUTDOWN, VW_MSG_STARTED) have payload_length=0
-// and no struct — the codec handles them as empty payloads.
+// Zero-payload message (VW_MSG_SHUTDOWN) has payload_length=0
+// and no struct — the codec handles it as an empty payload.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -20,10 +20,10 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 1U
-#define VW_CLIENT_VERSION "1.1.0"
+#define VW_PROTOCOL_VERSION_MINOR 2U
+#define VW_CLIENT_VERSION "1.2.0"
 #define VW_CLIENT_VERSION_LENGTH 5U
-#define VW_WORKER_VERSION "1.1.0"
+#define VW_WORKER_VERSION "1.2.0"
 #define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
@@ -128,6 +128,12 @@ typedef struct vw_msg_start {
   uint16_t source_url_len;
   char source_url[VW_MAX_SOURCE_URL_BYTES];
 } vw_msg_start_t;
+
+typedef struct vw_msg_started {
+  uint8_t source_active;  // 1 if source file lookahead mode active; 0 if live streaming mode
+} vw_msg_started_t;
+
+#define VW_MSG_STARTED_PAYLOAD_BYTES 1U
 
 // Position update flags (bitfield)
 #define VW_POSITION_FLAG_SEEK (1U << 0)

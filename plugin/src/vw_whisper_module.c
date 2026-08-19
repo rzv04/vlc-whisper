@@ -49,14 +49,16 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 #include "vw_audio_capture.h"
 #include "vw_caption_presenter.h"
 #include "vw_platform.h"
+#include "vw_protocol_util.h"
 #include "vw_queue.h"
 #include "vw_worker_client.h"
 
-// Seek/discontinuity detection thresholds (step 17). Position-jump and PTS-jump share the same
-// 1s gate: smaller scrubs are below the caption-epoch granularity (8s windows) and VLC's own
-// BLOCK_FLAG_DISCONTINUITY remains the primary seek signal.
-#define VW_SEEK_JUMP_THRESHOLD_US 1000000  // >1s media-position jump = seek (paused or playing)
-#define VW_PTS_JUMP_THRESHOLD_US 500000    // backward PTS jump past this = unflagged discontinuity
+// Seek/discontinuity detection thresholds (step 17d).
+// Forward jumps >= 5s trigger seek re-sync; minor network transport jitter, buffer slips,
+// or re-buffers (< 5s) are suppressed to avoid false 8s caption dropouts.
+// Backward jumps past 500ms immediately trigger seek re-sync.
+#define VW_INPUT_JUMP_DISCONTINUITY_US 5000000LL
+#define VW_PTS_JUMP_THRESHOLD_US 500000LL
 
 static int vw_plugin_open(vlc_object_t* obj);
 static void vw_plugin_close(vlc_object_t* obj);
@@ -220,6 +222,8 @@ typedef struct {
   // thread to restart the session epoch. Callback only stores atomics — never IPC/heap/locks.
   _Atomic bool discontinuity_pending;
   _Atomic int64_t resume_pts_us;  // PTS anchor of the first post-seek block
+  _Atomic bool source_mode_active;
+  char active_source_url[VW_MAX_SOURCE_URL_BYTES];
   uint64_t chunks_sent;
   uint32_t frames_received;
   uint32_t segments_received;
@@ -243,6 +247,8 @@ static void* vw_plugin_sender_main(void* arg) {
         if (uri && (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' ||
                     (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
           source_url = uri;
+          strncpy(sys->active_source_url, source_url, sizeof(sys->active_source_url) - 1);
+          sys->active_source_url[sizeof(sys->active_source_url) - 1] = '\0';
         } else if (uri) {
           free(uri);
         }
@@ -256,12 +262,16 @@ static void* vw_plugin_sender_main(void* arg) {
   if (sys->client && !vw_worker_client_start_session(sys->client, 0, "tiny.en", source_url)) {
     if (source_url) free(source_url);
     atomic_store(&sys->worker_dead, true);
+    atomic_store(&sys->source_mode_active, false);
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL",
                  "worker rejected session; captions disabled, passthrough only");
     return NULL;
   }
   if (source_url) free(source_url);
-  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED", "caption session started (STARTED confirmed)");
+  atomic_store(&sys->source_mode_active, vw_worker_client_is_source_active(sys->client));
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED",
+               "caption session started (STARTED confirmed source_active=%d)",
+               atomic_load(&sys->source_mode_active) ? 1 : 0);
 
   // Play/pause lifecycle: poll the input thread once per iteration (cadence is 5-20ms). On the
   // playing->paused transition send PAUSE; on paused->playing send RESUME. While paused the
@@ -290,6 +300,46 @@ static void* vw_plugin_sender_main(void* arg) {
         if (var_Get((vlc_object_t*)input, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
           playback_rate = rval.f_float;
         }
+
+        // Media swap detection mid-session
+        if (sys->client && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
+          input_item_t* item = input_GetItem(input);
+          if (item) {
+            char* raw_uri = input_item_GetURI(item);
+            if (raw_uri) {
+              char normalized_uri[VW_MAX_SOURCE_URL_BYTES];
+              normalized_uri[0] = '\0';
+              if (strncmp(raw_uri, "file://", 7) == 0 || raw_uri[0] == '/' ||
+                  (raw_uri[1] == ':' && (raw_uri[2] == '\\' || raw_uri[2] == '/'))) {
+                strncpy(normalized_uri, raw_uri, sizeof(normalized_uri) - 1);
+                normalized_uri[sizeof(normalized_uri) - 1] = '\0';
+              }
+              free(raw_uri);
+
+              if (strcmp(normalized_uri, sys->active_source_url) != 0) {
+                vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MEDIA_SWAP",
+                             "media swap detected: '%s' -> '%s'; restarting session", sys->active_source_url,
+                             normalized_uri);
+                vw_caption_presenter_blank(&sys->presenter);
+                vw_worker_client_stop_session(sys->client, VW_CTRL_REASON_MEDIA_END);
+                vw_audio_chunk_t stale_chunk;
+                while (vw_spsc_queue_pop(sys->queue, &stale_chunk)) {
+                }
+                strncpy(sys->active_source_url, normalized_uri, sizeof(sys->active_source_url) - 1);
+                sys->active_source_url[sizeof(sys->active_source_url) - 1] = '\0';
+                if (vw_worker_client_start_session(sys->client, 0, "tiny.en",
+                                                   normalized_uri[0] ? normalized_uri : NULL)) {
+                  atomic_store(&sys->source_mode_active, vw_worker_client_is_source_active(sys->client));
+                  last_position_us = -1;
+                  paused_position_us = -1;
+                } else {
+                  atomic_store(&sys->worker_dead, true);
+                  atomic_store(&sys->source_mode_active, false);
+                }
+              }
+            }
+          }
+        }
       }
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
       if (position_us >= 0) {
@@ -305,8 +355,7 @@ static void* vw_plugin_sender_main(void* arg) {
       // Seek detection while PAUSED: the audio callback never runs (no blocks flow) so
       // BLOCK_FLAG_DISCONTINUITY never arrives, and the input time variable is clock-driven so
       // it stays frozen during the paused seek. Compare the position captured at the PAUSE
-      // transition against the live position on RESUME: a >1s jump means a seek happened while
-      // paused. Report it as a discontinuity so the sender restarts the epoch on resume.
+      // transition against the live position on RESUME: a >= 5s jump or backward jump means seek.
       if (now_paused != paused) {
         if (now_paused) {
           // Baseline at pause; only commit a readable position (-1 = input lookup failed, which
@@ -314,7 +363,8 @@ static void* vw_plugin_sender_main(void* arg) {
           paused_position_us = (position_us >= 0) ? position_us : -1;
         } else {
           if (paused_position_us >= 0 && position_us >= 0 &&
-              llabs(position_us - paused_position_us) > VW_SEEK_JUMP_THRESHOLD_US) {
+              ((position_us - paused_position_us >= VW_INPUT_JUMP_DISCONTINUITY_US) ||
+               (paused_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US))) {
             vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_WHILE_PAUSED",
                          "position jumped %lldus during pause; restarting on resume",
                          (long long)(position_us - paused_position_us));
@@ -330,10 +380,14 @@ static void* vw_plugin_sender_main(void* arg) {
       }
 
       // Continuous seek detection via input position (covers unflagged playing-case seeks and
-      // paused seeks in builds where the time variable does advance). Scale threshold with playback rate.
+      // paused seeks in builds where the time variable does advance). Scale 5s threshold with playback rate.
       int64_t seek_threshold_us =
-          (int64_t)(VW_SEEK_JUMP_THRESHOLD_US * (playback_rate > 1.0f ? (playback_rate * 1.5f) : 1.0f));
-      if (position_us >= 0 && last_position_us >= 0 && llabs(position_us - last_position_us) > seek_threshold_us) {
+          (int64_t)(VW_INPUT_JUMP_DISCONTINUITY_US * (playback_rate > 1.0f ? (playback_rate * 1.5f) : 1.0f));
+      bool is_pos_forward_seek =
+          (position_us >= 0 && last_position_us >= 0 && (position_us - last_position_us >= seek_threshold_us));
+      bool is_pos_backward_seek =
+          (position_us >= 0 && last_position_us >= 0 && (last_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US));
+      if (is_pos_forward_seek || is_pos_backward_seek) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; seek signaled",
                      (long long)(position_us - last_position_us));
         atomic_store(&sys->discontinuity_pending, true);
@@ -355,7 +409,7 @@ static void* vw_plugin_sender_main(void* arg) {
       paused = now_paused;
     }
 
-    // Step 17c: Seek/discontinuity handling via POSITION seek re-anchoring.
+    // Step 17c/17d: Seek/discontinuity handling via POSITION seek re-anchoring.
     if (atomic_load(&sys->discontinuity_pending)) {
       int64_t resume_pts_us = atomic_load(&sys->resume_pts_us);
       atomic_store(&sys->discontinuity_pending, false);
@@ -373,9 +427,10 @@ static void* vw_plugin_sender_main(void* arg) {
     // priority), 20ms when idle (the idle wait doubles as cadence, no extra sleep).
     vw_audio_chunk_t chunk;
     bool sent_any = false;
+    bool is_source_mode = atomic_load(&sys->source_mode_active);
     while (vw_spsc_queue_pop(sys->queue, &chunk)) {
-      if (paused) {
-        continue;  // discard audio captured before/during pause; never forward it after resume
+      if (paused || is_source_mode) {
+        continue;  // discard audio captured before/during pause or when source lookahead mode is active
       }
       sys->chunks_sent++;
       if (!vw_worker_client_send_audio(sys->client, &chunk)) {
@@ -515,20 +570,34 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
                             .sample_rate = p_filter->fmt_in.audio.i_rate,
                             .channels = p_filter->fmt_in.audio.i_channels};
 
-  // Step 17 seek/discontinuity detection — realtime-safe: atomics only, the sender thread does
-  // the teardown/restart. BLOCK_FLAG_DISCONTINUITY is VLC's own seek/rate/swap signal; the
-  // non-monotonic-PTS fallback catches backward jumps VLC does not flag. Guard the fallback with
-  // p_block->i_pts >= VLC_TS_0: VLC delivers blocks with VLC_TICK_INVALID (0) when no PTS is
-  // available (vlc_block.h), and 0 would falsely look like a backward jump. The first valid
-  // post-seek block's PTS becomes the new epoch anchor.
-  if ((p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) ||
-      (p_block->i_pts >= VLC_TS_0 && sys->capture.last_pts_us > 0 &&
-       p_block->i_pts < sys->capture.last_pts_us - VW_PTS_JUMP_THRESHOLD_US)) {
+  // Step 17d seek/discontinuity detection — realtime-safe: atomics only.
+  // 5s forward threshold prevents network transport jitter / buffer slips (< 5s) from wiping captions.
+  // Backward jumps > 500ms trigger seek re-sync immediately.
+  int64_t pts = p_block->i_pts;
+  if (pts >= VLC_TS_0 && sys->capture.last_pts_us > 0) {
+    int64_t diff = pts - sys->capture.last_pts_us;
+    bool is_flagged = (p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) != 0;
+    bool is_forward_seek = (diff >= VW_INPUT_JUMP_DISCONTINUITY_US);
+    bool is_backward_seek = (diff < -VW_PTS_JUMP_THRESHOLD_US);
+
+    if (is_backward_seek || (is_forward_seek && is_flagged) || (diff >= VW_INPUT_JUMP_DISCONTINUITY_US)) {
+      atomic_store(&sys->discontinuity_pending, true);
+      atomic_store(&sys->resume_pts_us, pts);
+    }
+  } else if ((p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) && pts >= VLC_TS_0) {
     atomic_store(&sys->discontinuity_pending, true);
-    atomic_store(&sys->resume_pts_us, p_block->i_pts);
+    atomic_store(&sys->resume_pts_us, pts);
   }
 
-  vw_audio_capture_process_block(&sys->capture, &input);
+  if (pts >= VLC_TS_0) {
+    sys->capture.last_pts_us = pts;
+  }
+
+  // When source lookahead mode is active, worker decodes directly from file.
+  // Skip float-to-int16 downsampling and SPSC push to save CPU and memory bandwidth.
+  if (!atomic_load(&sys->source_mode_active)) {
+    vw_audio_capture_process_block(&sys->capture, &input);
+  }
 
   // Return the original block untouched to preserve user playback quality
   return p_block;

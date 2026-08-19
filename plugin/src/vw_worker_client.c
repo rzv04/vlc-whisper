@@ -223,7 +223,9 @@ void vw_worker_client_disconnect(vw_worker_client_t* client) {
 
 bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,
                                     const char* source_url) {
-  if (!client || !client->pipe_handle || client->session_active) return false;
+  if (!client || !client->pipe_handle) return false;
+  client->session_active = false;
+  client->worker_source_active = false;
 
   if (!vw_platform_get_random_bytes(client->session_id, sizeof(client->session_id))) return false;
 
@@ -286,6 +288,23 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     }
 
     if (resp_hdr.type == VW_MSG_STARTED) {
+      if (resp_hdr.payload_length > 0) {
+        uint8_t resp_payload[32];
+        size_t to_read =
+            resp_hdr.payload_length < sizeof(resp_payload) ? resp_hdr.payload_length : sizeof(resp_payload);
+        if (receive_all(client->pipe_handle, resp_payload, to_read, deadline_us) != VW_IPC_RECV_OK) {
+          vw_worker_client_drop_transport(client);
+          return false;
+        }
+        vw_msg_started_t started_msg = {0};
+        if (vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, to_read, &started_msg)) {
+          client->worker_source_active = (started_msg.source_active != 0);
+        } else {
+          client->worker_source_active = false;
+        }
+      } else {
+        client->worker_source_active = false;
+      }
       client->session_active = true;
       return true;
     } else if (resp_hdr.type == VW_MSG_ERROR) {
@@ -562,4 +581,8 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
     // Malformed or unsupported frame: keep draining within the same deadline.
   }
   return VW_IPC_RECV_TIMEOUT;  // deadline expired at a frame boundary
+}
+
+bool vw_worker_client_is_source_active(const vw_worker_client_t* client) {
+  return client && client->session_active && client->worker_source_active;
 }

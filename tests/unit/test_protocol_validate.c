@@ -142,8 +142,29 @@ int main(void) {
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
   // POSITION validation
-  vw_msg_position_t pos = {.playback_rate = 1.0f};
+  vw_msg_position_t pos = {.current_pts_us = 1000000LL, .input_time_us = 1000000LL, .playback_rate = 1.0f, .flags = 0};
   EXPECT(vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.flags = VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.flags = 0x04;  // Invalid flag bit
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+  pos.flags = 0;
+
+  pos.current_pts_us = -10000001LL;  // Below -10s floor
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+  pos.current_pts_us = 315360000000001LL;  // Above 10 years
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+  pos.current_pts_us = 0;
+
+  pos.input_time_us = -2LL;  // Below -1 (unset)
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+  pos.input_time_us = 315360000000001LL;  // Above 10 years
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+  pos.input_time_us = -1LL;  // -1 is valid (unset)
+  EXPECT(vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+  pos.input_time_us = 0;
 
   pos.playback_rate = 0.0f;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
@@ -157,9 +178,17 @@ int main(void) {
   pos.playback_rate = NAN;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
 
-  // Validate SHUTDOWN / STARTED
+  // Validate SHUTDOWN (header-only)
   EXPECT(vw_protocol_validate_payload(VW_MSG_SHUTDOWN, NULL));
-  EXPECT(vw_protocol_validate_payload(VW_MSG_STARTED, NULL));
+
+  // Validate STARTED (1-byte payload)
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_STARTED, NULL));
+  vw_msg_started_t started = {.source_active = 0};
+  EXPECT(vw_protocol_validate_payload(VW_MSG_STARTED, &started));
+  started.source_active = 1;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_STARTED, &started));
+  started.source_active = 2;  // Invalid value
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_STARTED, &started));
 
   printf("test_protocol_validate PASSED\n");
   return 0;

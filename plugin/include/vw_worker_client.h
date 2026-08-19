@@ -18,8 +18,12 @@ typedef struct vw_worker_client {
   uint8_t session_id[16];
   uint32_t sequence;
   bool session_active;
+  bool worker_source_active;
   uint32_t worker_capabilities;
 } vw_worker_client_t;
+
+// Returns true if the worker confirmed that look-ahead source file decoding mode is active for the current session.
+bool vw_worker_client_is_source_active(const vw_worker_client_t* client);
 
 // Spawns worker process if executable_path is non-NULL, connects over IPC, and performs HELLO/HELLO_ACK handshake.
 // model_path (may be NULL) is appended as --model <path> to the worker argv; NULL omits the flag entirely.

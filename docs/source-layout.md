@@ -73,6 +73,7 @@ vlc-whisper/
 │   ├── include/
 │   │   ├── vw_protocol.h                      # High-level protocol encoder/decoder API
 │   │   ├── vw_protocol_types.h                # Binary message headers, magic bytes, and struct definitions
+│   │   ├── vw_protocol_util.h                 # Compiler-safe saturating 64-bit integer arithmetic helpers
 │   │   ├── vw_protocol_codec.h                # Serialization/deserialization helpers
 │   │   ├── vw_ipc_transport.h                 # Platform transport abstraction (Named Pipe / Unix Domain Socket)
 │   │   └── vw_log.h                           # Privacy-safe variadic diagnostic logging API
@@ -92,6 +93,7 @@ vlc-whisper/
 │   ├── unit/                                  # Isolated component tests
 │   │   ├── test_protocol_codec.c              # Serialization & frame encoding unit tests
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
+│   │   ├── test_protocol_util.c               # Saturating arithmetic boundary and overflow unit tests
 │   │   ├── test_source_decoder.c              # Media Foundation / FFmpeg native source demuxer tests
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
