@@ -69,6 +69,8 @@ Harden the Step 17c seek re-sync engine with: a consolidated 5-second forward-ji
    - Sender thread (`vw_plugin_sender_main`): skips `send_audio` when `source_mode_active == true`.
 5. **Worker Seek Coalescing (Scrub Bursts)**:
    - In `vw_worker.c`: skip demuxer re-seek when `target_pts == last_playback_pts_us`. Drain intermediate `POSITION(SEEK)` frames during rapid scrub bursts to apply the latest target without backlog.
+6. **Worker Transport Respawn (resilience)**:
+   - On any transport death (`receive_frame` fatal, send failure), respawn the worker (bounded: 3 attempts, 1 s cool-down) and restart the caption session with the current MRL instead of disabling captions for the rest of playback. Converts the permanent `PLUGIN_WORKER_DEAD` (pipe framing desync after seek churn closes the shared duplex pipe) into a recoverable event.
 
 ### Out of Scope
 - Sub-window phrase timestamp extraction ($t_0/t_1$) — tracked in **Step 17d.1**.
@@ -195,6 +197,7 @@ static inline int64_t vw_saturating_sub_i64(int64_t a, int64_t b) {
 - [ ] **Playlist Media Swap**: Changing tracks mid-session triggers a clean epoch transition; worker closes the old demuxer and opens the new MRL (in-session START accepted), emitting STARTED — verified with in-test generated WAV fixtures.
 - [ ] **PCM Gating in Source Mode**: When STARTED reports `source_active = 1`, realtime downsampling and live `send_audio` are bypassed while PTS tracking in the callback is preserved; when demuxer open fails (`source_active = 0`), live PCM capture continues transparently.
 - [ ] **SPU Anti-Ghosting**: SPU channel is flushed on every seek and on pause/resume transitions; no stale lookahead subtitles display after either event.
+- [ ] **Worker Respawn**: Any transport death triggers a bounded auto-respawn (3 attempts, 1 s cool-down) and session restart with the current MRL; captions resume without VLC playback restart or permanent passthrough.
 - [ ] **Zero Memory Leaks**: Valgrind reports 0 memory errors across the entire test suite.
 - [ ] **Documentation**: `docs/architecture.md`, `docs/api-contracts.md`, `docs/source-layout.md`, `docs/roadmap.md`, and `diff.md` updated in the same change (Rule 14).
 

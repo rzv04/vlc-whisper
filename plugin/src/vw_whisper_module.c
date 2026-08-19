@@ -229,11 +229,82 @@ typedef struct {
   uint32_t segments_received;
   uint32_t status_received;
   uint32_t errors_received;
+  uint32_t respawn_count;  // bounded worker respawns after transport death (Step 17d)
   char model_path[VW_PATH_MAX_BYTES];
 } vw_plugin_sys_t;
+#define VW_MAX_WORKER_RESPAWNS 3
+#define VW_WORKER_RESPAWN_DELAY_MS 1000
 // Sender thread (14c): the only consumer of the SPSC queue and the only user of the worker client.
 // Starts one session, then alternates draining queue -> send AUDIO frames with draining worker ->
 // plugin frames (SEGMENT/STATUS/ERROR), degrading to passthrough on any fatal transport condition.
+// Bounded worker respawn after a transport death (Step 17d): disconnect the dead client, relaunch
+// the worker with the same pipe/auth/model, re-extract the current media URI, and restart the
+// caption session. Called from the sender thread only; paused re-applies the paused state to the
+// fresh session. The old worker exits once its pipe end is closed (disconnect waits up to 5s for
+// it), freeing the pipe name before the delay elapses. Returns false (permanent passthrough) when
+// the respawn budget is exhausted or the new worker cannot start a session.
+static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
+  if (sys->respawn_count >= VW_MAX_WORKER_RESPAWNS) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN_EXHAUSTED",
+                 "worker respawn limit (%u) reached; captions disabled, passthrough only",
+                 (unsigned)VW_MAX_WORKER_RESPAWNS);
+    return false;
+  }
+  sys->respawn_count++;
+  if (sys->client) {
+    vw_worker_client_disconnect(sys->client);
+    sys->client = NULL;
+  }
+  vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN", "transport death; respawning worker (%u/%u)",
+               sys->respawn_count, (unsigned)VW_MAX_WORKER_RESPAWNS);
+  vw_platform_sleep_ms(VW_WORKER_RESPAWN_DELAY_MS);  // let the old worker exit and free the pipe name
+  sys->client = vw_worker_client_launch_and_connect(sys->worker_path, sys->pipe_name, sys->auth_token,
+                                                    sys->model_path[0] ? sys->model_path : NULL);
+  if (!sys->client) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_UNAVAILABLE",
+                 "caption worker respawn failed; running passthrough only");
+    return false;
+  }
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_WORKER_CONNECT", "worker respawned (HELLO handshake ok)");
+
+  // Re-extract the current media URI and restart the session on the fresh worker. The input is
+  // HELD by find_input; the item/URI are borrowed while the input lives — copy what we need.
+  // Apply the SAME local-file filter and capability gate as session init: only file:// or
+  // absolute paths qualify for source look-ahead; network streams must keep live PCM mode, and a
+  // worker without SOURCE_MODE must not be handed a URI it will reject.
+  char* source_url = NULL;
+  input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
+  if (input && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
+    input_item_t* item = input_GetItem(input);
+    if (item) {
+      const char* uri = input_item_GetURI(item);
+      if (uri &&
+          (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' || (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
+        source_url = strdup(uri);
+      }
+    }
+    vlc_object_release(VLC_OBJECT(input));
+  }
+  vw_caption_presenter_blank(&sys->presenter);  // erase stale captions from the dead epoch
+  bool started = vw_worker_client_start_session(sys->client, 0, "tiny.en", source_url);
+  free(source_url);
+  if (!started) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL", "worker rejected respawn session");
+    vw_worker_client_disconnect(sys->client);
+    sys->client = NULL;
+    return false;
+  }
+  if (paused) {
+    vw_worker_client_pause_session(sys->client);  // restart in the paused state the death left us in
+  }
+  atomic_store(&sys->worker_dead, false);
+  sys->chunks_sent = 0;
+  sys->frames_received = 0;
+  sys->segments_received = 0;
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED", "caption session restarted (respawn)");
+  return true;
+}
+
 static void* vw_plugin_sender_main(void* arg) {
   vw_plugin_sys_t* sys = (vw_plugin_sys_t*)arg;
 
@@ -283,7 +354,15 @@ static void* vw_plugin_sender_main(void* arg) {
   int64_t last_position_us = -1;     // -1 = no baseline yet (first poll only samples)
   int64_t paused_position_us = -1;   // media position captured at the pause transition
   int64_t current_position_us = -1;  // latest sampled media position for SPU timing
-  while (atomic_load(&sys->sender_running) && !atomic_load(&sys->worker_dead)) {
+  while (atomic_load(&sys->sender_running)) {
+    // Transport death (Step 17d resilience): respawn the worker (bounded) and restart the session
+    // with the current MRL instead of disabling captions for the rest of playback.
+    if (atomic_load(&sys->worker_dead)) {
+      if (!vw_plugin_respawn_worker(sys, paused)) {
+        break;
+      }
+      continue;
+    }
     // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
     // state only changes at human timescale (8s windows make 100ms detection lag irrelevant).
     bool now_paused = paused;
@@ -348,7 +427,7 @@ static void* vw_plugin_sender_main(void* arg) {
                                             now_paused ? VW_POSITION_FLAG_PAUSED : 0)) {
           atomic_store(&sys->worker_dead, true);
           if (input) vlc_object_release((vlc_object_t*)input);
-          break;
+          continue;  // top of loop: respawn the worker
         }
       }
 
@@ -409,15 +488,27 @@ static void* vw_plugin_sender_main(void* arg) {
       paused = now_paused;
     }
 
-    // Step 17c/17d: Seek/discontinuity handling via POSITION seek re-anchoring.
+    // Step 17c/17d: Seek/discontinuity handling via POSITION seek re-anchoring. The target must be
+    // a MEDIA position: poll-initiated detectors (paused-seek, position-jump) store media positions
+    // in resume_pts_us, while the realtime callback path stores none (block PTS is the aout's
+    // system-date domain). Prefer the polled media position — the only media-domain source the
+    // sender has; fall back to the stored target for poll-initiated discontinuities.
     if (atomic_load(&sys->discontinuity_pending)) {
       int64_t resume_pts_us = atomic_load(&sys->resume_pts_us);
+      int64_t seek_target_us = (current_position_us >= 0) ? current_position_us : resume_pts_us;
       atomic_store(&sys->discontinuity_pending, false);
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity at %lldus; blanking presenter",
-                   (long long)resume_pts_us);
+                   (long long)seek_target_us);
       vw_caption_presenter_blank(&sys->presenter);  // erase captions on seek
-      vw_worker_client_send_position(sys->client, resume_pts_us, resume_pts_us, 1.0f,
-                                     (paused ? VW_POSITION_FLAG_PAUSED : 0) | VW_POSITION_FLAG_SEEK);
+      if (seek_target_us > 0) {
+        if (!vw_worker_client_send_position(sys->client, seek_target_us, seek_target_us, 1.0f,
+                                            (paused ? VW_POSITION_FLAG_PAUSED : 0) | VW_POSITION_FLAG_SEEK)) {
+          atomic_store(&sys->worker_dead, true);
+        }
+      } else {
+        vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_SEEK_TARGET_MISSING",
+                     "no media position available; presenter blanked without worker re-anchor");
+      }
       vw_audio_chunk_t stale;
       while (vw_spsc_queue_pop(sys->queue, &stale)) {
       }  // discard pre-seek live audio chunks
@@ -442,7 +533,7 @@ static void* vw_plugin_sender_main(void* arg) {
       }
       sent_any = true;
     }
-    if (atomic_load(&sys->worker_dead)) break;
+    if (atomic_load(&sys->worker_dead)) continue;  // top of loop: respawn the worker
 
     vw_worker_recv_t recv;
     int recv_status = vw_worker_client_receive_frame(sys->client, sent_any ? 5000 : 20000, &recv);
@@ -450,7 +541,7 @@ static void* vw_plugin_sender_main(void* arg) {
       atomic_store(&sys->worker_dead, true);
       vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_DEAD",
                    "receive_frame fatal (transport dead); captions disabled, passthrough only");
-      break;
+      continue;  // top of loop: respawn the worker
     }
     if (recv_status == VW_IPC_RECV_OK) {
       sys->frames_received++;
@@ -469,11 +560,19 @@ static void* vw_plugin_sender_main(void* arg) {
                        (unsigned long long)recv.segment.segment_id,
                        recv.segment.text_utf8 ? strlen(recv.segment.text_utf8) : 0,
                        (long long)recv.segment.start_pts_us, (long long)recv.segment.end_pts_us, recv.segment.is_final);
-          // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
-          // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
-          // input_time_us is reserved for media-domain scheduling (17c); the presenter renders
-          // in the OSD clock domain (mdate), which this VLC build displays reliably.
-          vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us);
+          // While paused the look-ahead backlog (decoded pre-pause) keeps arriving; the pause
+          // transition already blanked the channel and the playhead is frozen, so rendering these
+          // would show captions for audio not being played. Drain without rendering (Step 17d).
+          if (!paused) {
+            // Synchronous render: recv.text_buf owns the segment text for this iteration, so the
+            // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
+            // input_time_us is reserved for media-domain scheduling (17c); the presenter renders
+            // in the OSD clock domain (mdate), which this VLC build displays reliably.
+            vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us);
+          } else {
+            vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_PAUSED_DROP", "segment id=%llu dropped while paused",
+                         (unsigned long long)recv.segment.segment_id);
+          }
           break;
         case VW_MSG_STATUS:
           sys->status_received++;
@@ -573,6 +672,9 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
   // Step 17d seek/discontinuity detection — realtime-safe: atomics only.
   // 5s forward threshold prevents network transport jitter / buffer slips (< 5s) from wiping captions.
   // Backward jumps > 500ms trigger seek re-sync immediately.
+  // NOTE: block->i_pts is in the aout's SYSTEM-DATE domain (µs since boot on Windows, compared
+  // against mdate() in aout_DecPlay), NOT the media position — it is never stored as the seek
+  // target; the sender derives the target from the polled media position (INPUT_GET_TIME).
   int64_t pts = p_block->i_pts;
   if (pts >= VLC_TS_0 && sys->capture.last_pts_us > 0) {
     int64_t diff = pts - sys->capture.last_pts_us;
@@ -582,11 +684,10 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
 
     if (is_backward_seek || (is_forward_seek && is_flagged) || (diff >= VW_INPUT_JUMP_DISCONTINUITY_US)) {
       atomic_store(&sys->discontinuity_pending, true);
-      atomic_store(&sys->resume_pts_us, pts);
+      // resume_pts_us intentionally NOT set: block PTS is system-date, not media.
     }
   } else if ((p_block->i_flags & BLOCK_FLAG_DISCONTINUITY) && pts >= VLC_TS_0) {
     atomic_store(&sys->discontinuity_pending, true);
-    atomic_store(&sys->resume_pts_us, pts);
   }
 
   if (pts >= VLC_TS_0) {
