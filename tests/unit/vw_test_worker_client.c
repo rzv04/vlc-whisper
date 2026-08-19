@@ -393,7 +393,7 @@ int main(void) {
   EXPECT(client != NULL);
 
   // Test 2: Start session and wait for STARTED confirmation
-  EXPECT(vw_worker_client_start_session(client, 1000, "ggml-tiny.en.bin"));
+  EXPECT(vw_worker_client_start_session(client, 1000, "ggml-tiny.en.bin", NULL));
 
   // Test 3: Transport receive timeout — the socket is idle between frames (the
   // server waits for AUDIO), so a short probe must time out, exercising the
@@ -443,7 +443,7 @@ int main(void) {
 
   vw_worker_client_t* client2 = vw_worker_client_launch_and_connect(NULL, pipe_name2, auth_token, NULL);
   EXPECT(client2 != NULL);
-  EXPECT(vw_worker_client_start_session(client2, 0, "ggml-tiny.en.bin"));
+  EXPECT(vw_worker_client_start_session(client2, 0, "ggml-tiny.en.bin", NULL));
 
   vw_worker_recv_t recv;
   memset(&recv, 0, sizeof(recv));
@@ -496,7 +496,7 @@ int main(void) {
 
   vw_worker_client_t* client3 = vw_worker_client_launch_and_connect(NULL, pipe_name3, auth_token, NULL);
   EXPECT(client3 != NULL);
-  EXPECT(vw_worker_client_start_session(client3, 0, "ggml-tiny.en.bin"));
+  EXPECT(vw_worker_client_start_session(client3, 0, "ggml-tiny.en.bin", NULL));
 
   // The server waits for AUDIO (idle): a 50ms receive must time out (VW_IPC_RECV_TIMEOUT) with the
   // connection intact.
@@ -535,7 +535,7 @@ int main(void) {
 
   vw_worker_client_t* client4 = vw_worker_client_launch_and_connect(NULL, pipe_name4, auth_token, NULL);
   EXPECT(client4 != NULL);
-  EXPECT(vw_worker_client_start_session(client4, 0, "ggml-tiny.en.bin"));
+  EXPECT(vw_worker_client_start_session(client4, 0, "ggml-tiny.en.bin", NULL));
 
   // First receive hits the corrupt header: fatal, not timeout.
   memset(&recv, 0, sizeof(recv));

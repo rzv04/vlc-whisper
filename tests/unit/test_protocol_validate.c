@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "vw_protocol.h"
 #include "vw_test.h"
 
@@ -138,6 +140,22 @@ int main(void) {
   seg.text_utf8 = (char*)"\xF0\x9F\x98\x80";  // U+1F600
   seg.text_bytes = 4;
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+
+  // POSITION validation
+  vw_msg_position_t pos = {.playback_rate = 1.0f};
+  EXPECT(vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.playback_rate = 0.0f;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.playback_rate = -1.0f;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.playback_rate = 17.0f;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
+
+  pos.playback_rate = NAN;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_POSITION, &pos));
 
   // Validate SHUTDOWN / STARTED
   EXPECT(vw_protocol_validate_payload(VW_MSG_SHUTDOWN, NULL));

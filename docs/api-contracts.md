@@ -4,7 +4,7 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The initial protocol is `major=1, minor=0`; a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=1` (Protocol v1.1); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
@@ -21,7 +21,9 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 | **`duration_us`**   | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds. |
 | **IPC**             | **Inter-Process Communication** — Local authenticated binary message-mode transport (named pipe on Windows, Unix domain socket on Linux).                  |
 
-> **Wire `pts_us` domain (v1.0):** AUDIO chunk timestamps are stamped by the plugin from VLC's audio-filter block PTS, which VLC 3.0 re-bases into the **system-date domain** (µs since boot on Windows; `aout_DecPlay` compares block PTS against `mdate()`). The worker treats them as an opaque monotonic timeline — windows, VAD, and segment building only use deltas, and segment `start_pts_us`/`end_pts_us` round-trip unchanged. The plugin presents captions in the OSD clock domain (`i_start = mdate()`, the domain the vout renders filter-pushed subpictures against in the 3.0.23 Windows build) — never wall-clock *caption timing* in the media sense, and never media timestamps that the subtitle clock would misjudge. See `docs/vlc-api-essentials.md` §3.4/§7.
+> **Wire `pts_us` domain (v1.1):**
+> - In **Live Streaming Mode** (or live IPTV), AUDIO chunk timestamps are stamped by the plugin from VLC's audio-filter block PTS in the system-date domain.
+> - In **Look-Ahead Source Mode** (v1.1), `start_pts_us` and `end_pts_us` are media-relative PTS timestamps decoded directly by the native demuxer. The plugin translates them to the SPU presentation time using the sampled `input_time_us` from VLC (`start_tick = mdate() + (start_pts_us - input_time_us)`).
 
 ## Envelope
 
@@ -49,11 +51,15 @@ Plugin to worker. Payload: `u16 min_major`, `u16 max_major`, `u8 token[32]`, `u1
 
 ### HELLO_ACK
 
-Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO`; optional flags include `PARTIAL_SEGMENTS` and `SEEK_RESET`.
+Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO` (`1U << 0`); optional flags include `PARTIAL_SEGMENTS` (`1U << 1`), `SEEK_RESET` (`1U << 2`), and `SOURCE_MODE` (`VW_CAPABILITY_SOURCE_MODE = 1U << 3`).
 
 ### START
 
-Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), and source-kind enum (`LOCAL_FILE=1`). `STARTED` either confirms effective settings or responds with `ERROR`. The worker rejects a `START` whose `sample_rate` is not 16000 with an `E_AUDIO_FORMAT` `ERROR`; a duplicate `START` without a preceding `STOP` is ignored.
+Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. `STARTED` either confirms effective settings or responds with `ERROR`.
+
+### POSITION (v1.1)
+
+Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown.
 
 ### AUDIO
 

@@ -20,14 +20,15 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 0U
-#define VW_CLIENT_VERSION "1.0.0"
+#define VW_PROTOCOL_VERSION_MINOR 1U
+#define VW_CLIENT_VERSION "1.1.0"
 #define VW_CLIENT_VERSION_LENGTH 5U
-#define VW_WORKER_VERSION "1.0.0"
+#define VW_WORKER_VERSION "1.1.0"
 #define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
 #define VW_MAX_MODEL_ID_BYTES 64U        // Model identifier string limit
+#define VW_MAX_SOURCE_URL_BYTES 1024U    // Max source MRL / file path length
 #define VW_AUTH_TOKEN_BYTES 32U          // Local IPC 32-byte secret authentication token
 #define VW_SESSION_ID_BYTES 16U          // Local IPC session identifier size in bytes
 #define VW_MAX_TEXT_BYTES 1024U          // Max caption text length in bytes (UTF-8)
@@ -44,9 +45,10 @@
 #define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)
 #define VW_CAPABILITY_PARTIAL_SEGMENTS (1U << 1)
 #define VW_CAPABILITY_SEEK_RESET (1U << 2)
+#define VW_CAPABILITY_SOURCE_MODE (1U << 3)
 
 // Source kind enum
-typedef enum vw_source_kind { VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
+typedef enum vw_source_kind { VW_SOURCE_LIVE_AUDIO = 0, VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
 
 // Error codes for VW_MSG_ERROR frames
 typedef enum vw_error_code {
@@ -58,7 +60,8 @@ typedef enum vw_error_code {
   E_BACKPRESSURE = 6,
   E_DISCONTINUITY = 7,
   E_WORKER_CRASH = 8,
-  E_INTERNAL = 9
+  E_INTERNAL = 9,
+  E_SOURCE_OPEN = 10
 } vw_error_code_t;
 
 // Binary frame header (20 bytes packed on wire)
@@ -76,7 +79,8 @@ typedef enum vw_message_type {
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
   VW_MSG_SHUTDOWN = 11,  // zero-payload: instruct worker to exit
-  VW_MSG_STARTED = 12    // zero-payload: worker confirms session started
+  VW_MSG_STARTED = 12,   // zero-payload: worker confirms session started
+  VW_MSG_POSITION = 13   // plugin sends media playback position and pacing updates
 } vw_message_type_t;
 
 typedef struct vw_frame_header {
@@ -121,7 +125,21 @@ typedef struct vw_msg_start {
   char model_id[VW_MAX_MODEL_ID_BYTES];
   char language[16];
   uint16_t source_kind;
+  uint16_t source_url_len;
+  char source_url[VW_MAX_SOURCE_URL_BYTES];
 } vw_msg_start_t;
+
+// Position update flags (bitfield)
+#define VW_POSITION_FLAG_SEEK (1U << 0)
+#define VW_POSITION_FLAG_PAUSED (1U << 1)
+
+typedef struct vw_msg_position {
+  vw_session_id_t session_id;
+  int64_t current_pts_us;
+  int64_t input_time_us;
+  float playback_rate;
+  uint32_t flags;
+} vw_msg_position_t;
 
 typedef struct vw_msg_audio {  // plugin to worker
   vw_session_id_t session_id;

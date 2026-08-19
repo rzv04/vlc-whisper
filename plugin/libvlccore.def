@@ -21,3 +21,5 @@ var_Inherit
 var_Get
 config_GetPsz
 input_Control
+input_GetItem
+input_item_GetURI

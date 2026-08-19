@@ -201,26 +201,37 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   bool rendered = false;
   int64_t start_tick = 0;
   int64_t stop_tick = 0;
+  float rate = 1.0f;
+  if (presenter->p_filter_ctx) {
+    vlc_value_t rval;
+    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+      rate = rval.f_float;
+    }
+  }
+  int64_t dur_wallclock_us = (int64_t)((double)(duration_us > 0 ? duration_us : 2000000LL) / (double)rate);
+
   if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
-    // OSD clock domain (b_subtitle=false): the vout compares subpictures against render_osd_date
-    // = mdate() ALWAYS, so schedule at the current system date. This mirrors vout_OSDText's
-    // proven construction (milestones 11-16) while keeping the native SPU channel, its flush
-    // support, and no dependency on the user's "osd" setting. No S<->M conversion is possible
-    // here: the subtitle clock (picture PTS) is not usable for filter-pushed subpictures in
-    // this build (they are dropped before region rendering — see render_spu comment).
     int64_t now_tick = (int64_t)mdate();
-    start_tick = now_tick;
-    stop_tick = now_tick + (duration_us > 0 ? duration_us : 2000000LL);
+    int64_t lead_us = 0;
+    if (input_time_us > 0 && segment->start_pts_us > input_time_us) {
+      int64_t diff = segment->start_pts_us - input_time_us;
+      lead_us = (int64_t)((double)diff / (double)rate);
+      if (lead_us > 60000000LL) {
+        lead_us = 60000000LL;  // Cap at 60s max wall-clock lead horizon
+      }
+    }
+    start_tick = now_tick + lead_us;
+    stop_tick = start_tick + dur_wallclock_us;
     rendered = vw_caption_presenter_render_spu(presenter, vout, segment->text_utf8, start_tick, stop_tick);
   }
 
   // Graceful fallback to OSD if SPU rendering failed or was unregistered
   if (!rendered) {
-    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)duration_us, segment->text_utf8);
+    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)dur_wallclock_us, segment->text_utf8);
     rendered = true;
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_OSD_RENDER",
                  "Rendered caption via OSD fallback (text_len=%zu duration=%lldus)",
-                 segment->text_utf8 ? strlen(segment->text_utf8) : 0, (long long)duration_us);
+                 segment->text_utf8 ? strlen(segment->text_utf8) : 0, (long long)dur_wallclock_us);
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_RENDER",
                  "Rendered caption on SPU ch=%d vout=%p (text_len=%zu start=%lldus stop=%lldus)",

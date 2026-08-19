@@ -233,14 +233,34 @@ typedef struct {
 static void* vw_plugin_sender_main(void* arg) {
   vw_plugin_sys_t* sys = (vw_plugin_sys_t*)arg;
 
+  char* source_url = NULL;
+  if (sys->client && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
+    input_thread_t* init_input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
+    if (init_input) {
+      input_item_t* item = input_GetItem(init_input);
+      if (item) {
+        char* uri = input_item_GetURI(item);
+        if (uri && (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' ||
+                    (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
+          source_url = uri;
+        } else if (uri) {
+          free(uri);
+        }
+      }
+      vlc_object_release((vlc_object_t*)init_input);
+    }
+  }
+
   // First iteration: start the caption session. A worker rejection (e.g. E_MODEL_MISSING) means
   // captions stay off for this module lifetime; playback is untouched.
-  if (sys->client && !vw_worker_client_start_session(sys->client, 0, "tiny.en")) {
+  if (sys->client && !vw_worker_client_start_session(sys->client, 0, "tiny.en", source_url)) {
+    if (source_url) free(source_url);
     atomic_store(&sys->worker_dead, true);
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL",
                  "worker rejected session; captions disabled, passthrough only");
     return NULL;
   }
+  if (source_url) free(source_url);
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED", "caption session started (STARTED confirmed)");
 
   // Play/pause lifecycle: poll the input thread once per iteration (cadence is 5-20ms). On the
@@ -264,8 +284,23 @@ static void* vw_plugin_sender_main(void* arg) {
       // while we poll state); release it at the end of this throttled block.
       input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
       now_paused = input != NULL && input_GetState(input) == PAUSE_S;
+      float playback_rate = 1.0f;
+      if (input) {
+        vlc_value_t rval;
+        if (var_Get((vlc_object_t*)input, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+          playback_rate = rval.f_float;
+        }
+      }
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
-      if (position_us >= 0) current_position_us = position_us;
+      if (position_us >= 0) {
+        current_position_us = position_us;
+        if (!vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
+                                            now_paused ? VW_POSITION_FLAG_PAUSED : 0)) {
+          atomic_store(&sys->worker_dead, true);
+          if (input) vlc_object_release((vlc_object_t*)input);
+          break;
+        }
+      }
 
       // Seek detection while PAUSED: the audio callback never runs (no blocks flow) so
       // BLOCK_FLAG_DISCONTINUITY never arrives, and the input time variable is clock-driven so
@@ -295,10 +330,11 @@ static void* vw_plugin_sender_main(void* arg) {
       }
 
       // Continuous seek detection via input position (covers unflagged playing-case seeks and
-      // paused seeks in builds where the time variable does advance). >1s forward/backward jump.
-      if (position_us >= 0 && last_position_us >= 0 &&
-          llabs(position_us - last_position_us) > VW_SEEK_JUMP_THRESHOLD_US) {
-        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; restarting epoch",
+      // paused seeks in builds where the time variable does advance). Scale threshold with playback rate.
+      int64_t seek_threshold_us =
+          (int64_t)(VW_SEEK_JUMP_THRESHOLD_US * (playback_rate > 1.0f ? (playback_rate * 1.5f) : 1.0f));
+      if (position_us >= 0 && last_position_us >= 0 && llabs(position_us - last_position_us) > seek_threshold_us) {
+        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; seek signaled",
                      (long long)(position_us - last_position_us));
         atomic_store(&sys->discontinuity_pending, true);
         atomic_store(&sys->resume_pts_us, position_us);
@@ -308,36 +344,29 @@ static void* vw_plugin_sender_main(void* arg) {
     }
     if (now_paused != paused) {
       if (now_paused) {
+        vw_caption_presenter_blank(&sys->presenter);
         vw_worker_client_pause_session(sys->client);
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PAUSE", "playback paused; PCM forwarding suspended");
       } else {
+        vw_caption_presenter_blank(&sys->presenter);
         vw_worker_client_resume_session(sys->client);
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_RESUME", "playback resumed; PCM forwarding active");
       }
       paused = now_paused;
     }
 
-    // Step 17: seek/discontinuity restart. The callback set the flag (atomics only); here on the
-    // sender thread we tear down the epoch and start a fresh one: clear OSD, STOP(SEEK_DISCONTINUITY),
-    // discard stale queued PCM, START with the new PTS anchor. The worker's session_id gating drops
-    // any in-flight pre-seek AUDIO frame that slipped past the drain. Playback is never touched.
+    // Step 17c: Seek/discontinuity handling via POSITION seek re-anchoring.
     if (atomic_load(&sys->discontinuity_pending)) {
-      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity; restarting session epoch");
-      vw_caption_presenter_blank(&sys->presenter);  // erase OSD, keep context (clear() is teardown-only)
-      vw_worker_client_stop_session(sys->client, VW_CTRL_REASON_SEEK_DISCONTINUITY);
-      vw_audio_chunk_t stale;
-      while (vw_spsc_queue_pop(sys->queue, &stale)) {
-      }  // discard pre-seek audio; worker cleared its window on STOP
       int64_t resume_pts_us = atomic_load(&sys->resume_pts_us);
       atomic_store(&sys->discontinuity_pending, false);
-      if (sys->client && !vw_worker_client_start_session(sys->client, resume_pts_us, "tiny.en")) {
-        atomic_store(&sys->worker_dead, true);
-        vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_RESTART_FAIL",
-                     "worker rejected restart; captions disabled, passthrough only");
-        break;
-      }
-      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_RESTARTED", "session epoch restarted at %lldus",
+      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity at %lldus; blanking presenter",
                    (long long)resume_pts_us);
+      vw_caption_presenter_blank(&sys->presenter);  // erase captions on seek
+      vw_worker_client_send_position(sys->client, resume_pts_us, resume_pts_us, 1.0f,
+                                     (paused ? VW_POSITION_FLAG_PAUSED : 0) | VW_POSITION_FLAG_SEEK);
+      vw_audio_chunk_t stale;
+      while (vw_spsc_queue_pop(sys->queue, &stale)) {
+      }  // discard pre-seek live audio chunks
     }
 
     // Drain the SPSC queue (send burst), then one receive: 5ms after sends (audio latency

@@ -69,12 +69,30 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_FIELD(p->channels);
       ENC_FIELD(p->sample_format);
       uint16_t model_id_len = (uint16_t)strnlen(p->model_id, VW_MAX_MODEL_ID_BYTES);
+      if (model_id_len >= VW_MAX_MODEL_ID_BYTES) model_id_len = VW_MAX_MODEL_ID_BYTES - 1;
       ENC_FIELD(model_id_len);
       ENC_BYTES(p->model_id, model_id_len);
       uint16_t lang_len = (uint16_t)strnlen(p->language, 16);
+      if (lang_len >= 16) lang_len = 15;
       ENC_FIELD(lang_len);
       ENC_BYTES(p->language, lang_len);
       ENC_FIELD(p->source_kind);
+      uint16_t url_len =
+          p->source_url_len > 0 ? p->source_url_len : (uint16_t)strnlen(p->source_url, VW_MAX_SOURCE_URL_BYTES);
+      if (url_len >= VW_MAX_SOURCE_URL_BYTES) url_len = VW_MAX_SOURCE_URL_BYTES - 1;
+      ENC_FIELD(url_len);
+      if (url_len > 0) {
+        ENC_BYTES(p->source_url, url_len);
+      }
+      break;
+    }
+    case VW_MSG_POSITION: {
+      const vw_msg_position_t* p = (const vw_msg_position_t*)payload;
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      ENC_FIELD(p->current_pts_us);
+      ENC_FIELD(p->input_time_us);
+      ENC_FIELD(p->playback_rate);
+      ENC_FIELD(p->flags);
       break;
     }
     case VW_MSG_AUDIO_PCM: {
@@ -195,6 +213,27 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       DEC_BYTES(p->language, lang_len);
       p->language[lang_len] = '\0';
       DEC_FIELD(p->source_kind);
+      p->source_url_len = 0;
+      p->source_url[0] = '\0';
+      if (read_pos < buffer_size) {
+        uint16_t url_len = 0;
+        DEC_FIELD(url_len);
+        if (url_len >= VW_MAX_SOURCE_URL_BYTES) return false;
+        if (url_len > 0) {
+          DEC_BYTES(p->source_url, url_len);
+        }
+        p->source_url[url_len] = '\0';
+        p->source_url_len = url_len;
+      }
+      break;
+    }
+    case VW_MSG_POSITION: {
+      vw_msg_position_t* p = (vw_msg_position_t*)out_payload;
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      DEC_FIELD(p->current_pts_us);
+      DEC_FIELD(p->input_time_us);
+      DEC_FIELD(p->playback_rate);
+      DEC_FIELD(p->flags);
       break;
     }
     case VW_MSG_AUDIO_PCM: {

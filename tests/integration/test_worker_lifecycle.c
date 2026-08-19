@@ -155,7 +155,7 @@ int main(void) {
 
     vw_worker_client_t* c = vw_worker_client_launch_and_connect(NULL, no_model.pipe_name, no_model.auth_token, NULL);
     EXPECT(c != NULL);
-    EXPECT(!vw_worker_client_start_session(c, 0, "tiny.en"));  // E_MODEL_MISSING ERROR reply
+    EXPECT(!vw_worker_client_start_session(c, 0, "tiny.en", NULL));  // E_MODEL_MISSING ERROR reply
 
     // Clean shutdown of the still-running worker.
     vw_worker_client_shutdown(c);
@@ -200,7 +200,7 @@ int main(void) {
     vw_worker_client_t* c =
         vw_worker_client_launch_and_connect(NULL, with_model.pipe_name, with_model.auth_token, NULL);
     EXPECT(c != NULL);
-    EXPECT(vw_worker_client_start_session(c, 0, "tiny.en"));
+    EXPECT(vw_worker_client_start_session(c, 0, "tiny.en", NULL));
 
     // 4 synthetic silence chunks: 512ms each (16384 bytes at 16kHz S16LE — the chunk's inline
     // pcm_data cap), staggered PTS. A full 1s chunk (32000 bytes) cannot fit the inline array.
@@ -222,7 +222,7 @@ int main(void) {
     // The worker must accept the new epoch (new session_id), drop stale pre-seek AUDIO, and
     // continue transcribing; exit 0 proves the full STOP->START cycle.
     vw_worker_client_stop_session(c, VW_CTRL_REASON_SEEK_DISCONTINUITY);
-    EXPECT(vw_worker_client_start_session(c, 4000000, "tiny.en"));  // new epoch, new session_id
+    EXPECT(vw_worker_client_start_session(c, 4000000, "tiny.en", NULL));  // new epoch, new session_id
     for (int i = 0; i < 2; i++) {
       vw_audio_chunk_t chunk2 = {
           .start_pts_us = 4000000 + (int64_t)i * 512000,
