@@ -207,6 +207,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   vw_source_decoder_t* source_decoder = NULL;
   bool source_mode = false;
   int64_t current_playback_pts_us = 0;
+  int64_t last_playback_pts_us = -1;
   int64_t decoded_pts_us = 0;
   const int64_t lead_target_us = 30000000LL;  // 30s look-ahead horizon
 
@@ -373,6 +374,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             if (source_decoder) {
               source_mode = true;
               current_playback_pts_us = payload_decoded.start.timeline_origin_pts_us;
+              last_playback_pts_us = current_playback_pts_us;
               decoded_pts_us = current_playback_pts_us;
               vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SOURCE",
                            "source look-ahead mode ACTIVE for '%s' (dur=%lldus fmt=%s)",
@@ -411,10 +413,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
           }
 
           if (source_mode && source_decoder) {
-            int64_t diff = payload_decoded.position.current_pts_us - decoded_pts_us;
-            if ((payload_decoded.position.flags & VW_POSITION_FLAG_SEEK) || diff < -2000000LL || diff > 10000000LL) {
-              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEEK", "re-seeking source decoder to %lldus",
-                           (long long)payload_decoded.position.current_pts_us);
+            bool seek_flag = (payload_decoded.position.flags & VW_POSITION_FLAG_SEEK) != 0;
+            bool backward_jump = (last_playback_pts_us >= 0 &&
+                                  (payload_decoded.position.current_pts_us < last_playback_pts_us - 2000000LL));
+            bool forward_past_decoded = (payload_decoded.position.current_pts_us > decoded_pts_us + 1000000LL);
+
+            if (seek_flag || backward_jump || forward_past_decoded) {
+              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEEK",
+                           "re-seeking source decoder to %lldus (flag=%d back=%d fwd=%d)",
+                           (long long)payload_decoded.position.current_pts_us, (int)seek_flag, (int)backward_jump,
+                           (int)forward_past_decoded);
               vw_source_decoder_seek(source_decoder, payload_decoded.position.current_pts_us);
               decoded_pts_us = payload_decoded.position.current_pts_us;
               if (audio_buf) vw_audio_buffer_clear(audio_buf);
@@ -425,6 +433,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 }
               }
             }
+            last_playback_pts_us = payload_decoded.position.current_pts_us;
           }
           break;
         }
@@ -487,6 +496,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
         case VW_MSG_STOP_SESSION: {
           session_active = false;
+          last_playback_pts_us = -1;
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session stopped (reason=%s)",
                        vw_worker_stop_reason_name(payload_decoded.control.reason));
           if (source_decoder) {
