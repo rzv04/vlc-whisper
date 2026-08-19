@@ -204,14 +204,22 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
     int64_t now_tick = (int64_t)mdate();
     int64_t lead_us = 0;
+    float rate = 1.0f;
+    if (presenter->p_filter_ctx) {
+      vlc_value_t rval;
+      if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+        rate = rval.f_float;
+      }
+    }
     if (input_time_us > 0 && segment->start_pts_us > input_time_us) {
       int64_t diff = segment->start_pts_us - input_time_us;
       if (diff <= 60000000LL) {  // Valid look-ahead horizon (up to 60s)
-        lead_us = diff;
+        lead_us = (int64_t)((double)diff / (double)rate);
       }
     }
     start_tick = now_tick + lead_us;
-    stop_tick = start_tick + (duration_us > 0 ? duration_us : 2000000LL);
+    int64_t dur_wallclock_us = (int64_t)((double)(duration_us > 0 ? duration_us : 2000000LL) / (double)rate);
+    stop_tick = start_tick + dur_wallclock_us;
     rendered = vw_caption_presenter_render_spu(presenter, vout, segment->text_utf8, start_tick, stop_tick);
   }
 

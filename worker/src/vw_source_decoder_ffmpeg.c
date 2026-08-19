@@ -31,7 +31,7 @@ struct vw_source_decoder {
 };
 
 // Strips file:// URI prefix if present
-static const char* normalize_posix_path(const char* url, char* buf, size_t buf_len) {
+static const char* vw_source_decoder_normalize_posix_path(const char* url, char* buf, size_t buf_len) {
   if (!url) return "";
   const char* src = url;
   if (strncmp(src, "file://", 7) == 0) {
@@ -60,7 +60,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   if (!url || url[0] == '\0') return NULL;
 
   char clean_path[4096];
-  normalize_posix_path(url, clean_path, sizeof(clean_path));
+  vw_source_decoder_normalize_posix_path(url, clean_path, sizeof(clean_path));
 
   AVFormatContext* fmt_ctx = NULL;
   if (avformat_open_input(&fmt_ctx, clean_path, NULL, NULL) < 0) {

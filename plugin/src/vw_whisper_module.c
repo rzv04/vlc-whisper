@@ -284,10 +284,17 @@ static void* vw_plugin_sender_main(void* arg) {
       // while we poll state); release it at the end of this throttled block.
       input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
       now_paused = input != NULL && input_GetState(input) == PAUSE_S;
+      float playback_rate = 1.0f;
+      if (input) {
+        vlc_value_t rval;
+        if (var_Get((vlc_object_t*)input, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+          playback_rate = rval.f_float;
+        }
+      }
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
       if (position_us >= 0) {
         current_position_us = position_us;
-        vw_worker_client_send_position(sys->client, current_position_us, current_position_us, 1.0f,
+        vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
                                        now_paused ? VW_POSITION_FLAG_PAUSED : 0);
       }
 

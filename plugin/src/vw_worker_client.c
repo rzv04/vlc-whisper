@@ -240,7 +240,7 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     start.source_url_len = (uint16_t)strlen(start.source_url);
   }
 
-  uint8_t payload_buf[1024];
+  uint8_t payload_buf[2048];
   size_t payload_len = 0;
   if (!vw_protocol_encode_payload(VW_MSG_START_SESSION, &start, payload_buf, sizeof(payload_buf), &payload_len))
     return false;

@@ -22,6 +22,7 @@
 #undef vlc_object_hold
 #undef vlc_list_children
 #undef vlc_list_release
+#undef var_Get
 
 // Globals for tracking mock calls
 static int g_flush_calls = 0;
@@ -120,6 +121,15 @@ int input_Control(input_thread_t* p_input, int i_query, ...) {
   (void)p_input;
   (void)i_query;
   return VLC_EGENERIC;
+}
+
+int var_Get(vlc_object_t* p_obj, const char* psz_name, vlc_value_t* p_val) {
+  (void)p_obj;
+  (void)psz_name;
+  if (p_val) {
+    p_val->f_float = 1.0f;
+  }
+  return VLC_SUCCESS;
 }
 
 void vout_OSDText(vout_thread_t* vout, int channel, int position, vlc_tick_t duration, const char* text) {

@@ -24,7 +24,7 @@ struct vw_source_decoder {
 };
 
 // URL decode helper to convert file URI (e.g. file:///C:/video%20file.mp4) to native Windows path.
-static void normalize_win32_path(const char* url, char* out_path, size_t max_out) {
+static void vw_source_decoder_normalize_win32_path(const char* url, char* out_path, size_t max_out) {
   if (!url || !out_path || max_out == 0) return;
   const char* src = url;
 
@@ -62,7 +62,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   if (!url || url[0] == '\0') return NULL;
 
   char clean_path[4096];
-  normalize_win32_path(url, clean_path, sizeof(clean_path));
+  vw_source_decoder_normalize_win32_path(url, clean_path, sizeof(clean_path));
 
   int wlen = MultiByteToWideChar(CP_UTF8, 0, clean_path, -1, NULL, 0);
   if (wlen <= 0) return NULL;
