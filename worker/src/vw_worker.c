@@ -462,7 +462,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             bool seek_flag = (payload_decoded.position.flags & VW_POSITION_FLAG_SEEK) != 0;
             bool backward_jump =
                 (last_playback_pts_us >= 0 &&
-                 payload_decoded.position.current_pts_us < vw_saturating_sub_i64(last_playback_pts_us, 2000000LL));
+                 payload_decoded.position.current_pts_us < vw_saturating_sub_i64(last_playback_pts_us, 500000LL));
             bool forward_past_decoded =
                 (payload_decoded.position.current_pts_us > vw_saturating_add_i64(decoded_pts_us, 1000000LL));
 

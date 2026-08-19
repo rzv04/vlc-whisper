@@ -221,7 +221,7 @@ typedef struct {
   // Step 17: set by the realtime filter callback (flag or PTS jump), consumed by the sender
   // thread to restart the session epoch. Callback only stores atomics — never IPC/heap/locks.
   _Atomic bool discontinuity_pending;
-  _Atomic int64_t resume_pts_us;  // PTS anchor of the first post-seek block
+  _Atomic int64_t resume_pts_us;  // Media position set by poll detectors
   _Atomic bool source_mode_active;
   char active_source_url[VW_MAX_SOURCE_URL_BYTES];
   uint64_t chunks_sent;
