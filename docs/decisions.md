@@ -136,3 +136,14 @@ Consequences:
 1. **No Plugin Caption Queue**: The plugin does not maintain an internal queue or timer loop for future captions.
 2. **Native Scheduling**: Transcribed segments received from IPC are converted directly to native VLC subpictures (`vout_RegisterSubpictureChannel` + `vout_PutSubpicture`) carrying exact `i_start` and `i_stop` media PTS timestamps. VLC handles precise frame-accurate rendering automatically.
 3. **Flushing on Discontinuity**: On seeking or rate changes, the plugin issues `vout_FlushSubpictureChannel` / `spu_ClearChannel` to purge all pre-rendered look-ahead captions from VLC's queue.
+
+## ADR-017: Phrase-by-Phrase Subtitle Timing via Native Whisper Segment Offsets
+
+**Status:** Accepted.
+
+In earlier milestones, all sub-segments emitted by Whisper across an 8.0-second acoustic analysis window were concatenated into a single combined string stamped with the full 8-second window duration (`[window_pts, window_pts + 8.0s]`). In live media playback, this coarse aggregation caused upcoming dialogue (such as the second speaker's reply in a conversational exchange) to appear 3–5 seconds before it was spoken, spoiling dramatic and conversational pacing while overcrowding the screen.
+
+Decision:
+1. **Per-Phrase Timestamp Extraction**: The worker extracts individual sub-segments from `whisper_full` using `whisper_full_n_segments(ctx)` and their exact centisecond offsets via `whisper_full_get_segment_t0(ctx, i)` and `whisper_full_get_segment_t1(ctx, i)`.
+2. **Discrete Media PTS Bounds**: Each phrase is assigned discrete media timestamps ($\text{start\_pts} = \text{window\_pts} + t_0 \times 10\,000$, $\text{end\_pts} = \text{window\_pts} + t_1 \times 10\,000$) and pushed independently to `vw_segment_builder`.
+3. **SPU Frame-Accurate Scheduling**: The plugin submits each phrase as a discrete subpicture to VLC's SPU engine. VLC displays and clears each phrase in exact synchrony with the speaker's vocal cadence, blanking during conversational pauses and eliminating dialogue spoilers (see [`docs/plans/phrase_timing_segmentation_plan.md`](file:///home/razvan/vlc-whisper/.worktrees/gemini/docs/plans/phrase_timing_segmentation_plan.md)).
