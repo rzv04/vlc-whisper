@@ -35,6 +35,46 @@ int main(void) {
     }
   }
 
+  bool created_temp = false;
+  char temp_path[256] = "temp_synthetic_test.wav";
+  if (!found_fixture) {
+    FILE* f = fopen(temp_path, "wb");
+    if (f) {
+      uint32_t sample_rate = 16000;
+      uint16_t channels = 1;
+      uint16_t bits_per_sample = 16;
+      uint32_t num_samples = 32000;  // 2 seconds
+      uint32_t data_bytes = num_samples * sizeof(int16_t);
+      uint32_t riff_size = 36 + data_bytes;
+      uint32_t byte_rate = sample_rate * channels * (bits_per_sample / 8);
+      uint16_t block_align = channels * (bits_per_sample / 8);
+
+      fwrite("RIFF", 1, 4, f);
+      fwrite(&riff_size, 4, 1, f);
+      fwrite("WAVE", 1, 4, f);
+      fwrite("fmt ", 1, 4, f);
+      uint32_t fmt_chunk_size = 16;
+      uint16_t audio_format = 1;  // PCM
+      fwrite(&fmt_chunk_size, 4, 1, f);
+      fwrite(&audio_format, 2, 1, f);
+      fwrite(&channels, 2, 1, f);
+      fwrite(&sample_rate, 4, 1, f);
+      fwrite(&byte_rate, 4, 1, f);
+      fwrite(&block_align, 2, 1, f);
+      fwrite(&bits_per_sample, 2, 1, f);
+      fwrite("data", 1, 4, f);
+      fwrite(&data_bytes, 4, 1, f);
+
+      int16_t sample = 0;
+      for (uint32_t i = 0; i < num_samples; i++) {
+        fwrite(&sample, sizeof(int16_t), 1, f);
+      }
+      fclose(f);
+      found_fixture = temp_path;
+      created_temp = true;
+    }
+  }
+
   if (found_fixture) {
     vw_source_decoder_info_t info = {0};
     vw_source_decoder_t* dec = vw_source_decoder_open(found_fixture, &info);
@@ -63,6 +103,10 @@ int main(void) {
 
       vw_source_decoder_close(dec);
     }
+  }
+
+  if (created_temp) {
+    remove(temp_path);
   }
 
   printf("test_source_decoder PASSED\n");

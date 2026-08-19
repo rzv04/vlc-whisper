@@ -14,7 +14,7 @@ Implement ahead-of-time media source file decoding in the worker process (using 
   - `docs/architecture.md` (Worker isolation, SPU presentation architecture, ADR-016 zero plugin caption queue).
   - `docs/roadmap.md` (Step 17c deliverable).
 - **VLC/worker/protocol version affected**:
-  - Protocol: Upgrade from `major=1, minor=0` to `major=1, minor=1` (`VW_CAPABILITY_SOURCE_MODE = 0x00000004`, `VW_MSG_POSITION = 0x000A`).
+  - Protocol: Upgrade from `major=1, minor=0` to `major=1, minor=1` (`VW_CAPABILITY_SOURCE_MODE = (1U << 3) = 0x08`, `VW_MSG_POSITION = 13 = 0x000D`).
   - VLC: Pinned VLC 3.0.23 (Windows x64 / Linux x64).
   - Worker: `vlc-whisper-worker` (Vulkan GPU / CPU).
 - **Assumptions and explicit non-goals**:
@@ -28,9 +28,9 @@ Implement ahead-of-time media source file decoding in the worker process (using 
 ## Scope
 - **In scope**:
   - **Protocol v1.1**:
-    - Add `VW_CAPABILITY_SOURCE_MODE = 0x00000004` to `HELLO_ACK` capability bitmask.
+    - Add `VW_CAPABILITY_SOURCE_MODE = (1U << 3)` to `HELLO_ACK` capability bitmask.
     - Extend `vw_msg_start_t` to include `source_url` (up to 1024 bytes UTF-8) and `source_url_len`.
-    - Define `vw_msg_position_t` (`VW_MSG_POSITION = 0x000A`) with `session_id[16]`, `current_pts_us`, `input_time_us`, and `playback_rate`.
+    - Define `vw_msg_position_t` (`VW_MSG_POSITION = 13`) with `session_id[16]`, `current_pts_us`, `input_time_us`, `playback_rate`, and `flags`.
     - Update protocol encoders, decoders, and validators in `vw_protocol_codec.c`.
   - **Worker Native Source Demuxers (`vw_source_decoder`)**:
     - Common interface `vw_source_decoder_t` (`open`, `seek`, `read_samples`, `close`, `get_duration_us`).
@@ -97,7 +97,7 @@ Implement ahead-of-time media source file decoding in the worker process (using 
 
 #### `HELLO_ACK` Capability Flag
 ```c
-#define VW_CAPABILITY_SOURCE_MODE (UINT32_C(1) << 2)
+#define VW_CAPABILITY_SOURCE_MODE (UINT32_C(1) << 3)
 ```
 
 #### `START` Message Extension

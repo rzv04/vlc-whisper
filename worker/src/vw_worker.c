@@ -404,7 +404,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
         }
 
         case VW_MSG_POSITION: {
-          if (!session_active) break;
+          if (!session_active ||
+              memcmp(payload_decoded.position.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES) != 0) {
+            break;
+          }
           current_playback_pts_us = payload_decoded.position.current_pts_us;
           if (payload_decoded.position.flags & VW_POSITION_FLAG_PAUSED) {
             paused = true;

@@ -234,19 +234,21 @@ static void* vw_plugin_sender_main(void* arg) {
   vw_plugin_sys_t* sys = (vw_plugin_sys_t*)arg;
 
   char* source_url = NULL;
-  input_thread_t* init_input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
-  if (init_input) {
-    input_item_t* item = input_GetItem(init_input);
-    if (item) {
-      char* uri = input_item_GetURI(item);
-      if (uri &&
-          (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' || (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
-        source_url = uri;
-      } else if (uri) {
-        free(uri);
+  if (sys->client && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
+    input_thread_t* init_input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
+    if (init_input) {
+      input_item_t* item = input_GetItem(init_input);
+      if (item) {
+        char* uri = input_item_GetURI(item);
+        if (uri && (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' ||
+                    (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
+          source_url = uri;
+        } else if (uri) {
+          free(uri);
+        }
       }
+      vlc_object_release((vlc_object_t*)init_input);
     }
-    vlc_object_release((vlc_object_t*)init_input);
   }
 
   // First iteration: start the caption session. A worker rejection (e.g. E_MODEL_MISSING) means
@@ -330,9 +332,11 @@ static void* vw_plugin_sender_main(void* arg) {
     }
     if (now_paused != paused) {
       if (now_paused) {
+        vw_caption_presenter_blank(&sys->presenter);
         vw_worker_client_pause_session(sys->client);
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PAUSE", "playback paused; PCM forwarding suspended");
       } else {
+        vw_caption_presenter_blank(&sys->presenter);
         vw_worker_client_resume_session(sys->client);
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_RESUME", "playback resumed; PCM forwarding active");
       }

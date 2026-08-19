@@ -188,9 +188,15 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       if (avcodec_send_packet(decoder->codec_ctx, decoder->pkt) >= 0) {
         while (avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
           AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
-          if (decoder->frame->pts != AV_NOPTS_VALUE) {
-            decoder->current_pts_us =
-                (int64_t)av_rescale_q(decoder->frame->pts, stream->time_base, (AVRational){1, 1000000});
+          int64_t frame_pts = decoder->frame->pts;
+          if (frame_pts == AV_NOPTS_VALUE) {
+            frame_pts = decoder->frame->best_effort_timestamp;
+          }
+          if (frame_pts == AV_NOPTS_VALUE) {
+            frame_pts = decoder->frame->pkt_dts;
+          }
+          if (frame_pts != AV_NOPTS_VALUE && stream) {
+            decoder->current_pts_us = (int64_t)av_rescale_q(frame_pts, stream->time_base, (AVRational){1, 1000000});
           }
 
           if (out_pts_us && total_samples == 0) {
