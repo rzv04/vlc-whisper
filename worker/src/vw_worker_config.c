@@ -31,6 +31,46 @@ static bool vw_token_from_hex(const char* hex, uint8_t out[VW_AUTH_TOKEN_BYTES])
   return true;
 }
 
+// Probes for ggml-silero-vad.bin next to model_path or in standard search directories
+static void vw_worker_config_autodiscover_vad(vw_worker_config_t* config) {
+  if (config->vad_model_path[0] != '\0') {
+    return;  // Explicitly set via --vad-model CLI flag
+  }
+
+  // 1. Check in the same directory as config->model_path
+  char dir_cand[VW_PATH_MAX_BYTES];
+  const char* last_slash = strrchr(config->model_path, '/');
+  const char* last_bslash = strrchr(config->model_path, '\\');
+  const char* slash = (last_slash > last_bslash) ? last_slash : last_bslash;
+  if (slash != NULL) {
+    size_t dir_len = (size_t)(slash - config->model_path) + 1;
+    if (dir_len + strlen("ggml-silero-vad.bin") < sizeof(dir_cand)) {
+      memcpy(dir_cand, config->model_path, dir_len);
+      dir_cand[dir_len] = '\0';
+      strcat(dir_cand, "ggml-silero-vad.bin");
+      FILE* f = fopen(dir_cand, "rb");
+      if (f != NULL) {
+        fclose(f);
+        strncpy(config->vad_model_path, dir_cand, sizeof(config->vad_model_path) - 1);
+        return;
+      }
+    }
+  }
+
+  // 2. Standard candidate paths relative to CWD / binary
+  static const char* const k_vad_candidates[] = {
+      "models/ggml-silero-vad.bin",       "ggml-silero-vad.bin",           "../../../models/ggml-silero-vad.bin",
+      "../../models/ggml-silero-vad.bin", "../models/ggml-silero-vad.bin", NULL};
+  for (int i = 0; k_vad_candidates[i] != NULL; i++) {
+    FILE* f = fopen(k_vad_candidates[i], "rb");
+    if (f != NULL) {
+      fclose(f);
+      strncpy(config->vad_model_path, k_vad_candidates[i], sizeof(config->vad_model_path) - 1);
+      return;
+    }
+  }
+}
+
 bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
   if (!config) {
     return false;
@@ -41,6 +81,7 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
   config->sample_rate = 16000;
   config->backend = VW_WORKER_BACKEND_AUTO;
   config->gpu_device = 0;
+  config->vad_model_path[0] = '\0';
   return true;
 }
 
@@ -70,6 +111,12 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         return 2;
       }
       snprintf(config->model_path, sizeof(config->model_path), "%s", argv[++i]);
+    } else if (strcmp(argv[i], "--vad-model") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --vad-model\n");
+        return 2;
+      }
+      snprintf(config->vad_model_path, sizeof(config->vad_model_path), "%s", argv[++i]);
     } else if (strcmp(argv[i], "--log-file") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --log-file\n");
@@ -109,5 +156,9 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
       return 2;
     }
   }
+
+  // Auto-discover VAD model if not explicitly specified via CLI
+  vw_worker_config_autodiscover_vad(config);
+
   return 0;
 }

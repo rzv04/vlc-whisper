@@ -75,6 +75,10 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.translate = false;
   wparams.language = "en";
   wparams.n_threads = 4;
+  wparams.suppress_nst = true;
+  wparams.suppress_blank = true;
+  wparams.no_speech_thold = 0.60f;
+  wparams.logprob_thold = -1.0f;
 
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;
@@ -126,9 +130,11 @@ bool vw_whisper_engine_get_segment(const vw_whisper_engine_t* engine, int index,
   int64_t t0 = whisper_full_get_segment_t0(engine->ctx, index);
   int64_t t1 = whisper_full_get_segment_t1(engine->ctx, index);
   const char* txt = whisper_full_get_segment_text(engine->ctx, index);
+  float nsp = whisper_full_get_segment_no_speech_prob(engine->ctx, index);
 
   out_seg->t0_us = t0 * 10000LL;
   out_seg->t1_us = t1 * 10000LL;
+  out_seg->no_speech_prob = nsp;
   out_seg->text_utf8 = txt ? txt : "";
   return true;
 }

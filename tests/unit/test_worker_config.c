@@ -145,6 +145,18 @@ int main(void) {
 
     char* argv_dangling_gpu[] = {"vlc-whisper-worker", "--gpu-device", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_gpu) == 2);
+
+    char* argv_dangling_vad[] = {"vlc-whisper-worker", "--vad-model", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_vad) == 2);
+  }
+
+  // --- success: --vad-model override ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_vad[] = {"vlc-whisper-worker", "--vad-model", "models/custom-vad.bin", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_vad) == 0);
+    EXPECT_EQ_STR(cfg.vad_model_path, "models/custom-vad.bin");
   }
 
   // --- failure: NULL config ---

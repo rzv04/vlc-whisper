@@ -92,6 +92,7 @@ int main(void) {
     EXPECT(vw_whisper_engine_get_segment(eng, i, &seg));
     EXPECT(seg.t0_us >= 0);
     EXPECT(seg.t1_us >= seg.t0_us);
+    EXPECT(seg.no_speech_prob >= 0.0f && seg.no_speech_prob <= 1.0f);
     EXPECT(seg.text_utf8 != NULL);
   }
 

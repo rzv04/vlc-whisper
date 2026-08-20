@@ -128,6 +128,24 @@ Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_cod
 | `E_INTERNAL`         | Unclassified worker failure       | Disable captions; offer redacted diagnostics                                   |
 | `E_SOURCE_OPEN`      | Native source demuxer open failed | Non-fatal; plugin falls back transparently to live PCM stream capture          |
 
+## Worker CLI Contracts
+
+The worker executable (`vlc-whisper-worker.exe` / `vlc-whisper-worker`) is spawned by the plugin or launched manually during testing with the following command-line interface:
+
+```text
+vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [--vad-model <vad_path>] [--backend auto|gpu|cpu] [--gpu-device <id>] [--log-file <log_path>]
+```
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `--pipe <path>` | Yes | (none) | Named pipe name (Win32) or Unix domain socket path (POSIX). |
+| `--token <64_hex>` | Yes | (none) | 32-byte secret authentication token in 64 hexadecimal characters. |
+| `--model <path>` | No | `models/ggml-tiny.en.bin` | Path to Whisper GGML model file. |
+| `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). If not specified, the worker auto-discovers `ggml-silero-vad.bin` in the model directory alongside `--model`. If absent, gracefully falls back to RMS Energy VAD. |
+| `--backend <type>` | No | `auto` | Inference accelerator backend: `auto`, `gpu`, or `cpu`. |
+| `--gpu-device <id>` | No | `0` | GPU/IGPU device index for hardware acceleration. |
+| `--log-file <path>` | No | (temp directory) | Custom destination for diagnostic log output. |
+
 ## Compatibility rules
 
 Protocol changes that alter framing, time units, authentication, or message meaning require a major bump. Adding a bounded optional field or optional message requires a minor bump and capability flag. The worker and plugin must expose their protocol/build versions in diagnostics and reject accidental mixed-package installations.

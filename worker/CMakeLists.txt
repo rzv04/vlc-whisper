@@ -69,6 +69,7 @@ add_executable(vlc-whisper-worker
     src/vw_whisper_engine.c
     src/vw_vad.c
     src/vw_segment_builder.c
+    src/vw_hallucination_filter.c
     src/vw_audio_buffer.c
     src/vw_worker_config.c
     src/vw_worker_queue.c
