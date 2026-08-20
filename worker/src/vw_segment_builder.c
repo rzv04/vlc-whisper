@@ -130,12 +130,27 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
         if (*suffix == '\0') {
           return false;
         }
-        if (hist->end_pts_us >= end_pts_us) {
-          return false;  // Candidate contains no spoken audio beyond the previous committed phrase
-        }
         start_pts_us = hist->end_pts_us;
+        if (end_pts_us <= start_pts_us) {
+          end_pts_us = vw_saturating_add_i64(start_pts_us, 1000000LL);
+        }
         text = suffix;
         len = strlen(text);
+
+        // Check if the trimmed suffix itself is already committed in history
+        for (size_t j = 0; j < builder->history_count; j++) {
+          size_t s_idx = (builder->history_head + VW_SEGMENT_HISTORY_CAPACITY - 1 - j) % VW_SEGMENT_HISTORY_CAPACITY;
+          const vw_history_entry_t* other_hist = &builder->history[s_idx];
+          int64_t diff = (start_pts_us >= other_hist->start_pts_us) ? (start_pts_us - other_hist->start_pts_us)
+                                                                    : (other_hist->start_pts_us - start_pts_us);
+          if (diff <= VW_DEDUP_TIME_TOLERANCE_US ||
+              (end_pts_us > other_hist->start_pts_us && start_pts_us < other_hist->end_pts_us)) {
+            if ((strncmp(other_hist->text, text, len) == 0 && other_hist->text[len] == '\0') ||
+                (strstr(other_hist->text, text) != NULL)) {
+              return false;  // Trimmed suffix was already committed
+            }
+          }
+        }
       }
     }
   }
@@ -155,10 +170,10 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
       if (*trimmed_text == '\0') {
         return false;
       }
-      if (last->end_pts_us >= end_pts_us) {
-        return false;  // Candidate contains no spoken audio beyond the last queued phrase
-      }
       start_pts_us = last->end_pts_us;
+      if (end_pts_us <= start_pts_us) {
+        end_pts_us = vw_saturating_add_i64(start_pts_us, 1000000LL);
+      }
       text = trimmed_text;
       len = strlen(text);
     }

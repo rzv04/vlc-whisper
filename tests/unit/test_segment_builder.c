@@ -264,7 +264,17 @@ static void vw_test_trimmed_caption_timing(void) {
   assert(out.end_pts_us == 6000000LL);
   free(out.text_utf8);
 
-  // If a candidate suffix ends before or at the prior phrase end (no new spoken audio), it must be rejected
+  // When an overlapping phrase repeats committed text with new suffix ("jumps quickly" after "jumps"),
+  // "jumps" is trimmed and the new suffix "quickly" is preserved starting at 6s with valid duration
+  assert(vw_segment_builder_push_hypothesis(builder, "jumps quickly", 5000000LL, 6000000LL));
+
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "quickly") == 0);
+  assert(out.start_pts_us == 6000000LL);  // Anchors to previous end PTS
+  assert(out.end_pts_us == 7000000LL);    // Safe 1s duration assigned since candidate end coincided with 6s
+  free(out.text_utf8);
+
+  // Exact duplicate with no new suffix text is rejected
   assert(!vw_segment_builder_push_hypothesis(builder, "jumps quickly", 5000000LL, 6000000LL));
 
   vw_segment_builder_free(builder);
