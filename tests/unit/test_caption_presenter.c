@@ -36,6 +36,7 @@ static float g_mock_rate = 1.0f;
 static int64_t g_last_subpic_start = 0;
 static int64_t g_last_subpic_stop = 0;
 static bool g_last_subpic_b_subtitle = false;
+static bool g_last_subpic_b_ephemer = false;
 
 vlc_tick_t mdate(void) { return (vlc_tick_t)g_mock_mdate; }
 
@@ -52,6 +53,7 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
     g_last_subpic_start = subpic->i_start;
     g_last_subpic_stop = subpic->i_stop;
     g_last_subpic_b_subtitle = subpic->b_subtitle;
+    g_last_subpic_b_ephemer = subpic->b_ephemer;
     if (subpic->p_region) {
       if (subpic->p_region->p_text) {
         text_segment_Delete(subpic->p_region->p_text);
@@ -199,6 +201,10 @@ int main(void) {
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 102000000LL);
   assert(g_last_subpic_b_subtitle == false);
+  // b_ephemer is the designated overlap-prevention mechanism (ADR-021): VLC keeps only the
+  // newest same-channel ephemeral subpicture, so a successor cue auto-evicts this one. If this
+  // flag ever regresses, adjacent short cues WOULD visibly overlap — the very bug Greptile flags.
+  assert(g_last_subpic_b_ephemer == true);
 
   // Subsequent call reuses already-registered channel
   assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0));
