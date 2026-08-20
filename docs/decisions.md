@@ -282,6 +282,7 @@ to REVISE already-emitted subtitles.
    - For any subtitle cue with raw acoustic duration $< 1.0\,\text{s}$, clamp the media duration to a rate-scaled floor:
      $$\text{duration\_us} = \max\big(\text{raw\_dur},\ \lfloor 1\,000\,000 \times \text{rate} \rfloor\big),\qquad \text{dur\_wall} = \frac{\text{duration\_us}}{\text{rate}} \ge 1\,000\,000\,\mu\text{s}$$
    - Guarantees subtitles remain on screen for at least **1.0 second of wall-clock reading time** across all playback rates ($0.5\times \to 0.5\text{s}$ media floor, $2.0\times \to 2.0\text{s}$ media floor).
+   - Lookahead cues are buffered in the presenter (`presenter->has_pending`) so that whenever an adjacent successor cue begins within the floor window ($< 1.0\,\text{s}$), the earlier cue's display duration is cleanly clipped to the successor cue's start PTS ($\text{clipped\_end} = \min(\text{target\_end}, \text{next\_start})$), eliminating any SPU presentation interval overlap.
    - Long utterances ($> 1.0\text{s}$) preserve their full authentic acoustic duration.
    - `vw_segment_builder` remains untouched, strictly recording true acoustic boundaries for coverage deduplication.
 2. **Deterministic Single-Pass Whisper Decoding Configuration (`vw_whisper_engine.c`)**:
