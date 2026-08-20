@@ -688,82 +688,8 @@ static void vw_test_edge_trailing_distinct_subsegment_kept(void) {
   assert(vw_segment_builder_pop(builder, &out));
   assert(strcmp(out.text_utf8, "on the mat") == 0);
   assert(out.start_pts_us == 14100000LL);
-  assert(out.end_pts_us == 15100000LL);  // 1.0s minimum reading floor applied
+  assert(out.end_pts_us == 14400000LL);
   free(out.text_utf8);
-  vw_segment_builder_free(builder);
-}
-
-static void vw_test_pacing_isolated_short_cue(void) {
-  vw_segment_builder_t *builder = vw_segment_builder_create();
-  assert(builder != NULL);
-
-  // Single short 200ms cue -> extended to 1.0s reading floor
-  assert(vw_segment_builder_push_hypothesis(builder, "Yeah.", 1000000LL, 1200000LL));
-  assert(builder->count == 1);
-
-  vw_caption_segment_t out;
-  assert(vw_segment_builder_pop(builder, &out));
-  assert(strcmp(out.text_utf8, "Yeah.") == 0);
-  assert(out.start_pts_us == 1000000LL);
-  assert(out.end_pts_us == 2000000LL);  // Extended from 1.2s to 2.0s (1.0s floor)
-  free(out.text_utf8);
-
-  vw_segment_builder_free(builder);
-}
-
-static void vw_test_pacing_consecutive_short_cues_clamped_no_overlap(void) {
-  vw_segment_builder_t *builder = vw_segment_builder_create();
-  assert(builder != NULL);
-
-  // Cue A: 10.0s to 10.2s (200ms)
-  // Cue B: 10.6s to 10.8s (200ms)
-  assert(vw_segment_builder_push_hypothesis(builder, "Yeah.", 10000000LL, 10200000LL));
-  assert(vw_segment_builder_push_hypothesis(builder, "Right.", 10600000LL, 10800000LL));
-  assert(builder->count == 2);
-
-  vw_caption_segment_t outA, outB;
-  assert(vw_segment_builder_pop(builder, &outA));
-  assert(strcmp(outA.text_utf8, "Yeah.") == 0);
-  assert(outA.start_pts_us == 10000000LL);
-  assert(outA.end_pts_us == 10600000LL);  // Clamped at Cue B's start (10.6s) to prevent overlap!
-
-  assert(vw_segment_builder_pop(builder, &outB));
-  assert(strcmp(outB.text_utf8, "Right.") == 0);
-  assert(outB.start_pts_us == 10600000LL);
-  assert(outB.end_pts_us == 11600000LL);  // Extended to 1.0s floor (11.6s)
-
-  // Verify zero overlap between Cue A stop and Cue B start
-  assert(outA.end_pts_us == outB.start_pts_us);
-
-  free(outA.text_utf8);
-  free(outB.text_utf8);
-  vw_segment_builder_free(builder);
-}
-
-static void vw_test_pacing_silence_gap_preservation(void) {
-  vw_segment_builder_t *builder = vw_segment_builder_create();
-  assert(builder != NULL);
-
-  // Cue A: 10.0s to 10.2s (200ms)
-  // Cue B: 15.0s to 17.0s (2.0s, with 4.8s silence gap)
-  assert(vw_segment_builder_push_hypothesis(builder, "Look!", 10000000LL, 10200000LL));
-  assert(vw_segment_builder_push_hypothesis(builder, "Where did it go?", 15000000LL, 17000000LL));
-  assert(builder->count == 2);
-
-  vw_caption_segment_t outA, outB;
-  assert(vw_segment_builder_pop(builder, &outA));
-  assert(outA.start_pts_us == 10000000LL);
-  assert(outA.end_pts_us == 11000000LL);  // Full 1.0s floor (11.0s)
-
-  assert(vw_segment_builder_pop(builder, &outB));
-  assert(outB.start_pts_us == 15000000LL);
-  assert(outB.end_pts_us == 17000000LL);
-
-  // Exactly 4.0s of blank silence between Cue A stop and Cue B start
-  assert(outB.start_pts_us - outA.end_pts_us == 4000000LL);
-
-  free(outA.text_utf8);
-  free(outB.text_utf8);
   vw_segment_builder_free(builder);
 }
 
@@ -803,9 +729,6 @@ int main(void) {
   vw_test_mid_containment_dropped();
   vw_test_superstring_dropped();
   vw_test_short_prefix_expansion_dropped();
-  vw_test_pacing_isolated_short_cue();
-  vw_test_pacing_consecutive_short_cues_clamped_no_overlap();
-  vw_test_pacing_silence_gap_preservation();
 
   printf("test_segment_builder PASSED (all unit assertions verified)\n");
   return 0;

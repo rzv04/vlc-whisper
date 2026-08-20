@@ -325,7 +325,7 @@ int main(void) {
 
   // Test 15: Sub-second flash cue minimum display floor (1.0s wall clock at 1.0x rate)
   vw_caption_segment_t short_cue = {.start_pts_us = 10000000LL,  // 10.0s
-                                    .end_pts_us = 11000000LL,    // 11.0s (1.0s minimum reading floor from builder)
+                                    .end_pts_us = 10200000LL,    // 10.2s (200ms raw acoustic duration)
                                     .text_utf8 = (char*)"Yeah.",
                                     .text_bytes = 5,
                                     .is_final = true};
@@ -334,29 +334,23 @@ int main(void) {
   assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_start == 100000000LL);
-  assert(g_last_subpic_stop == 100000000LL + 1000000LL);  // 101.0s
+  assert(g_last_subpic_stop == 100000000LL + 1000000LL);  // Clamped to 1.0s minimum floor (101.0s)
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);
 
-  // Test 16: Consecutive short cues clamped by builder to avoid visual overlap
-  vw_caption_segment_t cueA = {.start_pts_us = 10000000LL,  // 10.0s
-                               .end_pts_us = 10600000LL,    // 10.6s (clamped to cueB start)
-                               .text_utf8 = (char*)"Yeah.",
-                               .text_bytes = 5,
-                               .is_final = true};
-  vw_caption_segment_t cueB = {.start_pts_us = 10600000LL,  // 10.6s
-                               .end_pts_us = 11600000LL,    // 11.6s (1.0s floor)
-                               .text_utf8 = (char*)"Right.",
-                               .text_bytes = 6,
-                               .is_final = true};
-  g_mock_rate = 1.0f;
+  // Test 16: Minimum display floor under variable playback rates (guarantees >= 1.0s wall clock)
+  // At 2.0x rate: 200ms raw acoustic duration -> clamped to 2.0s media floor -> 1.0s wall-clock duration
+  g_mock_rate = 2.0f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &cueA, 10000000LL));
-  assert(g_last_subpic_start == 100000000LL);
-  assert(g_last_subpic_stop == 100000000LL + 600000LL);
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
 
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &cueB, 10000000LL));
-  assert(g_last_subpic_start == 100000000LL + 600000LL);
-  assert(g_last_subpic_stop == 100000000LL + 1600000LL);
+  // At 0.5x rate: 200ms raw acoustic duration -> clamped to 0.5s media floor -> 1.0s wall-clock duration
+  g_mock_rate = 0.5f;
+  g_put_subpicture_calls = 0;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
 
   // Test 17: Long duration preserved (3.5s speech utterance at 1.0x rate)
   vw_caption_segment_t long_cue = {.start_pts_us = 10000000LL,  // 10.0s

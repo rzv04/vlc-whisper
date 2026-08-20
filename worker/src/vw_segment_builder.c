@@ -339,24 +339,7 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   if (emit_start >= end_pts_us) {
     return false;
   }
-
-  // Before enqueuing the new cue, if the immediately preceding queued cue extends past the
-  // incoming cue's emit_start, clamp its end_pts_us to emit_start to prevent visual overlap.
-  if (builder->count > 0) {
-    size_t last_idx = (builder->head + builder->capacity - 1) % builder->capacity;
-    vw_caption_segment_t* prev = &builder->segment_queue[last_idx];
-    if (emit_start > prev->start_pts_us && prev->end_pts_us > emit_start) {
-      prev->end_pts_us = emit_start;
-    }
-  }
-
-  int64_t orig_dur = end_pts_us - start_pts_us;
-  int64_t target_end = emit_start + VW_CAPTION_MIN_DISPLAY_DURATION_US;
-  int64_t emit_end = (orig_dur > 0 && orig_dur < VW_CAPTION_MIN_DISPLAY_DURATION_US && end_pts_us < target_end)
-                         ? target_end
-                         : end_pts_us;
-
-  if (!vw_segment_builder_enqueue(builder, text, emit_start, emit_end)) {
+  if (!vw_segment_builder_enqueue(builder, text, emit_start, end_pts_us)) {
     return false;
   }
   vw_segment_builder_commit_history(builder, text, emit_start, end_pts_us);
