@@ -217,7 +217,9 @@ int main(void) {
     // Pause/resume mid-stream: worker must accept both without dying; the session stays active
     // so the subsequent STOP flow still works (exit 0 proves the worker survived).
     vw_worker_client_pause_session(c);
+    EXPECT(vw_worker_client_send_position(c, 2000000LL, 2000000LL, 1.0f, VW_POSITION_FLAG_PAUSED));
     vw_worker_client_resume_session(c);
+    EXPECT(vw_worker_client_send_position(c, 2000000LL, 2000000LL, 1.0f, 0));
     // Step 17: seek restart — STOP(SEEK_DISCONTINUITY) then START again on the same connection.
     // The worker must accept the new epoch (new session_id), drop stale pre-seek AUDIO, and
     // continue transcribing; exit 0 proves the full STOP->START cycle.

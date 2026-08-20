@@ -463,6 +463,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
             if (paused) {
               if (audio_buf) vw_audio_buffer_clear(audio_buf);
               if (builder) vw_segment_builder_clear(builder);
+            } else {
+              if (source_mode && source_decoder && current_playback_pts_us >= 0) {
+                vw_source_decoder_seek(source_decoder, current_playback_pts_us);
+                decoded_pts_us = current_playback_pts_us;
+                last_playback_pts_us = current_playback_pts_us;
+                source_eof = false;
+                eof_retry_count = 0;
+                if (audio_buf) vw_audio_buffer_clear(audio_buf);
+                if (builder) vw_segment_builder_clear(builder);
+              }
             }
           }
 
@@ -551,10 +561,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
         case VW_MSG_RESUME: {
           if (!session_active) break;
           paused = false;
-          if (source_mode && source_decoder && current_playback_pts_us >= 0 &&
-              current_playback_pts_us > decoded_pts_us) {
+          if (source_mode && source_decoder && current_playback_pts_us >= 0) {
             vw_source_decoder_seek(source_decoder, current_playback_pts_us);
             decoded_pts_us = current_playback_pts_us;
+            last_playback_pts_us = current_playback_pts_us;
             source_eof = false;
             eof_retry_count = 0;
             if (audio_buf) vw_audio_buffer_clear(audio_buf);

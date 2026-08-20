@@ -2,6 +2,7 @@
 // clang-format off
 #include <windows.h>
 #include <bcrypt.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 // clang-format on
