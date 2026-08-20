@@ -28,16 +28,14 @@ Eliminate subtitle flicker, phantom caption bursts, and background music halluci
 2. **Tier 2: Post-Inference Acoustic Confidence Gating (`vw_whisper_engine` / `vw_worker`)**:
    - Expose `no_speech_prob` in `vw_whisper_segment_t` via `whisper_full_get_segment_no_speech_prob(ctx, i)`.
    - Discard segments with $P(\text{no\_speech}) \ge 0.60$ before passing them to the segment builder.
-3. **Tier 3: Lexical & Text-Level Hallucination Filtering (`vw_hallucination_filter`)**:
-   - Implement fast, zero-allocation C17 string filter in `worker/src/vw_hallucination_filter.c` rejecting:
-     - Sound effect / music tags: `[Music]`, `[MUSIC]`, `(music)`, `[Applause]`, `(applause)`, `[Laughter]`, `(laughter)`, `[Silence]`, `♪`, `♫`, `*music*`, `(cheering)`.
-     - Pure punctuation / formatting spam: `...`, `. . .`, `! ! !`, `---`, `???`.
-     - YouTube & Subtitle repository outro boilerplate: `"Thank you for watching"`, `"Please subscribe"`, `"Subtitles by OpenSubtitles"`, `"Subtitles by the Amara.org"`, `"Transcribed by"`.
-     - Repetition degeneracy: strings with $\ge 3$ consecutively repeated words (`"you know you know you know"`).
+3. **Tier 3: Formatting Cleanliness & Non-Speech Tag Filtering (`vw_hallucination_filter`)**:
+   - Strictly transcribe all genuine speech without censoring words, sentences, or conversational phrases (no phrase blacklists).
+   - Reject segments that consist **exclusively** of isolated punctuation or symbols (e.g. `"."`, `"..."`, `"---"`, `"! ! !"`) with zero alphanumeric characters, while preserving all valid punctuation inside legitimate sentences (e.g. `"Hello, how are you?"`, `"Look out!"`, `"Wait..."`).
+   - Strip/reject non-speech descriptor tags (`[Music]`, `[MUSIC]`, `(music)`, `[Applause]`, `(applause)`, `[Laughter]`, `[Silence]`, `♪`, `♫`, `*music*`) and leverage `whisper.cpp`'s `wparams.suppress_nst = true`.
    - Integrate Tier 3 filter at the entrance of `vw_segment_builder_push_hypothesis`.
 4. **Automated & Manual Test Suite**:
    - Add unit tests for `vw_hallucination_filter` and `vw_vad` in `tests/unit/`.
-   - Update `test_whisper_engine` and `test_segment_builder` for `no_speech_prob` and phantom suppression.
+   - Update `test_whisper_engine` and `test_segment_builder` for `no_speech_prob` and non-speech tag suppression.
 
 ### Out of Scope
 - SPU display duration expansion or reading time floors (Step 17e.2).
@@ -47,14 +45,14 @@ Eliminate subtitle flicker, phantom caption bursts, and background music halluci
 ### Files & Components Expected to Change
 - `worker/include/vw_vad.h` & `worker/src/vw_vad.c`: Silero VAD context management and detection.
 - `worker/include/vw_worker_config.h` & `worker/src/vw_worker_config.c`: `--vad-model` CLI parsing.
-- `worker/include/vw_hallucination_filter.h` & `worker/src/vw_hallucination_filter.c`: Lexical phantom filter.
+- `worker/include/vw_hallucination_filter.h` & `worker/src/vw_hallucination_filter.c`: Non-speech tag & isolated punctuation filter.
 - `worker/include/vw_whisper_engine.h` & `worker/src/vw_whisper_engine.c`: `no_speech_prob` segment getter.
 - `worker/src/vw_worker.c`: 3-tier VAD lifecycle, seek reset, and confidence gating.
 - `worker/src/vw_segment_builder.c`: Lexical filter rejection before dedup.
 - `tests/unit/test_vad.c`: Unit tests for Silero VAD and energy fallback.
-- `tests/unit/test_hallucination_filter.c`: Unit tests for lexical phantom patterns.
+- `tests/unit/test_hallucination_filter.c`: Unit tests for non-speech tags and isolated punctuation.
 - `tests/unit/test_segment_builder.c`: Regression tests for phantom cue suppression.
-- `docs/decisions.md`: Record ADR-019 (Multi-Tier VAD & Hallucination Suppression).
+- `docs/decisions.md`: Record ADR-019 (Multi-Tier VAD & Silence Gating).
 - `docs/architecture.md`, `docs/api-contracts.md`, `docs/source-layout.md`, `docs/test-strategy.md`, `docs/roadmap.md`.
 
 ---
@@ -90,12 +88,11 @@ Eliminate subtitle flicker, phantom caption bursts, and background music halluci
                              │ Validated Speech Segment
                              ▼
 ┌─────────────────────────────────────────────────────────┐
-│ TIER 3: Lexical & Text-Level Hallucination Filtering    │
-│  - 3A: Non-speech descriptor tags ([Music], (applause)) │
-│  - 3B: Punctuation & symbol spam filter (..., ! ! !)    │
-│  - 3C: YouTube/Subtitle outro blocklist ("Thank you...")│
-│  - 3D: Repetition loop detector (>=3 repeated words)    │
-│  - Action: Pattern match ──► DROP candidate             │
+│ TIER 3: Formatting & Non-Speech Tag Cleanliness Filter  │
+│  - 3A: Non-speech descriptor tags ([Music], ♪, etc.)    │
+│  - 3B: Pure isolated punctuation (..., --- with no text)│
+│  - (All legitimate dialogue and punctuation preserved)  │
+│  - Action: Non-speech / empty ──► DROP candidate        │
 └────────────────────────────┬────────────────────────────┘
                              │ Clean Hypothesis Phrase
                              ▼
@@ -103,7 +100,7 @@ Eliminate subtitle flicker, phantom caption bursts, and background music halluci
 │ SEGMENT BUILDER (vw_segment_builder)                    │
 │  - Whole-phrase time coverage deduplication (ADR-018)   │
 │  - SPU channel start clamping & final cue emission      │
-└─────────────────────────────────────────────────────────┘
+└────────────────────────────┘
 ```
 
 ### 2. Threading & Ownership Model
