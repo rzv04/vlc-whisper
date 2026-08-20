@@ -523,3 +523,142 @@ Tracing an audio segment through discrete phrase extraction and presentation:
 |---|---|---|---|
 | **Documentation** | `vw_segment_builder.h:1-62` | Verified all header docstrings meet Rule 11 (20-30 words) | Fully compliant |
 | **Code Style** | All files | Google C Style, 2-space indentation, 120-col limit | Verified with `clang-format --dry-run --Werror` |
+
+---
+
+# Part 4 — Step 17e.1: Silero VAD, Silence Gating & Hallucination Suppression (vs gemini/milestone-3)
+
+**29 files changed, +965 / -50**
+**Base**: `gemini/milestone-3` = `8ab8abc` (17d.1 merged). Branch `gemini/milestone-3-step-17e-1`.
+**Commits**: `2921aae`/`88f9f05`/`2986460`/`46fef5e` (plan + review refinements), `62567bd` (feat), plus the 17e split docs.
+**Manual test (user)**: dialogue more stable, cues filtered out, seeking good.
+**Line references**: branch HEAD (`62567bd`).
+
+---
+
+## 1. File-by-File Analysis
+
+### 4.1 `worker/src/vw_vad.c` / `worker/include/vw_vad.h`
+
+**Why change**: Tier 1 — Silero GGML VAD (`whisper_vad_*`) with RMS-energy fallback (`step17e_1_plan.md` §In Scope 1).
+**Responsibility before**: `vw_vad_detect_speech_energy` only. **After**: `vw_vad_init_default`, `vw_vad_detect_speech` (Silero → `whisper_vad_segments_from_probs` + `n_segments > 0`; energy fallback when `vctx == NULL`), `vw_vad_reset_state`, `vw_vad_free`.
+**Callers**: `vw_worker.c` (3 inference sites + reset sites). **Callees**: `whisper_vad_init_from_file_with_params`, `whisper_vad_detect_speech`, `whisper_vad_segments_from_probs`, `whisper_vad_reset_state`.
+**Boundaries**: NULL/empty model → NULL ctx → energy fallback (no crash); sample_count 0 → false; reset/free NULL-safe.
+**Acceptance map**: plan "VAD detects speech, skips inference" + "energy fallback when no model" → **Done** (with B3 caveat).
+
+### 4.2 `worker/src/vw_hallucination_filter.c` / `worker/include/vw_hallucination_filter.h`
+
+**Why change**: Tier 3 — reject non-speech tags + isolated punctuation, preserve dialogue (plan §3).
+**Responsibility**: new — `vw_hallucination_is_isolated_punctuation`, `_is_non_speech_tag` (bracketed/parenthesized tag list + ♪/♫), `_is_phantom_text`.
+**Callers**: `vw_segment_builder_push_hypothesis` (builder L250, **before** the coverage gate L262). **Callees**: libc only.
+**Boundaries**: tag list with delimiters avoids partial-word hits ("musicology" survives); musical-note strstr drops any text containing ♪/♫.
+**Acceptance map**: plan "reject standalone tags + isolated punctuation, preserve 100% dialogue" → ⚠️ partial — **H1/H2** (below) violate the preserve clause.
+
+### 4.3 `worker/src/vw_worker.c`
+
+**Why change**: wire the 3-tier pipeline: Silero at all 3 inference sites (live L546, lookahead L654, trailing L687), `no_speech_prob >= 0.60` drop before the builder (L555/663/696), VAD state reset on seek/pause/swap/STOP (8 sites), `vad_ctx` init-once (L202-204) + free at shutdown.
+**Responsibility after**: VAD lifecycle owner + Tier-2 gate + builder feed.
+**Boundaries**: Tier-2 gate precedes `push_hypothesis` (no bypass among the 3 callers); trailing partial window (source EOF flush) VAD-padded by whisper.
+**Acceptance map**: plan tiers 1-2 → **Done** (B1/B2 caveats); "reset on seek/pause" → Done (redundant with per-window reset — B1).
+
+### 4.4 `worker/src/vw_whisper_engine.c` / `worker/include/vw_whisper_engine.h`
+
+**Why change**: `no_speech_prob` per-segment getter; whisper params `suppress_nst = true`, `suppress_blank = true`, `no_speech_thold = 0.60f` (L78-80).
+**Boundaries**: getter bounds-checked (L125-137); `logprob_thold` NOT set (B2).
+**Acceptance map**: plan Tier 2 → Done; "logprob_thold = -1.0" from the design diagram → ⚠️ missing.
+
+### 4.5 `worker/src/vw_worker_config.c` / `vw_worker_config.h`
+
+**Why change**: `--vad-model` CLI + auto-discovery (`ggml-silero-vad.bin` next to the model, then standard dirs).
+**Boundaries**: snprintf sizeof-safe; explicit path wins over discovery; default "".
+**Acceptance map**: plan CLI item → **Done**.
+
+### 4.6 `worker/src/vw_segment_builder.c`
+
+**Why change**: Tier-3 filter at the builder entrance (L250) — phantom candidates rejected **before** the time-coverage gate (L262) and before any `commit_history` (L345), so rejected tags never advance `covered_end_us` (no coverage pollution).
+**Boundaries**: ordering verified safe by scout; risk = filter false-positives silently lose real speech (H2).
+
+### 4.7 Tests (`test_vad.c` +185, `test_hallucination_filter.c` +102, `test_worker_config.c` +12, `test_whisper_engine.c` +1, `test_segment_builder.c` +7)
+
+**Why change**: VAD (energy + Silero, skip-if-model-absent), filter (case/punctuation/tags/notes/dialogue), config (`--vad-model`), engine getter range, builder 5 rejection asserts.
+**Coverage gaps**: no UTF-8 input, no tag-inside-speech, no malformed delimiters, no coverage-non-advancement invariant, Tier-2 threshold not exercised.
+
+### 4.8 Models + Docs (`models/download-vad-model.{sh,cmd}`, `models/manifest.json`, `README.md`, `docs/*`: ADR-019, architecture, api-contracts, source-layout, test-strategy, roadmap, plan)
+
+**Why change**: VAD model download helpers, ADR-019 (Multi-Tier VAD & Silence Gating), docs (Rule 14).
+
+---
+
+## 2. Happy-Path Request Trace
+
+1. Worker starts: `config->vad_model_path` (CLI or discovery) → `vw_vad_init_default` → `vad_ctx` (or NULL → energy fallback).
+2. Window ready (live L546 / lookahead L654 / trailing L687): `vw_vad_detect_speech(window, cnt, vad_ctx)` → Silero `n_segments > 0` (or RMS) → skip whisper on silence/music.
+3. `vw_whisper_engine_transcribe_pcm` with `suppress_nst` + `no_speech_thold=0.60`.
+4. Per segment: `get_segment` → `no_speech_prob`; `>= 0.60` → dropped (L555/663/696) before the builder.
+5. `vw_segment_builder_push_hypothesis`: phantom filter (L250) → coverage-drop (L262) → dedup/trim → emit clamped.
+6. SPU channel 9. Manual result: stable dialogue, filtered cues, good seeking.
+
+## 3. Most Important Failure Path
+
+**Explicit `--vad-model` points to a missing/invalid file** (B3): `vw_vad_init_default` returns NULL → **silent** fallback to RMS energy (vw_vad.c:35); worker logs INFO "not loaded" (no WARN). An operator believing Silero is active gets the weak energy gate → music/noise may pass Tier 1; Tiers 2-3 then carry the defense. No crash, but the failure is invisible. Fix: WARN when an explicitly-configured model fails to load; surface in `WORKER_SESSION` logs.
+
+## 4. Boundary Summary
+
+| Boundary | Implementation | Status |
+| --- | --- | --- |
+| Input validation | VAD NULL/0-sample guards; config snprintf-safe; engine getter bounds | OK |
+| Concurrency | VAD on worker main loop only; reader thread untouched; vctx freed on all paths | OK |
+| I/O | VAD model file read at init; energy fallback offline | OK |
+| Memory | `whisper_vad_segments_from_probs` alloc/free per window (worker loop, not callback) | OK |
+| Locale/UTF-8 | `isalnum` under default C locale rejects all non-ASCII bytes | **H1** |
+| Text matching | Substring tag match drops whole segments containing an embedded tag | **H2** |
+
+## 5. Acceptance Criterion → Code Mapping (plan `step17e_1_plan.md`)
+
+| # | Criterion | Status |
+| --- | --- | --- |
+| 1 | VAD skips inference on silence/instrumental music | Done |
+| 2 | Energy fallback without `--vad-model` | Done (B3: silent on explicit-model failure) |
+| 3 | `no_speech_prob >= 0.60` dropped pre-builder | Done |
+| 4 | Standalone tags + isolated punctuation rejected; 100% dialogue preserved | ⚠️ partial (H1/H2) |
+| 5 | Seek/pause reset VAD state, no crashes/leaks | Done (B1: per-window reset also happens) |
+| 6 | 100% tests pass | Done (18/18 per gate) |
+| 7 | Valgrind 0 errors | Done (prior gate) |
+| 8 | Docs + ADR updated | Done (ADR-019) |
+
+## 7. Code Review Findings
+
+### Bugs (Sorted by Priority)
+
+| Priority | Component / Location | Description | Impact | Proposed Fix |
+| --- | --- | --- | --- | --- |
+| **High** | `vw_hallucination_filter.c:11-21` | `isalnum` is locale-blind (C locale): any UTF-8 token with zero ASCII alnum bytes (CJK, Cyrillic, Hebrew, `é` alone, emoji) is classified as isolated punctuation → the whole caption is dropped. | All non-Latin captions silently lost | UTF-8-aware alnum check, or restrict "isolated punctuation" to ASCII punctuation only |
+| **High** | `vw_hallucination_filter.c:54-68` + `vw_segment_builder.c:250` | Substring match over the tag list + musical-note `strstr`: a real sentence containing `[music]`/`♪` (whisper injects these mid-segment) drops the ENTIRE segment. | Legitimate dialogue with an embedded cue is lost | Require the tag to BE the trimmed segment (or match standalone tokens), not a substring |
+| **Medium** | `vw_hallucination_filter.c:59-68` | Unguarded substring matching: false positives (`"He introduced [music] loudly"`) and false negatives (bare `Applause`/`music` cues without delimiters slip through); malformed delimiters (`[ music ]`, `[MUSIC.)`) unrecognized | Inconsistent suppression | Whole-token/standalone-sentence matching + tolerant delimiters |
+| **Medium** | `vw_vad.c` / `vw_worker.c` (B1) | `whisper_vad_detect_speech` resets LSTM state every window (whisper.cpp:5183-5189); worker resets are redundant; ~1s of preceding context lost per window | Slightly degraded VAD edge accuracy | Use `whisper_vad_detect_speech_no_reset` + reset only on seek/pause (whisper.h:719-721) |
+| **Medium** | `vw_whisper_engine.c:78-80` (B2) | `logprob_thold` claimed in the plan/design diagram but never wired (default -1.0 disabled) | Low-confidence segments rely on Tier-2/Tier-3 only | Set `logprob_thold = -1.0f` explicitly or drop the claim |
+| **Medium** | `vw_vad.c:14-19` + worker init (B3) | Silent energy fallback when an EXPLICIT `--vad-model` fails to load (INFO only, no WARN) | Operator believes Silero is active; music/noise may pass | WARN on explicit-model load failure |
+| **Low** | `vw_worker.c` (B4) | Live trailing window (up to 6s) never flushed at EOF (source-mode EOF flush exists) | End-of-stream captions lost | Pre-existing, not a 17e.1 regression — track separately |
+| **Low** | `vw_worker.c:555/663/696` (B5/B6) | Worker gate `>= 0.60` vs whisper `>` mismatch at exactly 0.60; `text_utf8` guard dead (getter returns `""`) | Negligible | Align threshold; drop dead guard |
+| **Low** | `vw_hallucination_filter.c:59,62` | Duplicate `(applause)` entry; `is_non_speech_tag(NULL)` false vs `is_phantom_text(NULL)` true asymmetry | Maintenance | Dedup; document asymmetry |
+
+### Architectural & Operational Risks
+
+| Category | Risk Description | Affected Files | Mitigation |
+| --- | --- | --- | --- |
+| **VAD cost** | Plan evidence claims `< 0.5 ms/window`; Silero GGML on CPU per 8s window is likely tens of ms on the single-threaded worker loop | vw_vad.c, vw_worker.c | Measure; state backend (CPU vs GPU); keep energy fallback path |
+| **Multilingual** | H1 blocks all non-Latin captions — conflicts with the roadmap's future multilingual translation (M4 Step 22) | vw_hallucination_filter.c | Fix UTF-8 handling now |
+| **Filter strictness** | H2's drop-everything-on-embedded-tag trades hallucination suppression for dialogue loss | vw_hallucination_filter.c, vw_segment_builder.c | Standalone-token matching + regression tests |
+| **Streaming VAD** | Per-window reset (B1) weakens Silero's context; `no_reset` + explicit resets is the intended streaming pattern | vw_vad.c, vw_worker.c | Adopt `_no_reset` |
+
+### Code Style & Quality Nitpicks
+
+| Issue Type | File & Line | Description | Recommendation |
+| --- | --- | --- | --- |
+| Redundant duplicate | `vw_hallucination_filter.c:59,62` | `(applause)` listed twice | Remove one |
+| Dead guard | `vw_worker.c:555/663/696` | `&& seg_info.text_utf8` always true (getter returns `""`) | Remove |
+| Doc drift | plan Evidence §"< 0.5 ms" | Unverified claim | Replace with measured value |
+
+---
+
+*End of Part 4 (this document = the Step 17d.1 review above + Part 4 for Step 17e.1 vs milestone-3). Scout-verified: implementation functionally sound (no crashes, all 3 sites wired, Tier-2 pre-builder, graceful fallback); two HIGH filter defects (locale-blind `isalnum` drops non-Latin captions; substring tag match drops segments with embedded cues) should be fixed before merge.*
