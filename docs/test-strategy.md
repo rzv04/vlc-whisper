@@ -74,6 +74,8 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/test_vad.c` (17e.1): pure silence, low-level ambient static (<0.005 RMS), speech tone/wave RMS energy detection, NULL context fallback, partial window sample counts, NULL safety for reset/free, model-gated Silero VAD GGML inference on real 16kHz speech fixtures (`jfk.wav`), and Strategy C VAD-guided non-overlapping audio chunk boundary finding (`vw_vad_find_chunk_boundary`) across pure silence, natural dialogue pauses, continuous speech clamping, and EOF tails.
 - `tests/unit/test_whisper_engine.c` (17e.1): `no_speech_prob` float extraction via `whisper_full_get_segment_no_speech_prob` and verification that $P(\text{no\_speech}) \in [0.0, 1.0]$.
 - `tests/unit/test_worker_config.c` (17e.1): `--vad-model <path>` CLI option parsing, unknown option rejection, and `vw_worker_config_autodiscover_vad` searching alongside `--model` and worker binary.
+- `tests/unit/test_caption_presenter.c` (17e.2): `VW_CAPTION_MIN_DISPLAY_DURATION_US` (1.0s) display floor enforcement on sub-second cues, wall-clock floor scaling across variable playback rates ($0.5\times$, $1.0\times$, $2.0\times$), long speech duration preservation ($> 1.0\text{s}$), and OSD fallback minimum floor.
+- `tests/unit/test_whisper_engine.c` (17e.2): deterministic greedy decoding verification (identical PCM buffer transcribes to identical segment counts, timestamps, and UTF-8 text on repeat passes) and bounded decoding parameters (`temperature = 0.0f`, `temperature_inc = 0.2f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`).
 
 ## Performance contract
 

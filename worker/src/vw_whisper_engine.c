@@ -68,17 +68,25 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   if (!engine || !engine->ctx || !pcm32 || sample_count == 0) return false;
 
   struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-  wparams.print_progress = false;
+  wparams.strategy = WHISPER_SAMPLING_GREEDY;
+  wparams.temperature = 0.0f;
+  wparams.temperature_inc = 0.2f;  // Explicit bounded temperature fallback (<= 5 passes)
+  wparams.entropy_thold = 2.40f;   // Shannon entropy gate over last 32 tokens
+  wparams.logprob_thold = -1.00f;
+  wparams.no_speech_thold = 0.60f;
+  wparams.no_context = true;       // Disables within-window segment prompt conditioning
+  wparams.single_segment = false;  // Emits discrete sub-segments for phrase-by-phrase timing
+  wparams.suppress_blank = true;
+  wparams.suppress_nst = true;  // Suppresses non-speech sound tokens at logit level
   wparams.print_special = false;
-  wparams.print_realtime = false;
-  wparams.print_timestamps = false;
+  wparams.max_len = 0;  // Natural transformer acoustic boundaries
+  wparams.token_timestamps = false;
   wparams.translate = false;
   wparams.language = "en";
   wparams.n_threads = 4;
-  wparams.suppress_nst = true;
-  wparams.suppress_blank = true;
-  wparams.no_speech_thold = 0.60f;
-  wparams.logprob_thold = -1.0f;
+  wparams.print_progress = false;
+  wparams.print_realtime = false;
+  wparams.print_timestamps = false;
 
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;

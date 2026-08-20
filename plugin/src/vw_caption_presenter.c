@@ -145,6 +145,9 @@ bool vw_caption_presenter_display(void* p_filter_ptr, const char* text, int64_t 
   if (!text || duration_us <= 0) {
     return false;
   }
+  if (duration_us < VW_CAPTION_MIN_DISPLAY_DURATION_US) {
+    duration_us = VW_CAPTION_MIN_DISPLAY_DURATION_US;
+  }
   filter_t* p_filter = (filter_t*)p_filter_ptr;
   if (!p_filter) {
     // Standalone unit test mode without live VLC object hierarchy
@@ -159,11 +162,25 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   if (!segment || !segment->text_utf8) {
     return false;
   }
-  int64_t duration_us = segment->end_pts_us - segment->start_pts_us;
-  if (duration_us <= 0) {
-    duration_us = 2000000LL;  // 2 seconds default duration
+
+  float rate = 1.0f;
+  if (presenter && presenter->p_filter_ctx) {
+    vlc_value_t rval;
+    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+      rate = rval.f_float;
+    }
   }
-  (void)input_time_us;  // Reserved: media-domain scheduling anchor for 17c look-ahead (see render_spu).
+
+  int64_t raw_duration_us = segment->end_pts_us - segment->start_pts_us;
+  int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
+  int64_t duration_us;
+  if (raw_duration_us <= 0) {
+    duration_us = 2000000LL;  // 2 seconds default fallback
+  } else if (raw_duration_us < min_media_floor_us) {
+    duration_us = min_media_floor_us;  // Clamped to at least 1.0s wall-clock floor
+  } else {
+    duration_us = raw_duration_us;
+  }
 
   if (!presenter || !presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy
@@ -202,14 +219,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   bool rendered = false;
   int64_t start_tick = 0;
   int64_t stop_tick = 0;
-  float rate = 1.0f;
-  if (presenter->p_filter_ctx) {
-    vlc_value_t rval;
-    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
-      rate = rval.f_float;
-    }
-  }
-  int64_t dur_wallclock_us = (int64_t)((double)(duration_us > 0 ? duration_us : 2000000LL) / (double)rate);
+  int64_t dur_wallclock_us = (int64_t)((double)duration_us / (double)rate);
 
   if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
     int64_t now_tick = (int64_t)mdate();
