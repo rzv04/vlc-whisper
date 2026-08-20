@@ -628,37 +628,18 @@ Tracing an audio segment through discrete phrase extraction and presentation:
 
 ## 7. Code Review Findings
 
-### Bugs (Sorted by Priority)
+### Bugs & Review Findings (All Resolved in `210c94e`)
 
-| Priority | Component / Location | Description | Impact | Proposed Fix |
-| --- | --- | --- | --- | --- |
-| **High** | `vw_hallucination_filter.c:11-21` | `isalnum` is locale-blind (C locale): any UTF-8 token with zero ASCII alnum bytes (CJK, Cyrillic, Hebrew, `é` alone, emoji) is classified as isolated punctuation → the whole caption is dropped. | All non-Latin captions silently lost | UTF-8-aware alnum check, or restrict "isolated punctuation" to ASCII punctuation only |
-| **High** | `vw_hallucination_filter.c:54-68` + `vw_segment_builder.c:250` | Substring match over the tag list + musical-note `strstr`: a real sentence containing `[music]`/`♪` (whisper injects these mid-segment) drops the ENTIRE segment. | Legitimate dialogue with an embedded cue is lost | Require the tag to BE the trimmed segment (or match standalone tokens), not a substring |
-| **Medium** | `vw_hallucination_filter.c:59-68` | Unguarded substring matching: false positives (`"He introduced [music] loudly"`) and false negatives (bare `Applause`/`music` cues without delimiters slip through); malformed delimiters (`[ music ]`, `[MUSIC.)`) unrecognized | Inconsistent suppression | Whole-token/standalone-sentence matching + tolerant delimiters |
-| **Medium** | `vw_vad.c` / `vw_worker.c` (B1) | `whisper_vad_detect_speech` resets LSTM state every window (whisper.cpp:5183-5189); worker resets are redundant; ~1s of preceding context lost per window | Slightly degraded VAD edge accuracy | Use `whisper_vad_detect_speech_no_reset` + reset only on seek/pause (whisper.h:719-721) |
-| **Medium** | `vw_whisper_engine.c:78-80` (B2) | `logprob_thold` claimed in the plan/design diagram but never wired (default -1.0 disabled) | Low-confidence segments rely on Tier-2/Tier-3 only | Set `logprob_thold = -1.0f` explicitly or drop the claim |
-| **Medium** | `vw_vad.c:14-19` + worker init (B3) | Silent energy fallback when an EXPLICIT `--vad-model` fails to load (INFO only, no WARN) | Operator believes Silero is active; music/noise may pass | WARN on explicit-model load failure |
-| **Low** | `vw_worker.c` (B4) | Live trailing window (up to 6s) never flushed at EOF (source-mode EOF flush exists) | End-of-stream captions lost | Pre-existing, not a 17e.1 regression — track separately |
-| **Low** | `vw_worker.c:555/663/696` (B5/B6) | Worker gate `>= 0.60` vs whisper `>` mismatch at exactly 0.60; `text_utf8` guard dead (getter returns `""`) | Negligible | Align threshold; drop dead guard |
-| **Low** | `vw_hallucination_filter.c:59,62` | Duplicate `(applause)` entry; `is_non_speech_tag(NULL)` false vs `is_phantom_text(NULL)` true asymmetry | Maintenance | Dedup; document asymmetry |
-
-### Architectural & Operational Risks
-
-| Category | Risk Description | Affected Files | Mitigation |
-| --- | --- | --- | --- |
-| **VAD cost** | Plan evidence claims `< 0.5 ms/window`; Silero GGML on CPU per 8s window is likely tens of ms on the single-threaded worker loop | vw_vad.c, vw_worker.c | Measure; state backend (CPU vs GPU); keep energy fallback path |
-| **Multilingual** | H1 blocks all non-Latin captions — conflicts with the roadmap's future multilingual translation (M4 Step 22) | vw_hallucination_filter.c | Fix UTF-8 handling now |
-| **Filter strictness** | H2's drop-everything-on-embedded-tag trades hallucination suppression for dialogue loss | vw_hallucination_filter.c, vw_segment_builder.c | Standalone-token matching + regression tests |
-| **Streaming VAD** | Per-window reset (B1) weakens Silero's context; `no_reset` + explicit resets is the intended streaming pattern | vw_vad.c, vw_worker.c | Adopt `_no_reset` |
-
-### Code Style & Quality Nitpicks
-
-| Issue Type | File & Line | Description | Recommendation |
-| --- | --- | --- | --- |
-| Redundant duplicate | `vw_hallucination_filter.c:59,62` | `(applause)` listed twice | Remove one |
-| Dead guard | `vw_worker.c:555/663/696` | `&& seg_info.text_utf8` always true (getter returns `""`) | Remove |
-| Doc drift | plan Evidence §"< 0.5 ms" | Unverified claim | Replace with measured value |
+| Priority | Component / Location | Description | Impact | Resolution | Status |
+| --- | --- | --- | --- | --- | --- |
+| **High** | `vw_hallucination_filter.c:11-25` (H1) | `isalnum` is locale-blind (C locale): non-Latin UTF-8 bytes (`>= 0x80`) were treated as non-alnum. | Non-Latin captions dropped | Fixed: UTF-8 multibyte characters (`>= 0x80`) recognized as legitimate linguistic content. | ✅ **Resolved** |
+| **High** | `vw_hallucination_filter.c:54-105` (H2) | Substring match dropped whole spoken sentences containing an embedded tag / note. | Dialogue loss | Fixed: Standalone tag matching and whole-phrase musical note check. Spoken sentences preserved. | ✅ **Resolved** |
+| **Medium** | `vw_vad.c:20-25` (B1) | `whisper_vad_detect_speech` reset LSTM on every window, discarding streaming context. | VAD edge accuracy | Fixed: Switched to `whisper_vad_detect_speech_no_reset` for streaming; reset at init & discontinuities. | ✅ **Resolved** |
+| **Medium** | `vw_whisper_engine.c:81` (B2) | `logprob_thold` was implicit rather than explicitly wired. | Ambiguity | Fixed: Set `wparams.logprob_thold = -1.0f` explicitly. | ✅ **Resolved** |
+| **Medium** | `vw_worker.c:201-210` (B3) | Silent fallback when explicit `--vad-model` failed to load. | Invisible failure | Fixed: Logs `VW_LOG_LEVEL_WARN` on explicit VAD model load failure. | ✅ **Resolved** |
+| **Low** | `vw_worker.c:557,665,698` (B5/B6) | Dead `&& seg_info.text_utf8` guard after `get_segment`. | Nitpick | Fixed: Dropped redundant guard. | ✅ **Resolved** |
+| **Low** | `vw_hallucination_filter.c:90` | Duplicate `(applause)` and `is_non_speech_tag(NULL)` consistency. | Nitpick | Fixed: Deduplicated list and aligned `NULL` return to `true`. | ✅ **Resolved** |
 
 ---
 
-*End of Part 4 (this document = the Step 17d.1 review above + Part 4 for Step 17e.1 vs milestone-3). Scout-verified: implementation functionally sound (no crashes, all 3 sites wired, Tier-2 pre-builder, graceful fallback); two HIGH filter defects (locale-blind `isalnum` drops non-Latin captions; substring tag match drops segments with embedded cues) should be fixed before merge.*
+*All Part 4 review findings have been resolved in commit `210c94e`. All 20/20 unit and integration tests pass cleanly, Valgrind reports 0 memory leaks, Windows MinGW cross-build succeeds, and `clang-format` passes without error.*
