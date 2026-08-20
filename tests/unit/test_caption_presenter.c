@@ -279,11 +279,20 @@ int main(void) {
   assert(g_last_subpic_start == 100000000LL + 20000000LL);  // 100s + (10s media / 0.5) = 120s
   assert(g_last_subpic_stop == 100000000LL + 24000000LL);   // 120s + (2s media / 0.5) = 124s
 
+  // Test 13: SPU channel persistence across 10 rapid blank() calls
+  g_flush_calls = 0;
+  for (int i = 0; i < 10; i++) {
+    vw_caption_presenter_blank(&spu_presenter);
+  }
+  assert(g_flush_calls == 20);  // 10 SPU channel 43 flushes + 10 OSD channel 1 flushes
+  assert(spu_presenter.spu_channel_id == 43);
+  assert(spu_presenter.spu_channel_registered == true);
+
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (12/12 tests)\n");
+  printf("test_caption_presenter PASSED (13/13 tests)\n");
   return 0;
 }

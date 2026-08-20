@@ -20,6 +20,7 @@
 #include "vw_caption_presenter.h"
 #include "vw_log.h"
 #include "vw_platform.h"
+#include "vw_protocol_util.h"
 
 // Walk parent chain and children list to find input_thread and retrieve held vout reference
 static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
@@ -214,14 +215,14 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
     int64_t now_tick = (int64_t)mdate();
     int64_t lead_us = 0;
     if (input_time_us > 0 && segment->start_pts_us > input_time_us) {
-      int64_t diff = segment->start_pts_us - input_time_us;
+      int64_t diff = vw_saturating_sub_i64(segment->start_pts_us, input_time_us);
       lead_us = (int64_t)((double)diff / (double)rate);
       if (lead_us > 60000000LL) {
         lead_us = 60000000LL;  // Cap at 60s max wall-clock lead horizon
       }
     }
-    start_tick = now_tick + lead_us;
-    stop_tick = start_tick + dur_wallclock_us;
+    start_tick = vw_saturating_add_i64(now_tick, lead_us);
+    stop_tick = vw_saturating_add_i64(start_tick, dur_wallclock_us);
     rendered = vw_caption_presenter_render_spu(presenter, vout, segment->text_utf8, start_tick, stop_tick);
   }
 

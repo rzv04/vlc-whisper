@@ -49,13 +49,13 @@ int main(void) {
 #else
   strncpy(config.pipe_name, "test_lifecycle_socket", sizeof(config.pipe_name) - 1);
 #endif
-  for (int i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
+  for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 
   pthread_t thread;
   int err = pthread_create(&thread, NULL, worker_thread, &config);
   (void)err;
   assert(err == 0);
-  usleep(100000);
+  vw_platform_sleep_ms(100);
 
   // 1. Try with wrong token: handshake must fail and the worker must exit
   uint8_t bad_token[VW_AUTH_TOKEN_BYTES] = {0};
@@ -70,7 +70,7 @@ int main(void) {
   err = pthread_create(&thread, NULL, worker_thread, &config);
   (void)err;
   assert(err == 0);
-  usleep(100000);
+  vw_platform_sleep_ms(100);
 
   // 2. Connect with good token (handshake inside), send START_SESSION, then SHUTDOWN
   vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.auth_token, NULL);
@@ -101,7 +101,7 @@ int main(void) {
   vw_ipc_send((vw_ipc_handle_t*)client->pipe_handle, hdr_buf, 20);
   vw_ipc_send((vw_ipc_handle_t*)client->pipe_handle, payload_buf, written);
 
-  usleep(50000);
+  vw_platform_sleep_ms(50);
 
   // Now send SHUTDOWN
   hdr.type = VW_MSG_SHUTDOWN;
@@ -125,7 +125,7 @@ int main(void) {
   err = pthread_create(&thread, NULL, worker_thread, &config);
   (void)err;
   assert(err == 0);
-  usleep(100000);
+  vw_platform_sleep_ms(100);
 
   vw_ipc_handle_t* raw = vw_ipc_connect(config.pipe_name);
   EXPECT(raw != NULL);
@@ -151,7 +151,7 @@ int main(void) {
     err = pthread_create(&thread, NULL, worker_thread, &no_model);
     (void)err;
     assert(err == 0);
-    usleep(100000);
+    vw_platform_sleep_ms(100);
 
     vw_worker_client_t* c = vw_worker_client_launch_and_connect(NULL, no_model.pipe_name, no_model.auth_token, NULL);
     EXPECT(c != NULL);
@@ -195,7 +195,7 @@ int main(void) {
     err = pthread_create(&thread, NULL, worker_thread, &with_model);
     (void)err;
     assert(err == 0);
-    usleep(100000);
+    vw_platform_sleep_ms(100);
 
     vw_worker_client_t* c =
         vw_worker_client_launch_and_connect(NULL, with_model.pipe_name, with_model.auth_token, NULL);
@@ -233,6 +233,18 @@ int main(void) {
       };
       EXPECT(vw_worker_client_send_audio(c, &chunk2));
     }
+    // Step 17d: Lightweight fire-and-forget POSITION seek re-sync without teardown
+    EXPECT(vw_worker_client_send_position(c, 8000000LL, 8000000LL, 1.0f, VW_POSITION_FLAG_SEEK));
+
+    // Step 17d: Rapid scrub burst (15 seek frames in <50ms)
+    for (int s = 0; s < 15; s++) {
+      int64_t scrub_pts = 10000000LL + (int64_t)s * 1000000LL;
+      EXPECT(vw_worker_client_send_position(c, scrub_pts, scrub_pts, 1.0f, VW_POSITION_FLAG_SEEK));
+    }
+
+    // Step 17d: In-session media swap without explicit STOP (new session_id)
+    EXPECT(vw_worker_client_start_session(c, 0, "tiny.en", NULL));
+
     vw_worker_client_stop_session(c, 0);
     vw_worker_client_shutdown(c);
     pthread_join(thread, &ret_val);

@@ -63,6 +63,10 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/test_protocol_codec.c` & `test_protocol_validate.c` (17c): Protocol v1.1 serialization, deserialization, and schema validation for `VW_CAPABILITY_SOURCE_MODE`, `source_url` in `vw_msg_start_t`, and `VW_MSG_POSITION` (`vw_msg_position_t`).
 - `tests/unit/test_source_decoder.c` (17c): Media Foundation (`vw_source_decoder_mf.c`) and FFmpeg (`vw_source_decoder_ffmpeg.c`) native audio demuxer tests: container format detection, 16kHz mono S16LE extraction, stream timestamp calculation, seeking (`IMFSourceReader::SetCurrentPosition` / `av_seek_frame`), and EOF handling.
 - `tests/unit/test_caption_presenter.c` (17c): Look-ahead future timestamp SPU scheduling: maps future segment media PTS relative to `input_time_us` into future OSD date domain (`mdate() + lead_us`), verifying zero perceived caption display latency.
+- `tests/unit/test_protocol_util.c` (17d): 64-bit saturating addition and subtraction (`vw_saturating_add_i64` / `vw_saturating_sub_i64`) boundary verification across `INT64_MAX`, `INT64_MIN`, overflow/underflow clamping, and sign permutations.
+- `tests/unit/test_protocol_codec.c` & `test_protocol_validate.c` (17d): Protocol v1.2 serialization and schema validation: 1-byte `source_active` payload in `VW_MSG_STARTED`, legal media-range validation for `VW_MSG_POSITION` (`current_pts_us` and `input_time_us` bounded in `[-10s, 10 years]`), finite positive playback rate (`isfinite` and in `(0, 16]`), and strict position flag bitmask validation (`VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED`).
+- `tests/unit/test_caption_presenter.c` (17d): SPU subpicture channel persistence across repeated blanking flushes, rate-scaled lead clamping, and pause transition blanking.
+- `tests/integration/test_worker_lifecycle.c` (17d): Fire-and-forget `VW_MSG_POSITION` seek repositioning without session teardown, 15-frame rapid scrub burst coalescing (<50ms), and in-session media swap across distinct session IDs.
 
 ## Performance contract
 

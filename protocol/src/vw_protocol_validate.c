@@ -8,6 +8,7 @@ bool vw_protocol_validate_header(const vw_frame_header_t* header) {
   return true;
 }
 
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -75,7 +76,7 @@ static bool is_empty_or_whitespace(const char* s, size_t len) {
 }
 
 bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
-  if (!payload && type != VW_MSG_SHUTDOWN && type != VW_MSG_STARTED) return false;
+  if (!payload && type != VW_MSG_SHUTDOWN) return false;
   switch (type) {
     case VW_MSG_HELLO: {
       const vw_msg_hello_t* p = (const vw_msg_hello_t*)payload;
@@ -107,11 +108,18 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
     case VW_MSG_STATUS:
     case VW_MSG_ERROR:
     case VW_MSG_SHUTDOWN:
-    case VW_MSG_STARTED:
       return true;
+    case VW_MSG_STARTED: {
+      const vw_msg_started_t* p = (const vw_msg_started_t*)payload;
+      if (p->source_active != VW_SOURCE_ACTIVE_INACTIVE && p->source_active != VW_SOURCE_ACTIVE_ACTIVE) return false;
+      return true;
+    }
     case VW_MSG_POSITION: {
       const vw_msg_position_t* p = (const vw_msg_position_t*)payload;
-      if (!(p->playback_rate > 0.0f && p->playback_rate <= 16.0f)) return false;
+      if (p->current_pts_us < -10000000LL || p->current_pts_us > 315360000000000LL) return false;
+      if (p->input_time_us < -1LL || p->input_time_us > 315360000000000LL) return false;
+      if (!isfinite(p->playback_rate) || p->playback_rate <= 0.0f || p->playback_rate > 16.0f) return false;
+      if ((p->flags & ~(VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED)) != 0) return false;
       return true;
     }
     case VW_MSG_CAPTION_SEGMENT: {

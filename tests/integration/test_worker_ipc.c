@@ -36,7 +36,7 @@ int main(void) {
   assert(err == 0);
 
   // Give listener time to bind
-  usleep(100000);
+  vw_platform_sleep_ms(100);
 
   vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, config.pipe_name, config.auth_token, NULL);
   EXPECT(client != NULL);  // HELLO handshake completed inside
