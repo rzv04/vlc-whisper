@@ -3,7 +3,7 @@
 # Task: Subtitle Pacing, Minimum Reading Floor & Decoding Optimization
 
 ## Goal
-Eliminate unreadable sub-second "flash cues" by enforcing a minimum subtitle display duration floor ($\ge 1.0\,\text{s} = 1,000,000\,\mu\text{s}$) with consecutive cue overlap clamping, and configure whisper.cpp decoding parameters (`temperature_inc = 0.0f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`) for strictly deterministic single-pass inference without latency explosions or hallucination cascades.
+Eliminate unreadable sub-second "flash cues" by enforcing a **wall-clock minimum subtitle display floor** ($\ge 1.0\,\text{s}$) in the SPU caption presenter, with consecutive-cue clamping so short cues extend only up to the next known cue's start, and pin the whisper.cpp decoding configuration to **deterministic greedy inference with bounded temperature fallback** — stable acoustic output without latency explosions or silent caption drops.
 
 ---
 
@@ -12,55 +12,48 @@ Eliminate unreadable sub-second "flash cues" by enforcing a minimum subtitle dis
   - `docs/decisions.md` (`ADR-016` Native SPU Pipeline, `ADR-017` Phrase-by-Phrase Subtitle Timing, `ADR-018` Whole-Phrase Deduplication, `ADR-019` Multi-Tier VAD, `ADR-020` No-Hop Lookahead Chunking, and new `ADR-021`).
   - `docs/architecture.md`, `docs/api-contracts.md`, `docs/source-layout.md`, `docs/test-strategy.md`, `docs/roadmap.md`.
 - **VLC/Worker/Protocol Version Affected**:
-  - Protocol v1.2 (framing unchanged; wire payload timestamps adhere to minimum duration and bounded pacing).
+  - Protocol v1.2 (framing and wire timestamps unchanged — pacing is presentation-side only).
+- **Review grounding**: this plan incorporates the Step 17e.2 review objections O1–O9 (see "Review Objections & Resolutions"); the engine section was verified against the vendored `whisper.cpp` (`worker/third_party/whisper.cpp/src/whisper.cpp`) defaults and the current `vw_whisper_engine.c`.
 - **Assumptions & Explicit Non-Goals**:
-  - *Non-goal*: Multi-pass temperature sampling search loops (which multiply compute by up to $6\times$).
+  - *Non-goal*: Multi-pass temperature sampling as the default path (retained only as a *bounded* fallback for degenerate sequences, per roadmap 17e.2 "temperature fallback").
   - *Non-goal*: Dynamic character-level text wrapping or font resizing (handled natively by VLC SPU renderer).
-  - *Non-goal*: Modification of acoustic coverage tracking in `vw_segment_builder` (acoustic coverage remains true to audio boundaries while display duration is paced for human visual reading).
+  - *Non-goal*: Modification of acoustic coverage tracking or segment emission in `vw_segment_builder` (acoustic coverage remains true to audio boundaries; pacing is a presentation concern with a single owner — the presenter).
+  - *Non-goal*: Any change to `temperature_inc = 0.0` single-pass mode (it would convert whisper's entropy retry into a silent segment drop — see O2/O3).
 
 ---
 
 ## Scope
 
 ### In Scope
-1. **Minimum Subtitle Display Duration Floor (`VW_CAPTION_MIN_DISPLAY_DURATION_US = 1000000LL`)**:
-   - In `plugin/src/vw_caption_presenter.c`: clamp any short subtitle cue ($0 < \text{duration} < 1.0\,\text{s}$) to $1.0\,\text{s}$ minimum display floor before SPU/OSD scheduling.
-   - In `worker/src/vw_segment_builder.c`: for lookahead multi-phrase batches, extend short preceding cues up to the $1.0\,\text{s}$ floor while clamping at the incoming cue's `emit_start` to prevent visual cue collisions.
-2. **Deterministic Whisper Decoding Configuration (`worker/src/vw_whisper_engine.c`)**:
-   - `wparams.strategy = WHISPER_SAMPLING_GREEDY;`
-   - `wparams.temperature = 0.0f;`
-   - `wparams.temperature_inc = 0.0f;` (disables multi-pass retry loops, ensuring strictly bounded single-pass execution).
-   - `wparams.entropy_thold = 2.40f;` (halts low-entropy token repetition loops).
-   - `wparams.logprob_thold = -1.00f;`
-   - `wparams.no_speech_thold = 0.60f;`
-   - `wparams.no_context = true;` (isolates independent audio windows, preventing hallucination carryover across sliding hops).
-   - `wparams.single_segment = false;` (emits discrete phrases for phrase-by-phrase timing).
-   - `wparams.suppress_blank = true;`
-   - `wparams.suppress_nst = true;` (suppresses non-speech tokens at logit level).
-   - `wparams.print_special = false;`
-   - `wparams.max_len = 0;` (preserves natural transformer phrase boundaries).
-   - `wparams.token_timestamps = false;`
+1. **Minimum Subtitle Display Duration Floor (presenter-owned)** in `plugin/src/vw_caption_presenter.c` + `plugin/include/vw_caption_presenter.h`:
+   - Define `VW_CAPTION_MIN_DISPLAY_DURATION_US = 1000000LL` (plugin tree only — single owner).
+   - Wall-clock floor, rate-scaled: `duration_us = max(duration_us, (int64_t)(VW_CAPTION_MIN_DISPLAY_DURATION_US * rate))` before the existing `/rate` wall-clock conversion, so a cue displays **at least 1.0 s of wall time at any playback rate** (0.5× → 0.5 s media floor, 2.0× → 2.0 s media floor).
+   - Consecutive-cue clamping at schedule time: when the next cue is already queued, clamp `i_stop = min(i_start + floor_duration, next_scheduled_i_start)`. A cue arriving *after* the current one was scheduled replaces it (VLC SPU newest-wins) — the floor is best-effort for cues whose successor is not yet known; documented behavior, test-pinned.
+   - OSD fallback path: apply the same floor (`max(dur, 1.0 s)`; rate scaling is N/A on the OSD path).
+2. **Deterministic Whisper Decoding Configuration** (`worker/src/vw_whisper_engine.c`) — the *actual delta* plus explicit verify/keep, not a 14-param reconfiguration (O1):
+   - **Changed/explicit** (only real functional line):
+     - `wparams.temperature_inc = 0.2f;` — explicit bounded fallback (O2/O3): whisper builds the temperature ladder `[0.0, 0.2, …, <1.0]` (≤ 5 passes, hardcoded cap at `1.0f + 1e-6f`), each pass runs a single greedy decoder (`greedy.best_of = -1` → `n_decoders = 1`). The retry fires only when `entropy < 2.4` on a >32-token degenerate sequence — the anti-repetition mechanism keeps its *retry* semantics and cannot silently drop captions (O6).
+   - **Verify already set (17e.1 code)**: `strategy = WHISPER_SAMPLING_GREEDY`, `temperature = 0.0f`, `no_speech_thold = 0.60f`, `suppress_nst = true`, `suppress_blank = true`, `logprob_thold = -1.0f`.
+   - **Explicit vendored defaults (set with a comment for self-documentation; no behavior change)**: `no_context = true` (correct rationale — see O7), `entropy_thold = 2.4f`, `max_len = 0`, `single_segment = false`, `print_special = false`, `token_timestamps = false`.
+   - **Determinism claim (corrected)**: greedy token selection is argmax (no RNG in token choice; `std::mt19937` only seeds decoders and is unused for greedy) → the same audio window yields identical segments *with or without* the retry ladder. Determinism does not require `temperature_inc = 0.0`.
 3. **Comprehensive Unit & Integration Test Suites**:
-   - Presenter tests in `tests/unit/test_caption_presenter.c` covering $1.0\,\text{s}$ floor, rate scaling ($0.5\times$, $2.0\times$), lookahead lead pacing, and OSD fallback.
-   - Segment builder tests in `tests/unit/test_segment_builder.c` covering short cue extension, consecutive cue clamping, and silence gap preservation.
-   - Engine tests in `tests/unit/test_whisper_engine.c` covering decoding determinism and `no_context` isolation.
+   - Presenter tests in `tests/unit/test_caption_presenter.c`: 1.0 s wall floor at rates $0.5\times$, $1.0\times$, $2.0\times$; long-cue full acoustic duration; consecutive-cue clamp (cue B queued while A scheduled → A's `i_stop` clamped to B's `i_start`); later-arrival replacement (B replaces A; no visual overlap); OSD fallback floor; existing lead-pacing tests.
+   - Engine tests in `tests/unit/test_whisper_engine.c`: determinism (same PCM → identical segments across runs); bounded retry on a degenerate repetitive input (assert pass count ≤ 5 and no silent drop — pins the entropy gate semantics, O3/O9); no-context within-window isolation.
 4. **Documentation & ADR-021**:
-   - Document **ADR-021** (Subtitle Reading Floor & Deterministic Whisper Decoding Optimization) in `docs/decisions.md`.
+   - Document **ADR-021** (Subtitle Reading Floor & Deterministic Whisper Decoding) in `docs/decisions.md`.
    - Update `docs/architecture.md`, `docs/source-layout.md`, `docs/test-strategy.md`, and `docs/roadmap.md`.
 
 ### Out of Scope
 - Font styling, color selection, or user subtitle positioning preferences (deferred to Milestone 4 settings GUI).
 - Beam search decoding (too heavy for real-time streaming).
+- Builder-side pacing (`vw_segment_builder` unchanged — see O5: single owner in the presenter).
 
 ### Files Expected to Change
 - `plugin/include/vw_caption_presenter.h`
 - `plugin/src/vw_caption_presenter.c`
-- `worker/include/vw_segment_builder.h`
-- `worker/src/vw_segment_builder.c`
-- `worker/include/vw_whisper_engine.h`
+- `worker/include/vw_whisper_engine.h` (docstrings only, Rule 11)
 - `worker/src/vw_whisper_engine.c`
 - `tests/unit/test_caption_presenter.c`
-- `tests/unit/test_segment_builder.c`
 - `tests/unit/test_whisper_engine.c`
 - `docs/decisions.md`
 - `docs/architecture.md`
@@ -72,43 +65,58 @@ Eliminate unreadable sub-second "flash cues" by enforcing a minimum subtitle dis
 
 ## Design
 
-### 1. Dual-Layer Duration Pacing Model
+### 1. Single-Owner Duration Pacing Model (presenter)
 
 ```text
-[Whisper Engine]
+[Whisper Engine]  (deterministic greedy + bounded retry)
        │
-       ▼ (discrete phrase: t0, t1)
-[vw_segment_builder] ──> Batch Pacing: extend short cue (dur < 1.0s) up to min(1.0s, next_start - cur_start)
+       ▼ (discrete phrase: t0, t1 — acoustic, untouched)
+[vw_segment_builder]  (unchanged: coverage/dedup/emit, emit_start clamped at covered_end)
        │
-       ▼ (IPC: VW_MSG_CAPTION_SEGMENT)
-[vw_caption_presenter] ──> Universal Display Floor: dur = max(dur, 1.0s)
-       │
+       ▼ (IPC: VW_MSG_CAPTION_SEGMENT, v1.2 framing)
+[vw_caption_presenter]  ──> SOLE pacing owner:
+       │                   1. wall floor: dur = max(dur, 1.0 s × rate)
+       │                   2. next-cue clamp: i_stop = min(i_stop, next_i_start)
        ▼ (Rate Scaling & SPU Scheduling)
 [VLC SPU Pipeline (vout_PutSubpicture)]
   i_start = now_tick + (start_pts - input_time) / rate
-  i_stop  = i_start + dur / rate
+  i_stop  = i_start + dur_wall
 ```
 
-### 2. Pacing & Boundary Formulas
+### 2. Pacing Formulas (presenter)
 
-1. **Presenter Duration Clamping**:
-   $$\text{duration\_us} = \begin{cases} 2\,000\,000\,\mu\text{s} & \text{if } \text{raw\_dur} \le 0 \\ 1\,000\,000\,\mu\text{s} & \text{if } 0 < \text{raw\_dur} < 1\,000\,000\,\mu\text{s} \\ \text{raw\_dur} & \text{if } \text{raw\_dur} \ge 1\,000\,000\,\mu\text{s} \end{cases}$$
+1. **Wall-clock floor (rate-scaled)**:
+   $$\text{duration\_us} = \max\big(\text{raw\_dur},\ \lfloor 1\,000\,000 \times \text{rate} \rfloor\big),\qquad \text{dur\_wall} = \frac{\text{duration\_us}}{\text{rate}} \ge 1\,000\,000\,\mu\text{s}$$
+   (existing `raw_dur ≤ 0 → 2\,000\,000` default retained). At $0.5\times$: floor $= 0.5\,\text{s}$ media → $1.0\,\text{s}$ wall. At $2.0\times$: floor $= 2.0\,\text{s}$ media → $1.0\,\text{s}$ wall.
+2. **Consecutive-cue clamp** (only cues already queued at scheduling time):
+   $$\text{i\_stop}_A = \min\Big(\text{i\_start}_A + \text{dur\_wall}_A,\ \text{i\_start}_{B}\Big)$$
+   where $B$ is the earliest queued successor. If $B$ arrives after $A$ is scheduled, $B$ replaces $A$ (SPU newest-wins) — no visual overlap ever; the floor is best-effort across window boundaries (successor unknown), documented in ADR-021.
 
-2. **Builder Consecutive Cue Clamping**:
-   For consecutive queued cues $A$ and $B$:
-   $$\text{end}_A = \min\Big(\max\big(\text{end}_A, \text{start}_A + 1\,000\,000\,\mu\text{s}\big), \text{start}_B\Big)$$
+---
+
+## Review Objections & Resolutions
+
+| # | Objection | Resolution |
+| --- | --- | --- |
+| O1 | Engine table is ~90% no-op (only `temperature_inc` differed) | §Scope.2 rewritten as the true delta + verify/keep + explicit-default lists |
+| O2 | `temperature_inc = 0.0` contradicts roadmap 17e.2 "temperature fallback" | Fallback retained, explicit `0.2f`, bounded ≤ 5 passes |
+| O3 | `entropy_thold = 2.4` with single pass silently *drops* degenerate segments instead of retrying | Retry ladder kept → entropy gate keeps retry semantics; test pins pass count and no-drop (O9) |
+| O4 | 1.0 s floor was media-time: 0.5 s wall at 2× — flash cue survives | Wall-clock floor `1.0 s × rate` (§Design.2 formula 1); rate tests at 0.5×/1.0×/2.0× |
+| O5 | Two conflicting pacing layers; no owner of the collision constraint; window-boundary seams | Single owner: presenter. Builder untouched; presenter clamps at the next known cue (§Design.2 formula 2); later arrivals replace |
+| O6 | Single-pass + `best_of=-1` removed the only in-window recovery | n_decoders = 1 retained, but the temperature ladder is the recovery path; never a silent drop |
+| O7 | `no_context` rationale false (no cross-call carryover exists) | Rationale corrected: within-window segment-to-segment conditioning disabled; per-call isolation already inherent to `whisper_full` |
+| O8 | `logprob_thold = -1.0` described as disabled; it's a weak real gate | Described correctly: drops segments with `avg_logprobs < -1.0` *and* `no_speech_prob < 0.60` (catastrophic-confidence) |
+| O9 | Tests missed the entropy gate and collision seams; constant shared across processes | Added degenerate-input retry test + presenter collision test; constant lives in the plugin tree only (single owner) |
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] Sub-second cues ($< 1.0\,\text{s}$, e.g. "Yeah", "Right") display for at least $1.0\,\text{s}$ on screen in standard playback.
-- [ ] Consecutive dialogue cues never visually collide or overlap; short cues extend only up to the start of the next cue.
-- [ ] Long speech utterances ($> 1.0\,\text{s}$) display for their full authentic acoustic duration.
-- [ ] Non-1.0 playback rates ($0.5\times$, $2.0\times$) scale subtitle display duration and lead time accurately.
-- [ ] Whisper decoding executes strictly in a single pass (`temperature_inc = 0.0f`), eliminating multi-pass latency spikes.
-- [ ] `no_context = true` prevents previous window hallucinations from contaminating subsequent audio chunks.
-- [ ] `suppress_nst = true`, `suppress_blank = true`, and `entropy_thold = 2.40f` suppress non-speech tokens and repetition loops.
+- [ ] Sub-second cues ($< 1.0\,\text{s}$ wall, e.g. "Yeah", "Right") display for at least $1.0\,\text{s}$ **wall time** at $0.5\times$, $1.0\times$, and $2.0\times$ playback.
+- [ ] Consecutive dialogue cues never visually collide or overlap: a short cue extends only up to the start of the next **already-known** cue; a later-arriving cue replaces the current one.
+- [ ] Long speech utterances ($> 1.0\,\text{s}$) display for their full authentic acoustic duration (scaled by rate).
+- [ ] Whisper decoding is deterministic for a given audio window (greedy argmax), and the temperature fallback is bounded (≤ 5 passes, only on low-entropy degenerate sequences).
+- [ ] `no_context = true` isolates phrases within a window; `suppress_nst`/`suppress_blank` and the entropy gate suppress non-speech tokens and repetition loops **without silently dropping captions**.
 - [ ] 100% of automated unit tests pass across Linux and Windows MinGW targets.
 - [ ] Valgrind memcheck confirms zero memory leaks.
 
@@ -133,7 +141,7 @@ Eliminate unreadable sub-second "flash cues" by enforcing a minimum subtitle dis
    ```
 4. **Code Style Verification**:
    ```bash
-   clang-format --dry-run --Werror plugin/src/vw_caption_presenter.c worker/src/vw_whisper_engine.c worker/src/vw_segment_builder.c tests/unit/test_caption_presenter.c tests/unit/test_whisper_engine.c tests/unit/test_segment_builder.c
+   clang-format --dry-run --Werror plugin/src/vw_caption_presenter.c worker/src/vw_whisper_engine.c tests/unit/test_caption_presenter.c tests/unit/test_whisper_engine.c
    ```
 
 ---
