@@ -172,15 +172,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   }
 
   int64_t raw_duration_us = segment->end_pts_us - segment->start_pts_us;
-  int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
-  int64_t duration_us;
-  if (raw_duration_us <= 0) {
-    duration_us = 2000000LL;  // 2 seconds default fallback
-  } else if (raw_duration_us < min_media_floor_us) {
-    duration_us = min_media_floor_us;  // Clamped to at least 1.0s wall-clock floor
-  } else {
-    duration_us = raw_duration_us;
-  }
+  int64_t duration_us = (raw_duration_us <= 0) ? 2000000LL : raw_duration_us;
 
   if (!presenter || !presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy

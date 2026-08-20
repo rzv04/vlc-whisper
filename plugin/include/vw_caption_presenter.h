@@ -17,18 +17,21 @@ typedef struct vw_caption_presenter {
   bool spu_channel_registered;  // True if spu_channel_id >= 0 and successfully registered with current vout.
 } vw_caption_presenter_t;
 
-// Renders fallback caption text via OSD on the active vout surface with minimum 1.0s display floor when SPU is
-// unavailable.
+// Renders fallback caption text via OSD on the active vout surface when SPU is unavailable,
+// safely locating the target vout thread through the parent filter hierarchy without blocking.
 bool vw_caption_presenter_display(void* p_filter, const char* text, int64_t duration_us);
 
-// Dispatches a transcription segment to the SPU channel with rate-scaled wall-clock minimum floor, falling back to OSD.
+// Dispatches a timed transcription segment to the registered SPU subpicture channel in the OSD clock domain,
+// scaling lead time and duration by playback rate and falling back gracefully to OSDText.
 bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
                                        int64_t input_time_us);
 
-// Blanks active caption overlays by flushing SPU and OSD channels while preserving filter context across user seeks.
+// Blanks currently displayed caption overlays by flushing both private SPU and OSD channels while preserving filter
+// context, guaranteeing clean subtitle erasure across seek jumps before upcoming segments arrive.
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter);
 
-// Flushes caption channels, releases held video output references, and resets presenter context during module teardown.
+// Flushes active caption channels, releases any held video output references, and resets presenter filter context
+// exclusively during module teardown to ensure leak-free destruction without disrupting ongoing video playback.
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter);
 
 #endif  // VW_CAPTION_PRESENTER_H_
