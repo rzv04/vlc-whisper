@@ -51,15 +51,19 @@ static void vw_test_push_and_deduplication(void) {
   assert(builder->count == 1);
   assert(builder->segment_queue[0].segment_id == 1);
   assert(strcmp(builder->segment_queue[0].text_utf8, "The stale smell of old beer") == 0);
+  assert(builder->segment_queue[0].start_pts_us == 0);
+  assert(builder->segment_queue[0].end_pts_us == 2500000);
 
-  // Push exact duplicate text -> should be rejected by deduplication
-  assert(!vw_segment_builder_push_hypothesis(builder, "The stale smell of old beer", 2500000, 5000000));
+  // Push exact duplicate text with matching timestamps -> rejected by deduplication
+  assert(!vw_segment_builder_push_hypothesis(builder, "The stale smell of old beer", 50000, 2500000));
   assert(builder->count == 1);
 
-  // Push overlapping text ("old beer lingers") -> overlap "old beer" trimmed -> "lingers" pushed
-  assert(vw_segment_builder_push_hypothesis(builder, "old beer lingers", 2500000, 5000000));
+  // Push next discrete phrase ("Old beer lingers") -> committed in full with authentic Whisper timestamps
+  assert(vw_segment_builder_push_hypothesis(builder, "Old beer lingers", 2500000, 5000000));
   assert(builder->count == 2);
-  assert(strcmp(builder->segment_queue[1].text_utf8, "lingers") == 0);
+  assert(strcmp(builder->segment_queue[1].text_utf8, "Old beer lingers") == 0);
+  assert(builder->segment_queue[1].start_pts_us == 2500000);
+  assert(builder->segment_queue[1].end_pts_us == 5000000);
 
   vw_segment_builder_free(builder);
 }
@@ -239,43 +243,33 @@ static void vw_test_clear_resets_history_and_queue(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_trimmed_caption_timing(void) {
+static void vw_test_discrete_phrase_authentic_timing(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
-  // Push full sentence: "the quick brown fox" from 0 to 4s
-  assert(vw_segment_builder_push_hypothesis(builder, "the quick brown fox", 0LL, 4000000LL));
+  // Push discrete sentence: "Where are you from, Victoria?" from 0.5s to 2.8s
+  assert(vw_segment_builder_push_hypothesis(builder, "Where are you from, Victoria?", 500000LL, 2800000LL));
 
   vw_caption_segment_t out;
   assert(vw_segment_builder_pop(builder, &out));
-  assert(strcmp(out.text_utf8, "the quick brown fox") == 0);
-  assert(out.start_pts_us == 0LL);
-  assert(out.end_pts_us == 4000000LL);
+  assert(strcmp(out.text_utf8, "Where are you from, Victoria?") == 0);
+  assert(out.start_pts_us == 500000LL);
+  assert(out.end_pts_us == 2800000LL);
   free(out.text_utf8);
 
-  // Next window outputs overlapping phrase: "brown fox jumps" from 2s to 6s
-  // "brown fox" is trimmed -> "jumps" remains
-  // The start timestamp of "jumps" must seamlessly start at 4s (the exact end PTS of the prior phrase)
-  assert(vw_segment_builder_push_hypothesis(builder, "brown fox jumps", 2000000LL, 6000000LL));
+  // In next window hop: exact same phrase is re-transcribed with slight acoustic jitter (30ms)
+  // It must be cleanly dropped as duplicate without modifying timestamps or text
+  assert(!vw_segment_builder_push_hypothesis(builder, "Where are you from, Victoria?", 530000LL, 2810000LL));
+
+  // Next discrete sentence: "I'm from Germany," from 3.4s to 5.2s
+  // Preserves its authentic acoustic timestamps and full text without word amputation
+  assert(vw_segment_builder_push_hypothesis(builder, "I'm from Germany,", 3400000LL, 5200000LL));
 
   assert(vw_segment_builder_pop(builder, &out));
-  assert(strcmp(out.text_utf8, "jumps") == 0);
-  assert(out.start_pts_us == 4000000LL);  // Exactly anchors to prior phrase end
-  assert(out.end_pts_us == 6000000LL);
+  assert(strcmp(out.text_utf8, "I'm from Germany,") == 0);
+  assert(out.start_pts_us == 3400000LL);
+  assert(out.end_pts_us == 5200000LL);
   free(out.text_utf8);
-
-  // When an overlapping phrase repeats committed text with new suffix ("jumps quickly" after "jumps"),
-  // "jumps" is trimmed and the new suffix "quickly" is preserved starting at 6s with valid duration
-  assert(vw_segment_builder_push_hypothesis(builder, "jumps quickly", 5000000LL, 6000000LL));
-
-  assert(vw_segment_builder_pop(builder, &out));
-  assert(strcmp(out.text_utf8, "quickly") == 0);
-  assert(out.start_pts_us == 6000000LL);  // Anchors to previous end PTS
-  assert(out.end_pts_us == 7000000LL);    // Safe 1s duration assigned since candidate end coincided with 6s
-  free(out.text_utf8);
-
-  // Exact duplicate with no new suffix text is rejected
-  assert(!vw_segment_builder_push_hypothesis(builder, "jumps quickly", 5000000LL, 6000000LL));
 
   vw_segment_builder_free(builder);
 }
@@ -290,7 +284,7 @@ int main(void) {
   vw_test_hop_deduplication_with_history_persistence();
   vw_test_silence_gap_preservation();
   vw_test_clear_resets_history_and_queue();
-  vw_test_trimmed_caption_timing();
+  vw_test_discrete_phrase_authentic_timing();
 
   printf("test_segment_builder PASSED (all unit assertions verified)\n");
   return 0;
