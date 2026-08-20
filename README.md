@@ -272,10 +272,10 @@ To install and verify the VLC plugin manually on Windows:
 3. **Install the Models**:
    - **Speech Model (`ggml-tiny.en.bin`)**: Copy `ggml-tiny.en.bin` next to the worker (VLC root), into a `models\` subdirectory of any ancestor of the plugin, or next to the VLC executable — the plugin probes `<dir>\ggml-tiny.en.bin` and `<dir>\models\ggml-tiny.en.bin` during module open. If the model lives elsewhere, set the module option `--vlc-whisper-model-path` (a.k.a. `model-path`) to its full path. Without a model, captions are disabled cleanly (`E_MODEL_MISSING`) and playback is unaffected.
    - **Voice Activity Detection Model (`ggml-silero-vad.bin`) (Optional but Recommended)**:
-     - Download helper scripts are provided in `models/`:
-       - **Linux / POSIX**: `./models/download-vad-model.sh`
-       - **Windows**: `.\models\download-vad-model.cmd`
-     - Place `ggml-silero-vad.bin` in the same directory as your speech model or pass `--vad-model <path>` to the worker. The worker automatically detects `ggml-silero-vad.bin` in the model directory or alongside the worker executable.
+      - Download helper scripts are provided in `models/`:
+        - **Linux / POSIX**: `./models/vw_download_vad_model.sh`
+        - **Windows**: `.\models\vw_download_vad_model.cmd`
+      - Place `ggml-silero-vad.bin` in the same directory as your speech model or pass `--vad-model <path>` to the worker. The worker automatically detects `ggml-silero-vad.bin` in the model directory or alongside the worker executable.
      - *Zero-Config Fallback*: If `ggml-silero-vad.bin` is not provided, the worker automatically falls back to built-in RMS Energy VAD. Silero VAD provides superior discrimination between human voice and background music/soundtracks, suppressing phantom captions during non-speech audio.
 
 4. **Reset Plugin Cache & Verify Registration**:

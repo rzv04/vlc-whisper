@@ -86,8 +86,8 @@ vlc-whisper/
 │   │   ├── vw_ipc_socket_linux.c              # Linux Unix Domain Socket transport implementation
 │   │   └── vw_log.c                           # Privacy-safe variadic logger & customizable sink implementation
 ├── models/                                    # Offline local GGML model storage & manifests
-│   ├── download-vad-model.sh                  # POSIX helper to download Silero VAD GGML weights
-│   ├── download-vad-model.cmd                 # Windows helper to download Silero VAD GGML weights
+│   ├── vw_download_vad_model.sh               # POSIX helper to download Silero VAD GGML weights
+│   ├── vw_download_vad_model.cmd              # Windows helper to download Silero VAD GGML weights
 │   ├── ggml-tiny.en.bin                       # Default GGML tiny.en weights file (git-ignored binary)
 │   ├── ggml-silero-vad.bin                    # Silero VAD GGML weights file (git-ignored binary)
 │   └── manifest.json                          # Offline manifest (SHA-256 integrity, RAM bounds)

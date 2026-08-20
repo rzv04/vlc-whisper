@@ -64,9 +64,9 @@ bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct 
     return false;
   }
 
-  // 1. Silero ML VAD Path
+  // 1. Silero ML VAD Path (resets LSTM state at window start for deterministic evaluation)
   if (vctx != NULL) {
-    if (!whisper_vad_detect_speech_no_reset(vctx, pcm32, (int)sample_count)) {
+    if (!whisper_vad_detect_speech(vctx, pcm32, (int)sample_count)) {
       goto energy_fallback;
     }
 
