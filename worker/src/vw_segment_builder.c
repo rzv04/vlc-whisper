@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "vw_protocol_util.h"
+
 vw_segment_builder_t* vw_segment_builder_create(void) {
   vw_segment_builder_t* b = (vw_segment_builder_t*)calloc(1, sizeof(vw_segment_builder_t));
   if (b == NULL) {
@@ -127,6 +129,18 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
         if (*suffix == '\0') {
           return false;
         }
+        size_t trimmed_chars = (size_t)(suffix - text);
+        if (len > 0 && end_pts_us > start_pts_us) {
+          int64_t dur = end_pts_us - start_pts_us;
+          int64_t time_shift = (int64_t)((double)dur * ((double)trimmed_chars / (double)len));
+          start_pts_us = vw_saturating_add_i64(start_pts_us, time_shift);
+        }
+        if (start_pts_us < hist->end_pts_us) {
+          start_pts_us = hist->end_pts_us;
+        }
+        if (start_pts_us >= end_pts_us) {
+          end_pts_us = vw_saturating_add_i64(start_pts_us, 500000LL);
+        }
         text = suffix;
         len = strlen(text);
       }
@@ -148,30 +162,26 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
       if (*trimmed_text == '\0') {
         return false;
       }
+      size_t trimmed_chars = (size_t)(trimmed_text - text);
+      if (len > 0 && end_pts_us > start_pts_us) {
+        int64_t dur = end_pts_us - start_pts_us;
+        int64_t time_shift = (int64_t)((double)dur * ((double)trimmed_chars / (double)len));
+        start_pts_us = vw_saturating_add_i64(start_pts_us, time_shift);
+      }
+      if (start_pts_us < last->end_pts_us) {
+        start_pts_us = last->end_pts_us;
+      }
+      if (start_pts_us >= end_pts_us) {
+        end_pts_us = vw_saturating_add_i64(start_pts_us, 500000LL);
+      }
       text = trimmed_text;
       len = strlen(text);
     }
   }
 
-  // 3. Record in committed history ring buffer
-  size_t h_slot = builder->history_head;
-  builder->history[h_slot].start_pts_us = start_pts_us;
-  builder->history[h_slot].end_pts_us = end_pts_us;
-  memcpy(builder->history[h_slot].text, text, len);
-  builder->history[h_slot].text[len] = '\0';
-  builder->history_head = (builder->history_head + 1) % VW_SEGMENT_HISTORY_CAPACITY;
-  if (builder->history_count < VW_SEGMENT_HISTORY_CAPACITY) {
-    builder->history_count++;
-  }
-
-  // 4. Enqueue into pending output queue for IPC transmission
-  size_t slot = builder->head;
+  // 3. Enqueue into pending output queue for IPC transmission FIRST
   if (!builder->segment_queue) {
     return false;
-  }
-
-  if (builder->segment_queue[slot].text_utf8 != NULL) {
-    free(builder->segment_queue[slot].text_utf8);
   }
 
   char* text_copy = (char*)malloc(len + 1);
@@ -180,6 +190,11 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   }
   memcpy(text_copy, text, len);
   text_copy[len] = '\0';
+
+  size_t slot = builder->head;
+  if (builder->segment_queue[slot].text_utf8 != NULL) {
+    free(builder->segment_queue[slot].text_utf8);
+  }
 
   builder->segment_queue[slot].segment_id = builder->next_segment_id++;
   builder->segment_queue[slot].start_pts_us = start_pts_us;
@@ -193,6 +208,16 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
     builder->count++;
   }
 
+  // 4. Record in committed history ring buffer ONLY AFTER successful output allocation & queueing
+  size_t h_slot = builder->history_head;
+  builder->history[h_slot].start_pts_us = start_pts_us;
+  builder->history[h_slot].end_pts_us = end_pts_us;
+  memcpy(builder->history[h_slot].text, text, len);
+  builder->history[h_slot].text[len] = '\0';
+  builder->history_head = (builder->history_head + 1) % VW_SEGMENT_HISTORY_CAPACITY;
+  if (builder->history_count < VW_SEGMENT_HISTORY_CAPACITY) {
+    builder->history_count++;
+  }
   return true;
 }
 

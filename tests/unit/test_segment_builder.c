@@ -8,7 +8,7 @@
 
 #include "vw_segment_builder.h"
 
-static void test_create_and_free(void) {
+static void vw_test_create_and_free(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(builder->next_segment_id == 1);
@@ -17,7 +17,7 @@ static void test_create_and_free(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_invalid_hypothesis_rejection(void) {
+static void vw_test_invalid_hypothesis_rejection(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -42,7 +42,7 @@ static void test_invalid_hypothesis_rejection(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_push_and_deduplication(void) {
+static void vw_test_push_and_deduplication(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -64,7 +64,7 @@ static void test_push_and_deduplication(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_circular_buffer_wrap(void) {
+static void vw_test_circular_buffer_wrap(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -85,7 +85,7 @@ static void test_circular_buffer_wrap(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_pop(void) {
+static void vw_test_pop(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -112,7 +112,7 @@ static void test_pop(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_multi_phrase_per_window(void) {
+static void vw_test_multi_phrase_per_window(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -150,7 +150,7 @@ static void test_multi_phrase_per_window(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_hop_deduplication_with_history_persistence(void) {
+static void vw_test_hop_deduplication_with_history_persistence(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -182,7 +182,7 @@ static void test_hop_deduplication_with_history_persistence(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_silence_gap_preservation(void) {
+static void vw_test_silence_gap_preservation(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -202,7 +202,7 @@ static void test_silence_gap_preservation(void) {
   vw_segment_builder_free(builder);
 }
 
-static void test_clear_resets_history_and_queue(void) {
+static void vw_test_clear_resets_history_and_queue(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -227,16 +227,44 @@ static void test_clear_resets_history_and_queue(void) {
   vw_segment_builder_free(builder);
 }
 
+static void vw_test_trimmed_caption_timing(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  // Push full sentence: "the quick brown fox" from 0 to 4s
+  assert(vw_segment_builder_push_hypothesis(builder, "the quick brown fox", 0LL, 4000000LL));
+
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "the quick brown fox") == 0);
+  assert(out.start_pts_us == 0LL);
+  free(out.text_utf8);
+
+  // Next window outputs overlapping phrase: "brown fox jumps" from 2s to 6s
+  // "brown fox" is trimmed -> "jumps" remains
+  // The start timestamp of "jumps" must be shifted forward (>= 4s, the end of prior history)
+  assert(vw_segment_builder_push_hypothesis(builder, "brown fox jumps", 2000000LL, 6000000LL));
+
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "jumps") == 0);
+  assert(out.start_pts_us >= 4000000LL);  // Start shifted to or past previous end PTS
+  assert(out.end_pts_us == 6000000LL);
+  free(out.text_utf8);
+
+  vw_segment_builder_free(builder);
+}
+
 int main(void) {
-  test_create_and_free();
-  test_invalid_hypothesis_rejection();
-  test_push_and_deduplication();
-  test_circular_buffer_wrap();
-  test_pop();
-  test_multi_phrase_per_window();
-  test_hop_deduplication_with_history_persistence();
-  test_silence_gap_preservation();
-  test_clear_resets_history_and_queue();
+  vw_test_create_and_free();
+  vw_test_invalid_hypothesis_rejection();
+  vw_test_push_and_deduplication();
+  vw_test_circular_buffer_wrap();
+  vw_test_pop();
+  vw_test_multi_phrase_per_window();
+  vw_test_hop_deduplication_with_history_persistence();
+  vw_test_silence_gap_preservation();
+  vw_test_clear_resets_history_and_queue();
+  vw_test_trimmed_caption_timing();
 
   printf("test_segment_builder PASSED (all unit assertions verified)\n");
   return 0;

@@ -216,4 +216,6 @@ void vw_platform_thread_join(vw_thread_t thread) {
 
 void vw_platform_sleep_ms(uint32_t ms) { Sleep(ms); }
 
+#else
+typedef int vw_platform_win32_empty_tu_t;
 #endif
