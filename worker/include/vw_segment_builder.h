@@ -6,7 +6,7 @@
 
 #include "vw_protocol_types.h"
 
-#define VW_SEGMENT_BUILDER_MAX_BUFSZ 20         // 20 caption segments max in pending output queue
+#define VW_SEGMENT_BUILDER_INITIAL_CAPACITY 32  // Initial pending caption queue capacity
 #define VW_SEGMENT_HISTORY_CAPACITY 16          // 16 committed caption segments in deduplication history
 #define VW_SEGMENT_BUILDER_MAX_TEXT_BYTES 1024  // 1 KB max text length
 #define VW_AUDIO_SAMPLE_RATE 16000              // 16kHz sample rate
@@ -25,9 +25,10 @@ typedef struct vw_history_entry {
 
 typedef struct vw_segment_builder {
   uint64_t next_segment_id;
-  vw_caption_segment_t* segment_queue;                      // Circular buffer of pending caption segments (0..19)
-  size_t head;                                              // Next write position in segment_queue (0..19)
-  size_t count;                                             // Active pending item count in segment_queue (0..20)
+  vw_caption_segment_t* segment_queue;                      // Dynamically growable circular buffer of pending segments
+  size_t capacity;                                          // Allocated capacity of segment_queue
+  size_t head;                                              // Next write position in segment_queue
+  size_t count;                                             // Active pending item count in segment_queue
   vw_history_entry_t history[VW_SEGMENT_HISTORY_CAPACITY];  // Sliding history of committed phrases for deduplication
   size_t history_head;                                      // Next write index in history (0..15)
   size_t history_count;                                     // Count of active history entries (0..16)

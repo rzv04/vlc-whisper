@@ -13,7 +13,8 @@ vw_segment_builder_t* vw_segment_builder_create(void) {
     return NULL;
   }
   b->next_segment_id = 1;
-  b->segment_queue = (vw_caption_segment_t*)calloc(VW_SEGMENT_BUILDER_MAX_BUFSZ, sizeof(vw_caption_segment_t));
+  b->capacity = VW_SEGMENT_BUILDER_INITIAL_CAPACITY;
+  b->segment_queue = (vw_caption_segment_t*)calloc(b->capacity, sizeof(vw_caption_segment_t));
   if (b->segment_queue == NULL) {
     free(b);
     return NULL;
@@ -24,7 +25,7 @@ vw_segment_builder_t* vw_segment_builder_create(void) {
 void vw_segment_builder_free(vw_segment_builder_t* builder) {
   if (builder != NULL) {
     if (builder->segment_queue != NULL) {
-      for (size_t i = 0; i < VW_SEGMENT_BUILDER_MAX_BUFSZ; i++) {
+      for (size_t i = 0; i < builder->capacity; i++) {
         free(builder->segment_queue[i].text_utf8);
       }
       free(builder->segment_queue);
@@ -38,7 +39,7 @@ void vw_segment_builder_clear(vw_segment_builder_t* builder) {
     return;
   }
   if (builder->segment_queue != NULL) {
-    for (size_t i = 0; i < VW_SEGMENT_BUILDER_MAX_BUFSZ; i++) {
+    for (size_t i = 0; i < builder->capacity; i++) {
       if (builder->segment_queue[i].text_utf8 != NULL) {
         free(builder->segment_queue[i].text_utf8);
         builder->segment_queue[i].text_utf8 = NULL;
@@ -54,10 +55,10 @@ void vw_segment_builder_clear(vw_segment_builder_t* builder) {
 
 // Returns pointer to the last pushed segment in the circular buffer, or NULL if empty
 static const vw_caption_segment_t* vw_segment_builder_get_last_segment(const vw_segment_builder_t* builder) {
-  if (builder == NULL || builder->count == 0) {
+  if (builder == NULL || builder->count == 0 || builder->capacity == 0) {
     return NULL;
   }
-  size_t last_idx = (builder->head + VW_SEGMENT_BUILDER_MAX_BUFSZ - 1) % VW_SEGMENT_BUILDER_MAX_BUFSZ;
+  size_t last_idx = (builder->head + builder->capacity - 1) % builder->capacity;
   return &builder->segment_queue[last_idx];
 }
 
@@ -129,18 +130,10 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
         if (*suffix == '\0') {
           return false;
         }
-        size_t trimmed_chars = (size_t)(suffix - text);
-        if (len > 0 && end_pts_us > start_pts_us) {
-          int64_t dur = end_pts_us - start_pts_us;
-          int64_t time_shift = (int64_t)((double)dur * ((double)trimmed_chars / (double)len));
-          start_pts_us = vw_saturating_add_i64(start_pts_us, time_shift);
+        if (hist->end_pts_us >= end_pts_us) {
+          return false;  // Candidate contains no spoken audio beyond the previous committed phrase
         }
-        if (start_pts_us < hist->end_pts_us) {
-          start_pts_us = hist->end_pts_us;
-        }
-        if (start_pts_us >= end_pts_us) {
-          end_pts_us = vw_saturating_add_i64(start_pts_us, 500000LL);
-        }
+        start_pts_us = hist->end_pts_us;
         text = suffix;
         len = strlen(text);
       }
@@ -162,25 +155,17 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
       if (*trimmed_text == '\0') {
         return false;
       }
-      size_t trimmed_chars = (size_t)(trimmed_text - text);
-      if (len > 0 && end_pts_us > start_pts_us) {
-        int64_t dur = end_pts_us - start_pts_us;
-        int64_t time_shift = (int64_t)((double)dur * ((double)trimmed_chars / (double)len));
-        start_pts_us = vw_saturating_add_i64(start_pts_us, time_shift);
+      if (last->end_pts_us >= end_pts_us) {
+        return false;  // Candidate contains no spoken audio beyond the last queued phrase
       }
-      if (start_pts_us < last->end_pts_us) {
-        start_pts_us = last->end_pts_us;
-      }
-      if (start_pts_us >= end_pts_us) {
-        end_pts_us = vw_saturating_add_i64(start_pts_us, 500000LL);
-      }
+      start_pts_us = last->end_pts_us;
       text = trimmed_text;
       len = strlen(text);
     }
   }
 
-  // 3. Enqueue into pending output queue for IPC transmission FIRST
-  if (!builder->segment_queue) {
+  // 3. Ensure queue capacity (dynamically grow if full)
+  if (!builder->segment_queue || builder->capacity == 0) {
     return false;
   }
 
@@ -191,11 +176,25 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   memcpy(text_copy, text, len);
   text_copy[len] = '\0';
 
-  size_t slot = builder->head;
-  if (builder->segment_queue[slot].text_utf8 != NULL) {
-    free(builder->segment_queue[slot].text_utf8);
+  if (builder->count == builder->capacity) {
+    size_t new_cap = builder->capacity * 2;
+    vw_caption_segment_t* new_queue = (vw_caption_segment_t*)calloc(new_cap, sizeof(vw_caption_segment_t));
+    if (!new_queue) {
+      free(text_copy);
+      return false;  // Memory allocation failure: reject without committing to history
+    }
+    // Copy in FIFO order from oldest to newest
+    for (size_t i = 0; i < builder->count; i++) {
+      size_t tail = (builder->head + builder->capacity - builder->count + i) % builder->capacity;
+      new_queue[i] = builder->segment_queue[tail];
+    }
+    free(builder->segment_queue);
+    builder->segment_queue = new_queue;
+    builder->head = builder->count;
+    builder->capacity = new_cap;
   }
 
+  size_t slot = builder->head;
   builder->segment_queue[slot].segment_id = builder->next_segment_id++;
   builder->segment_queue[slot].start_pts_us = start_pts_us;
   builder->segment_queue[slot].end_pts_us = end_pts_us;
@@ -203,10 +202,8 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   builder->segment_queue[slot].text_utf8 = text_copy;
   builder->segment_queue[slot].text_bytes = (uint16_t)len;
 
-  builder->head = (builder->head + 1) % VW_SEGMENT_BUILDER_MAX_BUFSZ;
-  if (builder->count < VW_SEGMENT_BUILDER_MAX_BUFSZ) {
-    builder->count++;
-  }
+  builder->head = (builder->head + 1) % builder->capacity;
+  builder->count++;
 
   // 4. Record in committed history ring buffer ONLY AFTER successful output allocation & queueing
   size_t h_slot = builder->history_head;
@@ -222,11 +219,11 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
 }
 
 bool vw_segment_builder_pop(vw_segment_builder_t* builder, vw_caption_segment_t* out) {
-  if (!builder || !out || builder->count == 0 || !builder->segment_queue) {
+  if (!builder || !out || builder->count == 0 || !builder->segment_queue || builder->capacity == 0) {
     return false;
   }
 
-  size_t tail = (builder->head + VW_SEGMENT_BUILDER_MAX_BUFSZ - builder->count) % VW_SEGMENT_BUILDER_MAX_BUFSZ;
+  size_t tail = (builder->head + builder->capacity - builder->count) % builder->capacity;
   *out = builder->segment_queue[tail];
   // Clear slot in ring buffer so ownership of text_utf8 is transferred to caller
   memset(&builder->segment_queue[tail], 0, sizeof(vw_caption_segment_t));

@@ -68,8 +68,8 @@ static void vw_test_circular_buffer_wrap(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
-  // Push 25 distinct segments to force ring buffer wrap (capacity 20)
-  for (int i = 0; i < 25; ++i) {
+  // Push 40 distinct segments to force dynamic queue growth past initial capacity (32)
+  for (int i = 0; i < 40; ++i) {
     char buf[64];
     snprintf(buf, sizeof(buf), "Segment number %d", i + 1);
     int64_t start = (int64_t)i * 2000000;
@@ -78,9 +78,21 @@ static void vw_test_circular_buffer_wrap(void) {
     (void)end;
   }
 
-  assert(builder->count == VW_SEGMENT_BUILDER_MAX_BUFSZ);
-  assert(builder->head == 5);  // 25 % 20 = 5
-  assert(builder->next_segment_id == 26);
+  assert(builder->count == 40);
+  assert(builder->capacity >= 40);
+  assert(builder->next_segment_id == 41);
+
+  // Pop all 40 and verify all were preserved in FIFO order without any dropped segments
+  for (int i = 0; i < 40; ++i) {
+    vw_caption_segment_t out;
+    char expected[64];
+    snprintf(expected, sizeof(expected), "Segment number %d", i + 1);
+    assert(vw_segment_builder_pop(builder, &out));
+    assert(strcmp(out.text_utf8, expected) == 0);
+    assert(out.start_pts_us == (int64_t)i * 2000000);
+    free(out.text_utf8);
+  }
+  assert(builder->count == 0);
 
   vw_segment_builder_free(builder);
 }
@@ -238,18 +250,22 @@ static void vw_test_trimmed_caption_timing(void) {
   assert(vw_segment_builder_pop(builder, &out));
   assert(strcmp(out.text_utf8, "the quick brown fox") == 0);
   assert(out.start_pts_us == 0LL);
+  assert(out.end_pts_us == 4000000LL);
   free(out.text_utf8);
 
   // Next window outputs overlapping phrase: "brown fox jumps" from 2s to 6s
   // "brown fox" is trimmed -> "jumps" remains
-  // The start timestamp of "jumps" must be shifted forward (>= 4s, the end of prior history)
+  // The start timestamp of "jumps" must seamlessly start at 4s (the exact end PTS of the prior phrase)
   assert(vw_segment_builder_push_hypothesis(builder, "brown fox jumps", 2000000LL, 6000000LL));
 
   assert(vw_segment_builder_pop(builder, &out));
   assert(strcmp(out.text_utf8, "jumps") == 0);
-  assert(out.start_pts_us >= 4000000LL);  // Start shifted to or past previous end PTS
+  assert(out.start_pts_us == 4000000LL);  // Exactly anchors to prior phrase end
   assert(out.end_pts_us == 6000000LL);
   free(out.text_utf8);
+
+  // If a candidate suffix ends before or at the prior phrase end (no new spoken audio), it must be rejected
+  assert(!vw_segment_builder_push_hypothesis(builder, "jumps quickly", 5000000LL, 6000000LL));
 
   vw_segment_builder_free(builder);
 }
