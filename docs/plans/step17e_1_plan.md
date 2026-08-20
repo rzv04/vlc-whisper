@@ -108,10 +108,50 @@ Eliminate subtitle flicker, phantom caption bursts, and background music halluci
 - **VAD Context Lifecycle**: `struct whisper_vad_context*` is initialized once at worker startup and freed at shutdown (`ADR-015`).
 - **State Reset on Discontinuity**: When a seek, pause, or media swap occurs, `whisper_vad_reset_state()` clears LSTM hidden states so previous audio does not bleed into the new position.
 
-### 3. Bounds, Time Units, and Failure Behavior
-- **Acoustic Bounds**: Whisper segment centiseconds ($t_0, t_1$) are converted to microsecond media presentation timestamps (`pts_us = window_pts_us + t * 10000LL`).
-- **No-Speech Probability**: Float bounded in $[0.0, 1.0]$. Segments with $\ge 0.60$ are dropped immediately.
-- **Failure Behavior**: If the VAD model fails to load at startup, the worker logs a warning and automatically falls back to RMS Energy VAD. VLC playback is never stalled or interrupted.
+### 4. Conversational Pauses, Speech-Silence-Speech & Mid-Sentence Cadence
+
+```
+Audio Window: [ 0.0s === Phrase A (0.5s-2.5s) === [ 2.5s SILENCE PAUSE ] === Phrase B (5.0s-7.2s) === 8.0s ]
+                                  │
+                                  ▼
+                     1. VAD Classification (Tier 1)
+                     Is speech present in window? YES (detected at 0.5s & 5.0s)
+                                  │
+                                  ▼
+                     2. Whisper Inference & Segment Extraction (ADR-017)
+                     Whisper emits 2 discrete sub-segments:
+                     - Segment 0: [ 0.5s - 2.5s ] "Where are you from?" (no_speech_prob = 0.02)
+                     - Segment 1: [ 5.0s - 7.2s ] "I am from Romania." (no_speech_prob = 0.03)
+                                  │
+                                  ▼
+                     3. Acoustic Confidence & Cleanliness (Tiers 2 & 3)
+                     Both pass (confidence high, valid text, no non-speech tags)
+                                  │
+                                  ▼
+                     4. VLC SPU Subpicture Scheduling (Presenter)
+                     - Cue 1: i_start = 10.5s, i_stop = 12.5s
+                     - Cue 2: i_start = 15.0s, i_stop = 17.2s
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ VLC Screen Timeline Rendering:                                                                     │
+│                                                                                                     │
+│ 10.5s ──────► 12.5s               12.5s ──────────────► 15.0s             15.0s ──────► 17.2s       │
+│ ["Where are you from?"]           [   SCREEN COMPLETELY BLANK   ]         ["I am from Romania."]    │
+│ (Subpicture 1 active)             (Silence pause: zero subtitles)         (Subpicture 2 active)     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Handling Specific Pausing Patterns
+1. **Short Mid-Sentence Pauses ($< 0.5\,\text{s}$)**:
+   - *Example*: *"I think that... [0.3s pause] ...we should go."*
+   - **Whisper Behavior**: Emits a single continuous acoustic phrase (`[ 1.0s - 3.2s ] "I think that we should go."`). Subtitle stays steadily on screen across the short pause.
+2. **Long Conversational Pauses ($\ge 1.0\,\text{s}$)**:
+   - *Example*: Conversational turn-taking or thinking pause.
+   - **Whisper Behavior**: Acoustic segmentation splits the utterance along silence boundaries into discrete segments with exact acoustic bounds ($t_0, t_1$).
+   - **On Screen**: Phrase 1 clears when speech stops, **screen remains completely blank during the pause** (zero phantom subtitles, zero lingering text), and Phrase 2 appears instantly when speech resumes.
+3. **Cross-Hop Deduplication (ADR-018)**:
+   - When the next sliding window hops (e.g. $12.0\,\text{s} \to 20.0\,\text{s}$), re-recognitions of Phrase B starting inside covered audio ($\le \text{covered\_end\_us}$) are cleanly suppressed, preventing subtitle flicker or word duplication.
 
 ---
 
@@ -119,7 +159,7 @@ Eliminate subtitle flicker, phantom caption bursts, and background music halluci
 - [ ] VAD accurately detects speech and skips Whisper inference during silent and instrumental music intervals.
 - [ ] Worker falls back cleanly to RMS energy VAD when `--vad-model` is not supplied.
 - [ ] High `no_speech_prob` segments ($\ge 0.60$) are discarded before segment builder insertion.
-- [ ] Sound tags (`[Music]`, `[Applause]`, `♪`), punctuation spam (`...`), outro boilerplate, and repetition loops are 100% rejected.
+- [ ] Standalone non-speech tags (`[Music]`, `[Applause]`, `♪`) and isolated punctuation (`...`, `---`) with zero alphanumeric characters are rejected while 100% of spoken dialogue and valid sentence punctuation are preserved.
 - [ ] Seeking and pause-resume reset VAD state without crashes or memory leaks.
 - [ ] 100% automated tests pass (`ctest --preset linux-x64-debug`).
 - [ ] Valgrind memcheck reports 0 errors and 0 leaks.
