@@ -349,6 +349,40 @@ static void vw_test_short_prefix_expansion_dropped(void) {
   vw_segment_builder_free(builder);
 }
 
+static void vw_test_pending_dedup_time_gated(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  // First pending cue at [10s,14s].
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat sat", 10000000LL, 14000000LL));
+  // Textually contained BUT time-distinct (non-overlapping) cue in the same window: a repeated
+  // phrase later in the window is legitimate and must NOT be dropped by textual dedup.
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat", 20000000LL, 24000000LL));
+  assert(builder->count == 2);
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "the cat sat") == 0);
+  free(out.text_utf8);
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "the cat") == 0);
+  assert(out.start_pts_us == 20000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_pending_dedup_overlapping_time_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat sat", 10000000LL, 14000000LL));
+  // Textually contained AND time-overlapping -> re-recognition of the same audio -> dropped.
+  assert(!vw_segment_builder_push_hypothesis(builder, "the cat", 10000000LL, 12000000LL));
+  assert(builder->count == 1);
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "the cat sat") == 0);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
 int main(void) {
   vw_test_create_and_free();
   vw_test_invalid_hypothesis_rejection();
@@ -362,6 +396,8 @@ int main(void) {
   vw_test_discrete_phrase_authentic_timing();
   vw_test_expansion_dropped_final_subtitles();
   vw_test_last_queued_expansion_dropped();
+  vw_test_pending_dedup_time_gated();
+  vw_test_pending_dedup_overlapping_time_dropped();
   vw_test_mid_containment_dropped();
   vw_test_superstring_dropped();
   vw_test_short_prefix_expansion_dropped();

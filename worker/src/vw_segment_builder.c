@@ -153,16 +153,25 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
 
   // 1. In-window (un-emitted) duplicate check against the last queued segment: exact, fragment, or
   //    superstring all drop (final subtitles — a pending cue is never replaced or extended either).
+  //    The textual dedup applies ONLY when the candidate time-overlaps the pending cue — Whisper can
+  //    emit two textually-related but time-DISTINCT sub-segments in one window (e.g. a phrase then
+  //    a shorter repeat later); those are legitimate and must not be dropped.
   const vw_caption_segment_t* last = vw_segment_builder_get_last_segment(builder);
   if (last != NULL && last->text_utf8 != NULL) {
-    if (strncmp(last->text_utf8, text, len) == 0 && last->text_utf8[len] == '\0') {
-      return false;
-    }
-    if (strstr(last->text_utf8, text) != NULL) {
-      return false;
-    }
-    if (strstr(text, last->text_utf8) != NULL) {
-      return false;
+    int64_t start_diff = (start_pts_us >= last->start_pts_us) ? (start_pts_us - last->start_pts_us)
+                                                              : (last->start_pts_us - start_pts_us);
+    bool time_matches = (start_diff <= VW_DEDUP_TIME_TOLERANCE_US) ||
+                        (end_pts_us > last->start_pts_us && start_pts_us < last->end_pts_us);
+    if (time_matches) {
+      if (strncmp(last->text_utf8, text, len) == 0 && last->text_utf8[len] == '\0') {
+        return false;
+      }
+      if (strstr(last->text_utf8, text) != NULL) {
+        return false;
+      }
+      if (strstr(text, last->text_utf8) != NULL) {
+        return false;
+      }
     }
   }
 
