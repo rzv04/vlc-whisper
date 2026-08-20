@@ -83,43 +83,27 @@ static bool vw_segment_builder_is_word_boundary_prefix(const char* prefix, const
 // after the matched prefix end (within tolerance). Falls back to the pure text-boundary rule (first token whose start
 // offset reaches the prefix end) when no time-consistent token exists. Returns true and sets *out_idx when a valid
 // suffix start is found; callers should drop the candidate when this returns false.
+// Selects the suffix-boundary token index for a word-aligned prefix expansion. The boundary is the
+// first token whose text starts exactly at the committed prefix end — a token fully inside the
+// prefix is never selected, so already-displayed words are never repeated. Any token that SPANS the
+// prefix end (its text begins before the boundary and ends after it) necessarily contains the tail
+// of a committed word, which cannot be split safely, so it returns false (conservative drop). The
+// suffix start time is the boundary token's own authentic t0.
 static bool vw_segment_builder_select_suffix_token(const vw_phrase_token_t* tokens, size_t token_count,
-                                                   int64_t committed_end_us, size_t prefix_len, size_t* out_idx) {
-  const int64_t time_tol = 150000LL;  // 150ms tolerance for whisper re-recognized boundaries
-  const int64_t text_tol = 8;         // 8-char tolerance for token-text/segment-text normalization drift
-
-  // Time-first rule: the first token starting at or after the committed prefix end (minus tolerance).
-  int time_idx = -1;
+                                                   size_t prefix_len, size_t* out_idx) {
+  size_t cum = 0;
   for (size_t k = 0; k < token_count; k++) {
-    if (tokens[k].t0_us >= committed_end_us - time_tol) {
-      time_idx = (int)k;
-      break;
-    }
-  }
-  if (time_idx >= 0) {
-    int64_t cum = 0;
-    for (int j = 0; j < time_idx; j++) {
-      cum += (int64_t)strlen(tokens[j].text);
-    }
-    if (cum >= (int64_t)prefix_len - text_tol) {
-      *out_idx = (size_t)time_idx;
+    if (cum == prefix_len) {
+      *out_idx = k;  // token starts exactly at the prefix end -> fully new
       return true;
     }
-    // Time-selected token is text-inconsistent (still inside the prefix): continue to the text-boundary fallback.
-  }
-
-  // Fallback: pure text-boundary rule (first token whose start offset reaches the matched prefix end).
-  {
-    int64_t cum = 0;
-    for (size_t k = 0; k < token_count; k++) {
-      if (cum >= (int64_t)prefix_len) {
-        *out_idx = k;
-        return true;
-      }
-      cum += (int64_t)strlen(tokens[k].text);
+    size_t next_cum = cum + strlen(tokens[k].text);
+    if (next_cum > prefix_len) {
+      return false;  // token spans the prefix end -> cannot split without repeating committed text
     }
+    cum = next_cum;
   }
-  return false;
+  return false;  // no token extends beyond the prefix (candidate == prefix) -> exact-match drop path
 }
 
 // Allocates a text copy and appends a finalized cue to the pending queue, growing the ring buffer when full. Returns
@@ -269,9 +253,8 @@ bool vw_segment_builder_push_phrase(vw_segment_builder_t* builder, const char* t
     if (vw_segment_builder_is_word_boundary_prefix(hist->text, text)) {
       if (tokens != NULL && token_count > 0) {
         size_t suffix_idx = 0;
-        if (!vw_segment_builder_select_suffix_token(tokens, token_count, hist->end_pts_us, strlen(hist->text),
-                                                    &suffix_idx)) {
-          return false;  // No valid suffix boundary (neither rule fired) -> conservative drop.
+        if (!vw_segment_builder_select_suffix_token(tokens, token_count, strlen(hist->text), &suffix_idx)) {
+          return false;  // No valid suffix boundary -> conservative drop (never repeat committed words).
         }
         // Concatenate the suffix token texts (leading spaces trimmed).
         size_t suffix_len = 0;
