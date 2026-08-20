@@ -157,32 +157,21 @@ bool vw_caption_presenter_display(void* p_filter_ptr, const char* text, int64_t 
   return vw_caption_presenter_render_text(p_filter, text, duration_us);
 }
 
-bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
-                                       int64_t input_time_us) {
-  if (!segment || !segment->text_utf8) {
+static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
+                                                 int64_t duration_us, int64_t input_time_us) {
+  if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }
 
   float rate = 1.0f;
-  if (presenter && presenter->p_filter_ctx) {
+  if (presenter->p_filter_ctx) {
     vlc_value_t rval;
     if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
       rate = rval.f_float;
     }
   }
 
-  int64_t raw_duration_us = segment->end_pts_us - segment->start_pts_us;
-  int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
-  int64_t duration_us;
-  if (raw_duration_us <= 0) {
-    duration_us = 2000000LL;  // 2 seconds default fallback
-  } else if (raw_duration_us < min_media_floor_us) {
-    duration_us = min_media_floor_us;  // Clamped to at least 1.0s wall-clock floor
-  } else {
-    duration_us = raw_duration_us;
-  }
-
-  if (!presenter || !presenter->p_filter_ctx) {
+  if (!presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy
     return vw_caption_presenter_display(NULL, segment->text_utf8, duration_us);
   }
@@ -254,11 +243,85 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   return rendered;
 }
 
+bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
+                                       int64_t input_time_us) {
+  if (!presenter || !segment || !segment->text_utf8) {
+    return false;
+  }
+
+  float rate = 1.0f;
+  if (presenter->p_filter_ctx) {
+    vlc_value_t rval;
+    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+      rate = rval.f_float;
+    }
+  }
+  int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
+
+  // If a preceding cue was buffered, dispatch it now with duration clipped to the incoming segment's start PTS
+  if (presenter->has_pending) {
+    int64_t raw_duration_us = presenter->pending_segment.end_pts_us - presenter->pending_segment.start_pts_us;
+    int64_t target_dur_us = (raw_duration_us <= 0)                   ? 2000000LL
+                            : (raw_duration_us < min_media_floor_us) ? min_media_floor_us
+                                                                     : raw_duration_us;
+    int64_t target_end_us = presenter->pending_segment.start_pts_us + target_dur_us;
+
+    // Clip target_end_us to incoming segment start if incoming cue starts after pending cue's start
+    int64_t clipped_end_us =
+        (segment->start_pts_us > presenter->pending_segment.start_pts_us && target_end_us > segment->start_pts_us)
+            ? segment->start_pts_us
+            : target_end_us;
+    int64_t duration_us = clipped_end_us - presenter->pending_segment.start_pts_us;
+    if (duration_us <= 0) {
+      duration_us = (raw_duration_us > 0) ? raw_duration_us : 2000000LL;
+    }
+
+    vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us);
+    presenter->has_pending = false;
+  }
+
+  // Buffer incoming segment as pending so its display duration can be clipped by any successor cue
+  presenter->has_pending = true;
+  presenter->pending_segment = *segment;
+  strncpy(presenter->pending_text, segment->text_utf8, sizeof(presenter->pending_text) - 1);
+  presenter->pending_text[sizeof(presenter->pending_text) - 1] = '\0';
+  presenter->pending_segment.text_utf8 = presenter->pending_text;
+
+  return true;
+}
+
+bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input_time_us) {
+  if (!presenter || !presenter->has_pending) {
+    return false;
+  }
+
+  float rate = 1.0f;
+  if (presenter->p_filter_ctx) {
+    vlc_value_t rval;
+    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+      rate = rval.f_float;
+    }
+  }
+  int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
+  int64_t raw_duration_us = presenter->pending_segment.end_pts_us - presenter->pending_segment.start_pts_us;
+  int64_t duration_us = (raw_duration_us <= 0)                   ? 2000000LL
+                        : (raw_duration_us < min_media_floor_us) ? min_media_floor_us
+                                                                 : raw_duration_us;
+
+  bool rendered =
+      vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us);
+  presenter->has_pending = false;
+  return rendered;
+}
+
 // Blanks the current caption overlays (flushes SPU and OSD channels) but KEEPS the filter context,
 // so later segments still render. Safe mid-session — e.g. erase captions on a seek before the
 // restarted session emits new ones. No-op when the presenter has no filter context.
 #define VW_OSD_BLANK_DURATION_US 1000
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
+  if (presenter) {
+    presenter->has_pending = false;
+  }
   if (!presenter || !presenter->p_filter_ctx) {
     return;
   }
@@ -281,6 +344,7 @@ void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
   vw_caption_presenter_blank(presenter);
   if (presenter) {
+    presenter->has_pending = false;
     if (presenter->p_held_vout) {
       vlc_object_release(VLC_OBJECT((vout_thread_t*)presenter->p_held_vout));
       presenter->p_held_vout = NULL;
