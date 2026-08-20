@@ -69,6 +69,6 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [ ] 21a. Model selection & auto-discovery: user-selectable `base.en`/`small.en` models, model path discovery, documented RAM/CPU tradeoffs, and tiny.en fallback.
 - [ ] 22. Multilingual models (`small`, `medium`, `large`) and automatic language detection.
 - [ ] 23. Release documentation: troubleshooting, privacy statement, uninstall guide, and bug report templates.
-- [ ] 24. Benchmark suite and performance output metrics (inference latency, queue high-water mark, audio processing speed ratio).
+- [ ] 24. Benchmark suite and performance output metrics: measure Whisper inference latency across backends (CPU vs Vulkan GPU), measure Silero GGML VAD evaluation overhead and real-time factor across 6s–24s windows, track audio queue high-water marks, and calculate processing speed ratios.
 
 **Exit Status:** **PLANNED** — Reproducible signed/hashed release package with documented compatibility matrix.

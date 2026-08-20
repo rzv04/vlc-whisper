@@ -78,14 +78,16 @@ bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct 
 
     int n_segs = whisper_vad_segments_n_segments(segments);
 
-    // Case A: Pure silence / no speech detected
+    // Case A: Pure silence / no speech detected (M1: progressive silence drain once min chunk size reached)
     if (n_segs == 0) {
       whisper_vad_free_segments(segments);
-      if (sample_count >= VW_CHUNK_MAX_SAMPLES || is_eof) {
-        *out_silence_drain = sample_count;
+      if (sample_count >= VW_CHUNK_MIN_SAMPLES || is_eof) {
+        // Drain confirmed silence run, retaining 150ms padding at the trailing edge unless at EOF
+        *out_silence_drain =
+            (is_eof || sample_count <= VW_CHUNK_PAD_SAMPLES) ? sample_count : (sample_count - VW_CHUNK_PAD_SAMPLES);
         return true;
       }
-      return false;  // Wait for more audio if not yet full or EOF
+      return false;  // Wait for min chunk accumulation before evaluating silence
     }
 
     // Case B: Leading Silence Check before first speech segment (> 1.0s silence)
@@ -102,21 +104,27 @@ bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct 
     size_t chosen_cut = 0;
     for (int i = 0; i < n_segs; i++) {
       float seg_t1_cs = whisper_vad_segments_get_segment_t1(segments, i);
-      size_t seg_end_sample = (size_t)(seg_t1_cs * 160.0f) + VW_CHUNK_PAD_SAMPLES;
+      size_t raw_seg_end = (size_t)(seg_t1_cs * 160.0f);
+      size_t seg_end_sample = raw_seg_end + VW_CHUNK_PAD_SAMPLES;
 
       if (seg_end_sample >= VW_CHUNK_MIN_SAMPLES) {
         if (seg_end_sample <= VW_CHUNK_MAX_SAMPLES) {
           if (i + 1 < n_segs) {
             float next_t0_cs = whisper_vad_segments_get_segment_t0(segments, i + 1);
             size_t next_start_sample = (size_t)(next_t0_cs * 160.0f);
-            if (next_start_sample > seg_end_sample + VW_CHUNK_MIN_SILENCE_GAP) {
-              chosen_cut = (seg_end_sample + next_start_sample) / 2;
+            if (next_start_sample >= raw_seg_end + VW_CHUNK_MIN_SILENCE_GAP) {
+              size_t next_padded_start = (next_start_sample > VW_CHUNK_PAD_SAMPLES)
+                                             ? (next_start_sample - VW_CHUNK_PAD_SAMPLES)
+                                             : next_start_sample;
+              chosen_cut = (seg_end_sample + next_padded_start) / 2;
+              if (chosen_cut < seg_end_sample) chosen_cut = seg_end_sample;
               break;
             }
           } else {
-            if (sample_count >= seg_end_sample + VW_CHUNK_MIN_SILENCE_GAP || is_eof) {
+            if (sample_count >= raw_seg_end + VW_CHUNK_MIN_SILENCE_GAP || is_eof) {
               chosen_cut = (seg_end_sample + sample_count) / 2;
               if (chosen_cut > sample_count) chosen_cut = sample_count;
+              if (chosen_cut < seg_end_sample) chosen_cut = seg_end_sample;
               break;
             }
           }
@@ -155,8 +163,9 @@ bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct 
 energy_fallback:
   // 2. RMS Energy Fallback Path
   if (!vw_vad_detect_speech_energy(pcm32, sample_count, VW_VAD_ENERGY_THRESHOLD)) {
-    if (sample_count >= VW_CHUNK_MAX_SAMPLES || is_eof) {
-      *out_silence_drain = sample_count;
+    if (sample_count >= VW_CHUNK_MIN_SAMPLES || is_eof) {
+      *out_silence_drain =
+          (is_eof || sample_count <= VW_CHUNK_PAD_SAMPLES) ? sample_count : (sample_count - VW_CHUNK_PAD_SAMPLES);
       return true;
     }
     return false;

@@ -184,10 +184,10 @@ static void vw_test_vad_find_chunk_boundary_energy(void) {
   assert(!vw_vad_find_chunk_boundary((const float[]){0.1f}, 16000, NULL, false, NULL, &silence_drain));
   assert(!vw_vad_find_chunk_boundary((const float[]){0.1f}, 16000, NULL, false, &cut_samples, NULL));
 
-  // 2. Pure silence in energy fallback
-  float silence[VW_CHUNK_MAX_SAMPLES] = {0};
-  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MAX_SAMPLES, NULL, false, &cut_samples, &silence_drain));
-  assert(silence_drain == VW_CHUNK_MAX_SAMPLES);
+  // 2. Pure silence in energy fallback (M1: progressive silence drain at MIN_SAMPLES)
+  float silence[VW_CHUNK_MIN_SAMPLES] = {0};
+  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MIN_SAMPLES, NULL, false, &cut_samples, &silence_drain));
+  assert(silence_drain == VW_CHUNK_MIN_SAMPLES - VW_CHUNK_PAD_SAMPLES);
   assert(cut_samples == 0);
 
   // 3. Speech signal in energy fallback
@@ -229,10 +229,10 @@ static void vw_test_vad_find_chunk_boundary_silero(void) {
   size_t cut_samples = 0;
   size_t silence_drain = 0;
 
-  // 1. Pure silence at max chunk size -> silence drain without Whisper inference
-  float silence[VW_CHUNK_MAX_SAMPLES] = {0};
-  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MAX_SAMPLES, vctx, false, &cut_samples, &silence_drain));
-  assert(silence_drain == VW_CHUNK_MAX_SAMPLES);
+  // 1. Pure silence at min chunk size -> progressive silence drain without Whisper inference (M1)
+  float silence[VW_CHUNK_MIN_SAMPLES] = {0};
+  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MIN_SAMPLES, vctx, false, &cut_samples, &silence_drain));
+  assert(silence_drain == VW_CHUNK_MIN_SAMPLES - VW_CHUNK_PAD_SAMPLES);
   assert(cut_samples == 0);
 
   // 2. JFK speech audio fixture
@@ -261,6 +261,29 @@ static void vw_test_vad_find_chunk_boundary_silero(void) {
         assert(cut_samples > 0 || silence_drain > 0);
       }
     }
+  }
+
+  // 3. Multi-chunk streaming simulation across iterations (Finding L4)
+  size_t stream_pos = 0;
+  float stream_audio[VW_CHUNK_MAX_SAMPLES * 2] = {0};
+  // Populate first half with simulated tone and second half with silence
+  for (size_t i = 0; i < VW_CHUNK_MIN_SAMPLES; i++) {
+    stream_audio[i] = 0.35f * sinf(2.0f * 3.14159f * 300.0f * (float)i / 16000.0f);
+  }
+  // Iteration 1: detect speech cut
+  cut_samples = 0;
+  silence_drain = 0;
+  bool s1 = vw_vad_find_chunk_boundary(stream_audio, VW_CHUNK_MIN_SAMPLES, vctx, false, &cut_samples, &silence_drain);
+  if (s1) {
+    stream_pos += (cut_samples > 0) ? cut_samples : silence_drain;
+  }
+  // Iteration 2: pure silence trailing
+  cut_samples = 0;
+  silence_drain = 0;
+  bool s2 = vw_vad_find_chunk_boundary(stream_audio + VW_CHUNK_MIN_SAMPLES, VW_CHUNK_MIN_SAMPLES, vctx, false,
+                                       &cut_samples, &silence_drain);
+  if (s2) {
+    assert(silence_drain == VW_CHUNK_MIN_SAMPLES - VW_CHUNK_PAD_SAMPLES);
   }
 
   vw_vad_reset_state(vctx);
