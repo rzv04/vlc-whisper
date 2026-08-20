@@ -133,6 +133,10 @@ typedef struct vw_msg_started {
   uint8_t source_active;  // 1 if source file lookahead mode active; 0 if live streaming mode
 } vw_msg_started_t;
 
+// STARTED source_active values
+#define VW_SOURCE_ACTIVE_INACTIVE 0U
+#define VW_SOURCE_ACTIVE_ACTIVE 1U
+
 #define VW_MSG_STARTED_PAYLOAD_BYTES 1U
 
 // Position update flags (bitfield)

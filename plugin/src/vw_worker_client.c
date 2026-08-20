@@ -298,7 +298,7 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
         }
         vw_msg_started_t started_msg = {0};
         if (vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, to_read, &started_msg)) {
-          client->worker_source_active = (started_msg.source_active != 0);
+          client->worker_source_active = (started_msg.source_active == VW_SOURCE_ACTIVE_ACTIVE);
         } else {
           client->worker_source_active = false;
         }

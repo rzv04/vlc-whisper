@@ -183,9 +183,9 @@ int main(void) {
 
   // Validate STARTED (1-byte payload)
   EXPECT(!vw_protocol_validate_payload(VW_MSG_STARTED, NULL));
-  vw_msg_started_t started = {.source_active = 0};
+  vw_msg_started_t started = {.source_active = VW_SOURCE_ACTIVE_INACTIVE};
   EXPECT(vw_protocol_validate_payload(VW_MSG_STARTED, &started));
-  started.source_active = 1;
+  started.source_active = VW_SOURCE_ACTIVE_ACTIVE;
   EXPECT(vw_protocol_validate_payload(VW_MSG_STARTED, &started));
   started.source_active = 2;  // Invalid value
   EXPECT(!vw_protocol_validate_payload(VW_MSG_STARTED, &started));

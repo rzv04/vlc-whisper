@@ -126,12 +126,12 @@ int main(void) {
   EXPECT(decoded_pos.flags == VW_POSITION_FLAG_SEEK);
 
   // STARTED
-  vw_msg_started_t started = {.source_active = 1};
+  vw_msg_started_t started = {.source_active = VW_SOURCE_ACTIVE_ACTIVE};
   EXPECT(vw_protocol_encode_payload(VW_MSG_STARTED, &started, buffer, sizeof(buffer), &written));
   EXPECT(written == 1);
   vw_msg_started_t decoded_started = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_STARTED, buffer, written, &decoded_started));
-  EXPECT(decoded_started.source_active == 1);
+  EXPECT(decoded_started.source_active == VW_SOURCE_ACTIVE_ACTIVE);
 
   // SHUTDOWN
   EXPECT(vw_protocol_encode_payload(VW_MSG_SHUTDOWN, NULL, buffer, sizeof(buffer), &written));

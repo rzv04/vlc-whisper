@@ -433,7 +433,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
                        source_mode ? 1 : 0);
 
           // Reply STARTED with 1-byte payload indicating source_active status
-          vw_msg_started_t started_payload = {.source_active = source_mode ? 1 : 0};
+          vw_msg_started_t started_payload = {.source_active =
+                                                  source_mode ? VW_SOURCE_ACTIVE_ACTIVE : VW_SOURCE_ACTIVE_INACTIVE};
           uint8_t started_payload_buf[1];
           size_t started_written = 0;
           vw_protocol_encode_payload(VW_MSG_STARTED, &started_payload, started_payload_buf, sizeof(started_payload_buf),
@@ -602,9 +603,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
     // Ahead-of-Time Look-Ahead Decoding Step
     if (session_active && source_mode && source_decoder && !paused && !source_eof &&
         (decoded_pts_us < vw_saturating_add_i64(current_playback_pts_us, lead_target_us))) {
-      int16_t decode_chunk[32000];  // 2 seconds at 16kHz
+      int16_t decode_chunk[VW_LOOKAHEAD_CHUNK_SAMPLES];  // 2 seconds at 16kHz
       int64_t chunk_pts_us = -1;
-      size_t samples_read = vw_source_decoder_read_s16le(source_decoder, decode_chunk, 32000, &chunk_pts_us);
+      size_t samples_read =
+          vw_source_decoder_read_s16le(source_decoder, decode_chunk, VW_LOOKAHEAD_CHUNK_SAMPLES, &chunk_pts_us);
       if (samples_read > 0 && audio_buf) {
         eof_retry_count = 0;
         int64_t actual_pts = (chunk_pts_us >= 0) ? chunk_pts_us : decoded_pts_us;

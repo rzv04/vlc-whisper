@@ -84,7 +84,7 @@ Example semantic value, shown as JSON only for readability:
 
 ### STARTED (v1.2)
 
-Worker to plugin. Payload: `u8 source_active` (1 if source file look-ahead mode initialized successfully; 0 if live streaming mode). Confirms session initialization and effective settings after `START`.
+Worker to plugin. Payload: `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if source file look-ahead mode initialized successfully; `VW_SOURCE_ACTIVE_INACTIVE = 0` if live streaming mode). Confirms session initialization and effective settings after `START`.
 
 ### CONTROL MESSAGES (`PAUSE`, `RESUME`, `STOP`)
 
