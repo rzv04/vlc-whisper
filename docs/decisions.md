@@ -147,21 +147,18 @@ Decision:
 1. **Per-Phrase Timestamp Extraction**: The worker extracts individual sub-segments from `whisper_full` using `whisper_full_n_segments(ctx)` and their exact centisecond offsets via `whisper_full_get_segment_t0(ctx, i)` and `whisper_full_get_segment_t1(ctx, i)`.
 2. **Discrete Media PTS Bounds**: Each phrase is assigned discrete media timestamps ($\text{start\_pts} = \text{window\_pts} + t_0 \times 10\,000$, $\text{end\_pts} = \text{window\_pts} + t_1 \times 10\,000$) and pushed independently to `vw_segment_builder`.
 3. **SPU Frame-Accurate Scheduling**: The plugin submits each phrase as a discrete subpicture to VLC's SPU engine. VLC displays and clears each phrase in exact synchrony with the speaker's vocal cadence, blanking during conversational pauses and eliminating dialogue spoilers (see [`docs/plans/phrase_timing_segmentation_plan.md`](file:///home/razvan/vlc-whisper/.worktrees/gemini/docs/plans/phrase_timing_segmentation_plan.md)).
-4. **Token-Boundary Suffix Extraction (Step 17d.1)**: `vw_segment_builder` deduplicates against committed
-   history using 500ms timestamp proximity and text equality/containment. An expanded overlapping phrase (a
-   candidate that is a superstring of an already-committed phrase at the same timestamp) is no longer rejected
-   wholesale. Instead, the builder extracts only the NEW SUFFIX at authentic token boundaries — per-token t0/t1
-   from `whisper_full_get_token_data`, scaled to microseconds (`×10000LL`) — emits that suffix as the
-   incremental caption, and records the full candidate in history. The last-queued, un-emitted expansion
-   replaces in place; the pending queue grows dynamically so a committed cue is never dropped; history commits
-   only after a successful queue push. Emitted phrases preserve 100% authentic Whisper acoustic bounds (t0,
-   t1) with zero synthetic duration fabrication. When per-token timing is unavailable (NULL tokens), the
-   builder preserves the original whole-phrase dedup behavior, including superstring rejection — no synthetic
-   timing is fabricated.
+4. **Token-Boundary Suffix Extraction (Step 17d.1) — SUPERSEDED by ADR-018**: `vw_segment_builder` deduplicates
+   against committed history using 500ms timestamp proximity and text equality/containment. An expanded
+   overlapping phrase is dropped wholesale under ADR-018 (final immutable subtitles); the token-boundary
+   suffix extraction described here was reverted. Emitted phrases preserve 100% authentic Whisper acoustic
+   bounds (t0, t1) with zero synthetic duration fabrication.
 
-### Step 17d.1 — Token-Boundary Suffix Extraction (Shipped with token timing)
+### Step 17d.1 — Token-Boundary Suffix Extraction (SUPERSEDED by ADR-018)
 
-**Status:** Shipped.
+**Status:** Superseded (2026-08-20) — reverted by ADR-018 (Final Immutable Subtitles). The token-boundary
+machinery described below (engine token accessors, `vw_segment_builder_push_phrase`, `vw_phrase_token_t`,
+`params.token_timestamps`) has been REMOVED from the codebase. Overlapping expanded re-recognitions are
+dropped wholesale; each phrase is emitted once, final, with authentic per-phrase bounds.
 
 Step 17d.1 fixes the recurring P1 defect where whole-phrase deduplication dropped the NEW SUFFIX of an expanded
 overlapping Whisper phrase (e.g. committed "jumps" then candidate "jumps quickly" was rejected wholesale,
@@ -181,3 +178,35 @@ leaving a permanent subtitle gap). The fix replaces superstring rejection with t
   `vw_phrase_token_t` array (capped at `VW_WHISPER_MAX_TOKENS_PER_SEGMENT`, saturating), and call `push_phrase`;
   on token-fetch failure they call `push_hypothesis`. No other worker logic changed.
 * **Wire/protocol unchanged**: `vw_caption_segment_t` is unmodified; only the worker-side dedup strategy changed.
+
+## ADR-018: Final Immutable Subtitles (No Expansion or Revision)
+
+**Status:** Accepted (2026-08-20).
+
+**Context.** PR 13 (Step 17d.1) iterated several times against a Greptile review loop over overlapping-window
+expansion semantics: whole-phrase superstring rejection dropped newly recognized suffix words; token-boundary
+suffix extraction then introduced edge cases of its own (boundary-spanning tokens, short-prefix repetition,
+token-level timestamp availability). Every fix traded one edge case for another because the model kept trying
+to REVISE already-emitted subtitles.
+
+**Decision.** Subtitles are FINAL and immutable:
+1. Each Whisper phrase is emitted exactly once, as an immutable cue carrying its authentic per-phrase
+   acoustic bounds (`window_pts + t0/t1`, from `whisper_full_get_segment_t0/t1`, scaled `×10000LL`).
+2. Overlapping windows that re-recognize already-covered audio are suppressed wholesale:
+   exact duplicates, fragments, and expanded superstrings of committed or pending phrases are all dropped.
+   There is NO suffix extraction, NO in-place revision, NO token-boundary splitting, and NO synthetic timing.
+3. The first pass is authoritative: words that appear only in a later overlapping re-recognition are not
+   retroactively emitted (accepted tradeoff — see consequences).
+
+**Consequences.**
+- `vw_segment_builder_push_hypothesis` is the single dedup entry point (whole-phrase: exact / fragment /
+  superstring all drop); `vw_segment_builder_push_phrase`, `vw_phrase_token_t`, and the suffix-boundary
+  selector are removed.
+- Engine token-level accessors (`vw_whisper_engine_get_segment_token_count/get_segment_token`), the
+  `vw_whisper_token_t` struct, and `params.token_timestamps` are removed — per-token timing is unused.
+- Per-phrase timing (ADR-017 items 1-3) is preserved; the queue grows dynamically (committed cues are never
+  discarded) and history commits only after a successful enqueue.
+- Known limitation: a genuinely new word recognized only inside an expanded later window is omitted rather
+  than emitted late or with synthetic timing. This is deliberate: revision churn and spoiler/repetition bugs
+  are worse than the omission, and the next non-overlapping phrase resumes coverage.
+- Supersedes ADR-017 item 4 (Token-Boundary Suffix Extraction) and the Step 17d.1 "Shipped" section below.
