@@ -18,6 +18,7 @@ typedef enum vw_worker_backend {
 typedef struct vw_whisper_segment {
   int64_t t0_us;          // Start offset in microseconds relative to window start
   int64_t t1_us;          // End offset in microseconds relative to window start
+  float no_speech_prob;   // Silence probability [0.0, 1.0] from whisper acoustic decoder
   const char* text_utf8;  // Borrowed pointer to UTF-8 text (valid until next transcribe or engine_free)
 } vw_whisper_segment_t;
 

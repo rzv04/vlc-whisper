@@ -39,6 +39,13 @@ static void vw_test_invalid_hypothesis_rejection(void) {
   huge_text[1099] = '\0';
   assert(!vw_segment_builder_push_hypothesis(builder, huge_text, 0, 1000000));
 
+  // Non-speech descriptor tags and isolated punctuation
+  assert(!vw_segment_builder_push_hypothesis(builder, "[Music]", 0, 1000000));
+  assert(!vw_segment_builder_push_hypothesis(builder, "(applause)", 0, 1000000));
+  assert(!vw_segment_builder_push_hypothesis(builder, "♪", 0, 1000000));
+  assert(!vw_segment_builder_push_hypothesis(builder, "...", 0, 1000000));
+  assert(!vw_segment_builder_push_hypothesis(builder, "---", 0, 1000000));
+
   vw_segment_builder_free(builder);
 }
 

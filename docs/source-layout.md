@@ -49,22 +49,24 @@ vlc-whisper/
 │   │   ├── vw_worker.h                        # Main worker event loop and IPC message dispatcher
 │   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
 │   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
-|   │   ├── vw_whisper_engine.h                # C wrapper around whisper.cpp: segment-level timing accessors
-│   │   ├── vw_vad.h                           # Voice activity detection state and windowing logic
-|   │   ├── vw_segment_builder.h               # Final-subtitles dedup (no expansion/revision), timed segments
+│   │   ├── vw_whisper_engine.h                # C wrapper around whisper.cpp: segment-level timing & no_speech_prob accessors
+│   │   ├── vw_vad.h                           # Silero VAD GGML context management and RMS Energy fallback detection
+│   │   ├── vw_hallucination_filter.h          # Non-speech sound tag and isolated punctuation filter
+│   │   ├── vw_segment_builder.h               # Final-subtitles dedup (no expansion/revision), timed segments
 │   │   ├── vw_audio_buffer.h                  # Rolling PCM ring buffer & window extraction
-│   │   └── vw_worker_config.h                 # Model path validation and worker configuration settings
+│   │   └── vw_worker_config.h                 # Model path validation, --vad-model CLI & auto-discovery
 │   ├── src/
 │   │   ├── main.c                             # Worker executable entry point: CLI parsing & signal handling
 │   │   ├── vw_worker.c                        # Worker IPC state machine, look-ahead decoding & message loop
 │   │   ├── vw_source_decoder_mf.c             # Windows Media Foundation native audio source demuxer
 │   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
 │   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
-|   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, segment accessors
-│   │   ├── vw_vad.c                           # Speech boundary detection & active window calculation
-|   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
+│   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, confidence & segment accessors
+│   │   ├── vw_vad.c                           # Silero GGML VAD integration & RMS energy fallback
+│   │   ├── vw_hallucination_filter.c          # Sound descriptor tag stripping and isolated punctuation filter
+│   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
-│   │   └── vw_worker_config.c                 # Configuration setup and model manifest checks
+│   │   └── vw_worker_config.c                 # Configuration setup, --vad-model parsing and auto-discovery
 │   └── third_party/                           # Pinned external C/C++ dependencies
 │       ├── vlc-3.0.23/                        # Pinned VLC header SDK headers
 │       └── whisper.cpp/                       # Pinned whisper.cpp C/C++ inference engine
@@ -78,13 +80,16 @@ vlc-whisper/
 │   │   ├── vw_ipc_transport.h                 # Platform transport abstraction (Named Pipe / Unix Domain Socket)
 │   │   └── vw_log.h                           # Privacy-safe variadic diagnostic logging API
 │   └── src/
-│       ├── vw_protocol_codec.c                # Binary frame pack & unpack implementations
-│       ├── vw_protocol_validate.c             # Frame bounds checking, magic verification & UTF-8 validation
-│       ├── vw_ipc_pipe_win32.c                # Windows Named Pipe server/client transport implementation
-│       ├── vw_ipc_socket_linux.c              # Linux Unix Domain Socket transport implementation
-│       └── vw_log.c                           # Privacy-safe variadic logger & customizable sink implementation
+│   │   ├── vw_protocol_codec.c                # Binary frame pack & unpack implementations
+│   │   ├── vw_protocol_validate.c             # Frame bounds checking, magic verification & UTF-8 validation
+│   │   ├── vw_ipc_pipe_win32.c                # Windows Named Pipe server/client transport implementation
+│   │   ├── vw_ipc_socket_linux.c              # Linux Unix Domain Socket transport implementation
+│   │   └── vw_log.c                           # Privacy-safe variadic logger & customizable sink implementation
 ├── models/                                    # Offline local GGML model storage & manifests
+│   ├── download-vad-model.sh                  # POSIX helper to download Silero VAD GGML weights
+│   ├── download-vad-model.cmd                 # Windows helper to download Silero VAD GGML weights
 │   ├── ggml-tiny.en.bin                       # Default GGML tiny.en weights file (git-ignored binary)
+│   ├── ggml-silero-vad.bin                    # Silero VAD GGML weights file (git-ignored binary)
 │   └── manifest.json                          # Offline manifest (SHA-256 integrity, RAM bounds)
 ├── tests/                                     # Verification suites, fixtures, and E2E procedures
 │   ├── CMakeLists.txt                         # Builds unit and integration test executables
@@ -99,9 +104,14 @@ vlc-whisper/
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
 │   │   ├── test_audio_buffer.c                # PCM ring buffer float32 conversion & overflow tests
 │   │   ├── test_whisper_engine.c              # whisper.cpp model init & transcription unit tests
+│   │   ├── test_vad.c                         # Silero GGML VAD and RMS Energy fallback unit tests
+│   │   ├── test_hallucination_filter.c        # Non-speech tag & isolated punctuation filter tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion tests
+│   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
+│   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
+│   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model/--vad-model) parsing tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
 │   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model) parsing tests

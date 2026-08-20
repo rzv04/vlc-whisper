@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "vw_hallucination_filter.h"
 #include "vw_protocol_util.h"
 
 vw_segment_builder_t* vw_segment_builder_create(void) {
@@ -242,6 +243,11 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   }
 
   if (len == 0 || len >= VW_SEGMENT_BUILDER_MAX_TEXT_BYTES) {
+    return false;
+  }
+
+  // Reject non-speech descriptor tags (e.g. [Music], ♪) and isolated punctuation (e.g. "...", "---")
+  if (vw_hallucination_is_phantom_text(text)) {
     return false;
   }
 

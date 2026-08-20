@@ -10,6 +10,16 @@
       "disk_bytes": 77704715,
       "ram_bytes_estimate": 286365440,
       "multilingual": false
+    },
+    {
+      "id": "silero-vad",
+      "filename": "ggml-silero-vad.bin",
+      "language": "universal",
+      "sha256": "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+      "disk_bytes": 885098,
+      "ram_bytes_estimate": 4194304,
+      "multilingual": true,
+      "type": "vad"
     }
   ]
 }

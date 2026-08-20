@@ -9,6 +9,7 @@
 
 typedef struct vw_worker_config {
   char model_path[VW_PATH_MAX_BYTES];
+  char vad_model_path[VW_PATH_MAX_BYTES];  // Path to Silero VAD GGML model file (--vad-model or auto-discovered)
   char language[8];
   uint32_t sample_rate;
   char pipe_name[256];
@@ -18,10 +19,12 @@ typedef struct vw_worker_config {
   int gpu_device;               // --gpu-device <id>: ordinal into whisper's GPU/IGPU device list
 } vw_worker_config_t;
 
+// Initializes worker configuration struct with default values (16kHz audio, tiny model, AUTO GPU backend).
+// Returns true on success or false if config pointer is NULL.
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 
-// Parse worker CLI args (--pipe, --token <64 hex>, --model, --log-file) into config.
-// Returns 0 on success, or 2 on bad usage (malformed --token, unknown option, missing value).
+// Parses command-line arguments into the worker configuration structure, performing syntax validation and
+// auto-discovering VAD model files. Returns 0 on success or 2 on error.
 int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** argv);
 
 #endif  // VW_WORKER_CONFIG_H_
