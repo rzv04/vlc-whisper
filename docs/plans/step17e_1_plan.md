@@ -1,0 +1,205 @@
+# Implementation Task Template
+
+# Task: Third-Party VAD Integration, Silence-Aware Gating & Hallucination Suppression (Step 17e.1)
+
+## Goal
+Eliminate subtitle flicker, phantom caption bursts, and background music hallucinations during non-speech intervals by integrating a deep neural Voice Activity Detector (Silero GGML VAD via native `whisper.cpp` APIs) backed by multi-tier acoustic confidence gating (`no_speech_prob`) and lexical hallucination pattern suppression.
+
+---
+
+## Context
+- **Relevant Docs/ADRs**: ADR-002 (C17 Authored Code), ADR-004 (Offline-Only Local IPC), ADR-015 (Model-Once Worker Lifetime), ADR-017 (Phrase-by-Phrase Timing), ADR-018 (Final Immutable Subtitles), `docs/architecture.md`, `docs/api-contracts.md`, `docs/whisper-api.md`.
+- **Target OS & Players**: Linux x64 (GCC/Clang, POSIX sockets) and Windows x64 (MinGW-w64, Win32 Named Pipes, VLC 3.0.23).
+- **Assumptions and Explicit Non-Goals**:
+  - *Non-Goal (deferred to Milestone 4 Item 21a)*: Multi-model GUI selection (`base.en`, `small.en`). Step 17e.1 operates with default `ggml-tiny.en.bin` and optional `ggml-silero-vad.bin`.
+  - *Non-Goal (deferred to Step 17e.2)*: Minimum display duration floor ($\ge 1.0\,\text{s}$) and beam search / temperature fallback tuning.
+  - *Zero New External Dynamic Dependencies*: Leverages `whisper.cpp`'s built-in Silero GGML VAD (`whisper_vad_context`), avoiding heavy runtime dependencies like ONNX Runtime or libtorch.
+
+---
+
+## Scope
+
+### In Scope
+1. **Tier 1: Pre-Inference Voice Activity Detection (`vw_vad`)**:
+   - Wire up `struct whisper_vad_context*` in `worker/src/vw_vad.c` using `whisper_vad_init_from_file_with_params` and `whisper_vad_detect_speech`.
+   - Add CLI parameter `--vad-model <path>` and config field `vad_model_path` in `vw_worker_config`.
+   - Implement graceful zero-config fallback to RMS energy VAD (`vw_vad_detect_speech_energy`) when no VAD model file is supplied.
+   - Reset VAD LSTM state (`whisper_vad_reset_state`) on seeking, pause/resume, and session epoch transitions.
+2. **Tier 2: Post-Inference Acoustic Confidence Gating (`vw_whisper_engine` / `vw_worker`)**:
+   - Expose `no_speech_prob` in `vw_whisper_segment_t` via `whisper_full_get_segment_no_speech_prob(ctx, i)`.
+   - Discard segments with $P(\text{no\_speech}) \ge 0.60$ before passing them to the segment builder.
+3. **Tier 3: Lexical & Text-Level Hallucination Filtering (`vw_hallucination_filter`)**:
+   - Implement fast, zero-allocation C17 string filter in `worker/src/vw_hallucination_filter.c` rejecting:
+     - Sound effect / music tags: `[Music]`, `[MUSIC]`, `(music)`, `[Applause]`, `(applause)`, `[Laughter]`, `(laughter)`, `[Silence]`, `♪`, `♫`, `*music*`, `(cheering)`.
+     - Pure punctuation / formatting spam: `...`, `. . .`, `! ! !`, `---`, `???`.
+     - YouTube & Subtitle repository outro boilerplate: `"Thank you for watching"`, `"Please subscribe"`, `"Subtitles by OpenSubtitles"`, `"Subtitles by the Amara.org"`, `"Transcribed by"`.
+     - Repetition degeneracy: strings with $\ge 3$ consecutively repeated words (`"you know you know you know"`).
+   - Integrate Tier 3 filter at the entrance of `vw_segment_builder_push_hypothesis`.
+4. **Automated & Manual Test Suite**:
+   - Add unit tests for `vw_hallucination_filter` and `vw_vad` in `tests/unit/`.
+   - Update `test_whisper_engine` and `test_segment_builder` for `no_speech_prob` and phantom suppression.
+
+### Out of Scope
+- SPU display duration expansion or reading time floors (Step 17e.2).
+- Whisper beam search or temperature fallback parameter sweeps (Step 17e.2).
+- Packaging GUI settings or multi-model downloads (Milestone 4).
+
+### Files & Components Expected to Change
+- `worker/include/vw_vad.h` & `worker/src/vw_vad.c`: Silero VAD context management and detection.
+- `worker/include/vw_worker_config.h` & `worker/src/vw_worker_config.c`: `--vad-model` CLI parsing.
+- `worker/include/vw_hallucination_filter.h` & `worker/src/vw_hallucination_filter.c`: Lexical phantom filter.
+- `worker/include/vw_whisper_engine.h` & `worker/src/vw_whisper_engine.c`: `no_speech_prob` segment getter.
+- `worker/src/vw_worker.c`: 3-tier VAD lifecycle, seek reset, and confidence gating.
+- `worker/src/vw_segment_builder.c`: Lexical filter rejection before dedup.
+- `tests/unit/test_vad.c`: Unit tests for Silero VAD and energy fallback.
+- `tests/unit/test_hallucination_filter.c`: Unit tests for lexical phantom patterns.
+- `tests/unit/test_segment_builder.c`: Regression tests for phantom cue suppression.
+- `docs/decisions.md`: Record ADR-019 (Multi-Tier VAD & Hallucination Suppression).
+- `docs/architecture.md`, `docs/api-contracts.md`, `docs/source-layout.md`, `docs/test-strategy.md`, `docs/roadmap.md`.
+
+---
+
+## Design
+
+### 1. Multi-Tier Filtering Architecture
+
+```
+[ Audio Window (8.0s / 128k samples @ 16kHz) ]
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│ TIER 1: Pre-Inference Voice Activity Detection (VAD)    │
+│  - Silero GGML VAD (`whisper_vad_detect_speech`)        │
+│  - Graceful Fallback: RMS Energy Gate (> 0.01f)         │
+│  - Action: No speech detected ──► SKIP Whisper entirely │
+└────────────────────────────┬────────────────────────────┘
+                             │ Speech Detected
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│ WHISPER INFERENCE (whisper_full)                        │
+│  - suppress_nst = true, suppress_blank = true           │
+│  - no_speech_thold = 0.60f, logprob_thold = -1.0f       │
+└────────────────────────────┬────────────────────────────┘
+                             │ Raw Segments
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│ TIER 2: Post-Inference Acoustic Confidence Filtering    │
+│  - whisper_full_get_segment_no_speech_prob(ctx, i)      │
+│  - Action: if no_speech_prob >= 0.60 ──► DROP segment   │
+└────────────────────────────┬────────────────────────────┘
+                             │ Validated Speech Segment
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│ TIER 3: Lexical & Text-Level Hallucination Filtering    │
+│  - 3A: Non-speech descriptor tags ([Music], (applause)) │
+│  - 3B: Punctuation & symbol spam filter (..., ! ! !)    │
+│  - 3C: YouTube/Subtitle outro blocklist ("Thank you...")│
+│  - 3D: Repetition loop detector (>=3 repeated words)    │
+│  - Action: Pattern match ──► DROP candidate             │
+└────────────────────────────┬────────────────────────────┘
+                             │ Clean Hypothesis Phrase
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│ SEGMENT BUILDER (vw_segment_builder)                    │
+│  - Whole-phrase time coverage deduplication (ADR-018)   │
+│  - SPU channel start clamping & final cue emission      │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 2. Threading & Ownership Model
+- **Single-Threaded Worker Event Loop**: VAD classification, Whisper inference, confidence gating, and segment builder execution all occur synchronously within `vw_worker_run` on the worker main thread.
+- **VAD Context Lifecycle**: `struct whisper_vad_context*` is initialized once at worker startup and freed at shutdown (`ADR-015`).
+- **State Reset on Discontinuity**: When a seek, pause, or media swap occurs, `whisper_vad_reset_state()` clears LSTM hidden states so previous audio does not bleed into the new position.
+
+### 3. Bounds, Time Units, and Failure Behavior
+- **Acoustic Bounds**: Whisper segment centiseconds ($t_0, t_1$) are converted to microsecond media presentation timestamps (`pts_us = window_pts_us + t * 10000LL`).
+- **No-Speech Probability**: Float bounded in $[0.0, 1.0]$. Segments with $\ge 0.60$ are dropped immediately.
+- **Failure Behavior**: If the VAD model fails to load at startup, the worker logs a warning and automatically falls back to RMS Energy VAD. VLC playback is never stalled or interrupted.
+
+---
+
+## Acceptance Criteria
+- [ ] VAD accurately detects speech and skips Whisper inference during silent and instrumental music intervals.
+- [ ] Worker falls back cleanly to RMS energy VAD when `--vad-model` is not supplied.
+- [ ] High `no_speech_prob` segments ($\ge 0.60$) are discarded before segment builder insertion.
+- [ ] Sound tags (`[Music]`, `[Applause]`, `♪`), punctuation spam (`...`), outro boilerplate, and repetition loops are 100% rejected.
+- [ ] Seeking and pause-resume reset VAD state without crashes or memory leaks.
+- [ ] 100% automated tests pass (`ctest --preset linux-x64-debug`).
+- [ ] Valgrind memcheck reports 0 errors and 0 leaks.
+- [ ] Documentation and ADRs updated in the same change.
+
+---
+
+## Manual Verification & Testing Protocol (Windows x64 / VLC 3.0.23)
+
+### 1. Environment & Pre-Conditions
+- **OS**: Windows 10 or Windows 11 (64-bit).
+- **VLC**: Official VLC media player 3.0.23 (x86_64).
+- **Binaries**:
+  - `libvlc_whisper_plugin.dll` copied to `C:\Program Files\VideoLAN\VLC\plugins\misc\`
+  - `vlc-whisper-worker.exe` copied to `C:\Program Files\VideoLAN\VLC\`
+  - `ggml-tiny.en.bin` located in `C:\Program Files\VideoLAN\VLC\models\`
+  - `ggml-silero-vad.bin` (optional) located in `C:\Program Files\VideoLAN\VLC\models\`
+
+### 2. Verification Commands
+```cmd
+:: 1. Reset plugin cache and verify registration
+"C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
+
+:: 2. Launch VLC with audio filter and file logging enabled
+"C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --audio-filter=vlc_whisper --file-logging --logfile=vlc-debug.log -vvv "C:\path\to\test_media.mp4"
+```
+
+### 3. Verification Checklist & Test Matrix
+
+| ID | Test Scenario | Execution Steps | Pass Criteria | Status |
+|---|---|---|---|---|
+| **TC-01** | **Dialogue with Background Music / SFX** | Play dialogue scene containing background soundtrack and ambient noise. | Dialogue transcribed accurately; music/SFX ignored; subtitles appear at vocal onset without hallucinated words. | [ ] PASS |
+| **TC-02** | **Instrumental Music & Silence Gating** | Play pure music track (`upbeat_music.mp3`) and clips with >15s silence. | Subtitle area remains completely blank; zero `[Music]`, `[Applause]`, or phantom loops; VAD/gating suppresses empty inferences. | [ ] PASS |
+| **TC-03** | **Conversational Rapid Speech & Pauses** | Play rapid conversation/podcast with 0.5s–2.0s pauses between speaker turns. | Subtitles appear phrase-by-phrase; screen blanks during pauses ($\ge 0.5\text{s}$); second speaker's lines are not spoiled early (`ADR-017`). | [ ] PASS |
+| **TC-04** | **Pause & Resume Lifecycle** | Pause mid-sentence for 5s, resume; pause during instrumental music, resume. | On pause, capture suspends and worker clears window; on resume, playback continues with synchronized captions without duplicate words or PTS drift. | [ ] PASS |
+| **TC-05** | **Seeking & Rapid Scrubbing** | Seek forward into dialogue, backward into music, and scrub slider rapidly 3–5 times. | Active subtitles clear immediately (`vout_FlushSubpictureChannel`); no residual ghost text; timeline re-anchors cleanly; zero audio stutter or crash. | [ ] PASS |
+| **TC-06** | **Worker Failure & Missing Model Resiliency** | Delete model file or terminate `vlc-whisper-worker.exe` from Task Manager during playback. | VLC audio/video playback continues 100% smoothly without pause or crash; plugin logs error diagnostic and degrades to passthrough. | [ ] PASS |
+| **TC-07** | **30-Minute Long-Play Stability** | Play continuous 30-minute local media file. | Worker RAM remains bounded (< 300MB); CPU usage stable; zero queue overflows or PTS desync over time. | [ ] PASS |
+
+### 4. Behavioral Expectations
+
+| Category | WHAT TO EXPECT (Correct Behavior) | WHAT NOT TO EXPECT (Out of Scope / Prohibited) |
+|---|---|---|
+| **Subtitle Timing & Cadence** | Instant, frame-accurate subtitle appearance on vocal onset ($t_0$) with natural phrase boundaries (`ADR-017`). | Karaoke-style word-by-word rolling animations; coarse 8-second block aggregation with early spoilers. |
+| **Visual Quality & Silence** | Crystal-clear bottom-center SPU text rendering; automatic screen blanking during silence, music, and pauses. | Lingering subtitles during silence; `[Music]`, `[Applause]`, `[Laughter]`, `♪`, or repetitive phantom subtitle loops. |
+| **Audio Processing** | Accurate transcription of clear human vocal speech in English. | Transcription or description of non-vocal audio (ambient noise, sirens, dog barks, instrumental solos). |
+| **Language Support** | Full English transcription using `ggml-tiny.en.bin`. | Translation of foreign languages into English (multilingual translation is Milestone 4 Step 22). |
+| **Subtitle Immutability** | Subtitles are **FINAL and IMMUTABLE** once emitted (`ADR-018`). | Modification, editing, re-expanding, or flickering of already displayed, finalized subtitles. |
+| **Playback & Stability** | Zero audio stutter, zero clicks, bounded memory usage, graceful degradation on failure. | VLC crashes, audio callback blocking, unhandled exceptions, memory growth over time. |
+
+---
+
+## Definition of Done
+- [ ] C17 code; no project-authored C++ introduced
+- [ ] No blocking work in VLC audio callback
+- [ ] No network access, telemetry, transcript/PCM persistence, or sensitive logs introduced
+- [ ] Memory, audio queue, frame, text, and retry limits are bounded
+- [ ] Error path is safe: captions may stop, playback does not
+- [ ] Unit/contract/integration tests pass as applicable
+- [ ] Formatting, warnings-as-errors, and static checks pass
+- [ ] Protocol contract and compatibility version updated if needed
+- [ ] `docs/decisions.md`, roadmap, and AI context updated when assumptions change
+- [ ] Reviewer can reproduce the result from a clean checkout
+
+---
+
+## Evidence
+- Build/test outputs or CI links: `ctest --preset linux-x64-debug` (100% pass)
+- Measured performance: VAD evaluation $< 0.5\,\text{ms}$ per audio window
+- Known limitations/follow-ups: Minimum display duration floor and Whisper decoding parameter optimization implemented in Step 17e.2.
+
+---
+
+## Slice Rule
+This task cuts vertically through:
+1. VAD engine integration (`vw_vad.c`, `whisper_vad_context`).
+2. Acoustic probability gating (`vw_whisper_engine.c`, `vw_worker.c`).
+3. Lexical hallucination filter (`vw_hallucination_filter.c`).
+4. Unit tests (`test_vad.c`, `test_hallucination_filter.c`, `test_segment_builder.c`).
+5. Windows manual verification protocol and documentation.
