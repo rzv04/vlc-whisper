@@ -9,6 +9,9 @@ struct whisper_vad_context* vw_vad_init_default(const char* path_model) {
 
   struct whisper_vad_context_params vad_params = whisper_vad_default_context_params();
   struct whisper_vad_context* vctx = whisper_vad_init_from_file_with_params(path_model, vad_params);
+  if (vctx != NULL) {
+    whisper_vad_reset_state(vctx);
+  }
 
   return vctx;
 }
@@ -19,7 +22,7 @@ bool vw_vad_detect_speech(const float* pcm32, size_t sample_count, struct whispe
   }
 
   if (vctx != NULL) {
-    if (!whisper_vad_detect_speech(vctx, pcm32, (int)sample_count)) {
+    if (!whisper_vad_detect_speech_no_reset(vctx, pcm32, (int)sample_count)) {
       return false;
     }
     struct whisper_vad_params vad_params = whisper_vad_default_params();

@@ -78,6 +78,7 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.suppress_nst = true;
   wparams.suppress_blank = true;
   wparams.no_speech_thold = 0.60f;
+  wparams.logprob_thold = -1.0f;
 
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;

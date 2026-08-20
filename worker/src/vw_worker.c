@@ -201,11 +201,17 @@ int vw_worker_run(const vw_worker_config_t* config) {
   struct whisper_vad_context* vad_ctx = NULL;
   if (config->vad_model_path[0] != '\0') {
     vad_ctx = vw_vad_init_default(config->vad_model_path);
+    if (!vad_ctx) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_VAD",
+                   "Silero VAD model failed to load from '%s'; operating on RMS Energy fallback",
+                   config->vad_model_path);
+    } else {
+      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD", "Silero VAD model loaded (%s)", config->vad_model_path);
+    }
+  } else {
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD",
+                 "Silero VAD model not specified; operating on zero-config RMS Energy fallback");
   }
-  vw_log_event(
-      VW_LOG_LEVEL_INFO, "WORKER_VAD",
-      vad_ctx ? "Silero VAD model loaded (%s)" : "Silero VAD model not loaded; using zero-config RMS Energy fallback",
-      config->vad_model_path[0] != '\0' ? config->vad_model_path : "none");
 
   vw_audio_buffer_t* audio_buf = vw_audio_buffer_create(160000);  // 10s at 16kHz
   vw_segment_builder_t* builder = vw_segment_builder_create();
@@ -551,7 +557,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                       int n_segs = vw_whisper_engine_get_segment_count(engine);
                       for (int s_idx = 0; s_idx < n_segs; s_idx++) {
                         vw_whisper_segment_t seg_info;
-                        if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info) && seg_info.text_utf8) {
+                        if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info)) {
                           if (seg_info.no_speech_prob >= 0.60f) {
                             continue;
                           }
@@ -659,7 +665,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   int n_segs = vw_whisper_engine_get_segment_count(engine);
                   for (int s_idx = 0; s_idx < n_segs; s_idx++) {
                     vw_whisper_segment_t seg_info;
-                    if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info) && seg_info.text_utf8) {
+                    if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info)) {
                       if (seg_info.no_speech_prob >= 0.60f) {
                         continue;
                       }
@@ -692,7 +698,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                     int n_segs = vw_whisper_engine_get_segment_count(engine);
                     for (int s_idx = 0; s_idx < n_segs; s_idx++) {
                       vw_whisper_segment_t seg_info;
-                      if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info) && seg_info.text_utf8) {
+                      if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info)) {
                         if (seg_info.no_speech_prob >= 0.60f) {
                           continue;
                         }
