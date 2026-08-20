@@ -102,6 +102,10 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
       if (strstr(hist->text, text) != NULL) {
         return false;
       }
+      // Superstring match -> candidate expands an already committed phrase at the same timestamp -> drop
+      if (strstr(text, hist->text) != NULL) {
+        return false;
+      }
     }
   }
 
@@ -109,6 +113,12 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   const vw_caption_segment_t* last = vw_segment_builder_get_last_segment(builder);
   if (last != NULL && last->text_utf8 != NULL) {
     if (strncmp(last->text_utf8, text, len) == 0 && last->text_utf8[len] == '\0') {
+      return false;
+    }
+    if (strstr(last->text_utf8, text) != NULL) {
+      return false;
+    }
+    if (strstr(text, last->text_utf8) != NULL) {
       return false;
     }
   }

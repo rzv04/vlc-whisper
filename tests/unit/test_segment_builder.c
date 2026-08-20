@@ -271,6 +271,10 @@ static void vw_test_discrete_phrase_authentic_timing(void) {
   assert(out.end_pts_us == 5200000LL);
   free(out.text_utf8);
 
+  // If a later overlapping window expands a committed phrase (e.g. "I'm from Germany, indeed" at 3.4s)
+  // superstring matching drops the expanded candidate at the same timestamp to prevent repeating committed words
+  assert(!vw_segment_builder_push_hypothesis(builder, "I'm from Germany, indeed", 3420000LL, 5800000LL));
+
   vw_segment_builder_free(builder);
 }
 
