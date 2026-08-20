@@ -47,25 +47,10 @@ void vw_segment_builder_free(vw_segment_builder_t* builder);
 // session-restart events, while preserving the allocated queue storage for immediate reuse.
 void vw_segment_builder_clear(vw_segment_builder_t* builder);
 
-// Borrowed token view of a single Whisper token in a candidate phrase. Supplied only on tokenized pushes; the text
-// may carry a leading space as emitted by whisper, and t0_us/t1_us are absolute media PTS (the transcription window
-// start plus the per-token offset). A NULL token array falls back to the legacy whole-phrase deduplication path.
-typedef struct vw_phrase_token {
-  const char* text;  // NUL-terminated token text (may include a leading space)
-  int64_t t0_us;     // absolute media PTS of the token start
-  int64_t t1_us;     // absolute media PTS of the token end
-} vw_phrase_token_t;
-
-// Pushes a phrase with optional per-token timing for accurate suffix extraction. When tokens are supplied and the
-// candidate expands an already committed or queued prefix, only the new suffix is queued using the first token at or
-// after the committed boundary; with NULL tokens the legacy whole-phrase behavior (including conservative superstring
-// drop) is preserved. Returns true if a cue was queued or an existing cue was extended in place.
-bool vw_segment_builder_push_phrase(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
-                                    int64_t end_pts_us, const vw_phrase_token_t* tokens, size_t token_count);
-
-// Pushes a phrase hypothesis using only whole-phrase text for deduplication; a thin wrapper over
-// vw_segment_builder_push_phrase that passes no token timing, so the legacy conservative superstring-drop behavior is
-// preserved when a candidate merely extends an already committed or queued phrase. Returns true if a cue was queued.
+// Pushes a phrase hypothesis as an IMMUTABLE FINAL cue with its authentic Whisper start/end PTS
+// (ADR-017: final subtitles — no expansion or revision of emitted phrases). Deduplicates against
+// the pending queue and committed history: exact matches, fragments, and superstrings (expanded
+// re-recognitions) are all dropped. Returns true if a cue was queued.
 bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
                                         int64_t end_pts_us);
 

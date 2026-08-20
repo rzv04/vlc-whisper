@@ -527,8 +527,6 @@ int vw_worker_run(const vw_worker_config_t* config) {
                                (long long)window_pts_us);
                   if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
                     if (builder) {
-                      vw_whisper_token_t seg_tokens[VW_WHISPER_MAX_TOKENS_PER_SEGMENT];
-                      vw_phrase_token_t phrase_tokens[VW_WHISPER_MAX_TOKENS_PER_SEGMENT];
                       int n_segs = vw_whisper_engine_get_segment_count(engine);
                       for (int s_idx = 0; s_idx < n_segs; s_idx++) {
                         vw_whisper_segment_t seg_info;
@@ -536,26 +534,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                           int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
                           int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
 
-                          int n_tokens = vw_whisper_engine_get_segment_token_count(engine, s_idx);
-                          if (n_tokens > VW_WHISPER_MAX_TOKENS_PER_SEGMENT) {
-                            n_tokens = VW_WHISPER_MAX_TOKENS_PER_SEGMENT;
-                          }
-                          bool tokens_ok = n_tokens > 0;
-                          for (int tk = 0; tokens_ok && tk < n_tokens; tk++) {
-                            if (!vw_whisper_engine_get_segment_token(engine, s_idx, tk, &seg_tokens[tk])) {
-                              tokens_ok = false;
-                              break;
-                            }
-                            phrase_tokens[tk].text = seg_tokens[tk].text;
-                            phrase_tokens[tk].t0_us = vw_saturating_add_i64(window_pts_us, seg_tokens[tk].t0_us);
-                            phrase_tokens[tk].t1_us = vw_saturating_add_i64(window_pts_us, seg_tokens[tk].t1_us);
-                          }
-                          if (tokens_ok) {
-                            vw_segment_builder_push_phrase(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts,
-                                                           phrase_tokens, (size_t)n_tokens);
-                          } else {
-                            vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
-                          }
+                          vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                         }
                       }
                     }
@@ -650,8 +629,6 @@ int vw_worker_run(const vw_worker_config_t* config) {
                            (long long)window_pts_us);
               if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
                 if (builder) {
-                  vw_whisper_token_t seg_tokens[VW_WHISPER_MAX_TOKENS_PER_SEGMENT];
-                  vw_phrase_token_t phrase_tokens[VW_WHISPER_MAX_TOKENS_PER_SEGMENT];
                   int n_segs = vw_whisper_engine_get_segment_count(engine);
                   for (int s_idx = 0; s_idx < n_segs; s_idx++) {
                     vw_whisper_segment_t seg_info;
@@ -659,26 +636,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                       int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
                       int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
 
-                      int n_tokens = vw_whisper_engine_get_segment_token_count(engine, s_idx);
-                      if (n_tokens > VW_WHISPER_MAX_TOKENS_PER_SEGMENT) {
-                        n_tokens = VW_WHISPER_MAX_TOKENS_PER_SEGMENT;
-                      }
-                      bool tokens_ok = n_tokens > 0;
-                      for (int tk = 0; tokens_ok && tk < n_tokens; tk++) {
-                        if (!vw_whisper_engine_get_segment_token(engine, s_idx, tk, &seg_tokens[tk])) {
-                          tokens_ok = false;
-                          break;
-                        }
-                        phrase_tokens[tk].text = seg_tokens[tk].text;
-                        phrase_tokens[tk].t0_us = vw_saturating_add_i64(window_pts_us, seg_tokens[tk].t0_us);
-                        phrase_tokens[tk].t1_us = vw_saturating_add_i64(window_pts_us, seg_tokens[tk].t1_us);
-                      }
-                      if (tokens_ok) {
-                        vw_segment_builder_push_phrase(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts,
-                                                       phrase_tokens, (size_t)n_tokens);
-                      } else {
-                        vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
-                      }
+                      vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                     }
                   }
                 }
@@ -701,8 +659,6 @@ int vw_worker_run(const vw_worker_config_t* config) {
                              "lookahead trailing speech window @%lldus; transcribing", (long long)window_pts_us);
                 if (vw_whisper_engine_transcribe_pcm(engine, window_samples, remaining)) {
                   if (builder) {
-                    vw_whisper_token_t seg_tokens[VW_WHISPER_MAX_TOKENS_PER_SEGMENT];
-                    vw_phrase_token_t phrase_tokens[VW_WHISPER_MAX_TOKENS_PER_SEGMENT];
                     int n_segs = vw_whisper_engine_get_segment_count(engine);
                     for (int s_idx = 0; s_idx < n_segs; s_idx++) {
                       vw_whisper_segment_t seg_info;
@@ -710,26 +666,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                         int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
                         int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
 
-                        int n_tokens = vw_whisper_engine_get_segment_token_count(engine, s_idx);
-                        if (n_tokens > VW_WHISPER_MAX_TOKENS_PER_SEGMENT) {
-                          n_tokens = VW_WHISPER_MAX_TOKENS_PER_SEGMENT;
-                        }
-                        bool tokens_ok = n_tokens > 0;
-                        for (int tk = 0; tokens_ok && tk < n_tokens; tk++) {
-                          if (!vw_whisper_engine_get_segment_token(engine, s_idx, tk, &seg_tokens[tk])) {
-                            tokens_ok = false;
-                            break;
-                          }
-                          phrase_tokens[tk].text = seg_tokens[tk].text;
-                          phrase_tokens[tk].t0_us = vw_saturating_add_i64(window_pts_us, seg_tokens[tk].t0_us);
-                          phrase_tokens[tk].t1_us = vw_saturating_add_i64(window_pts_us, seg_tokens[tk].t1_us);
-                        }
-                        if (tokens_ok) {
-                          vw_segment_builder_push_phrase(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts,
-                                                         phrase_tokens, (size_t)n_tokens);
-                        } else {
-                          vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
-                        }
+                        vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                       }
                     }
                   }

@@ -75,10 +75,6 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.translate = false;
   wparams.language = "en";
   wparams.n_threads = 4;
-  // Token-level timestamps must be enabled or whisper_full_get_token_data returns all-zero
-  // t0/t1 (whisper.cpp gates whisper_exp_compute_token_level_timestamps on params.token_timestamps,
-  // default false). The segment builder uses these boundaries as the authentic suffix start.
-  wparams.token_timestamps = true;
 
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;
@@ -134,58 +130,5 @@ bool vw_whisper_engine_get_segment(const vw_whisper_engine_t* engine, int index,
   out_seg->t0_us = t0 * 10000LL;
   out_seg->t1_us = t1 * 10000LL;
   out_seg->text_utf8 = txt ? txt : "";
-  return true;
-}
-
-int vw_whisper_engine_get_segment_token_count(const vw_whisper_engine_t* engine, int segment_index) {
-  if (!engine || !engine->ctx || segment_index < 0) {
-    return 0;
-  }
-  int seg_count = whisper_full_n_segments(engine->ctx);
-  if (segment_index >= seg_count) {
-    return 0;
-  }
-  int n_tokens = whisper_full_n_tokens(engine->ctx, segment_index);
-  if (n_tokens <= 0) {
-    return 0;
-  }
-  // Availability guard: token t0/t1 are only populated when token_timestamps was enabled AND the
-  // model produced timestamp tokens (distilled models force no_timestamps). When computed, the
-  // LAST token always carries t1 = segment end (> 0 for non-empty audio); an all-zero last token
-  // means timing was never computed — report 0 so the caller falls back to whole-phrase behavior
-  // instead of using non-authentic boundaries.
-  struct whisper_token_data last = whisper_full_get_token_data(engine->ctx, segment_index, n_tokens - 1);
-  if (last.t1 <= 0) {
-    return 0;
-  }
-  return n_tokens;
-}
-
-bool vw_whisper_engine_get_segment_token(const vw_whisper_engine_t* engine, int segment_index, int token_index,
-                                         vw_whisper_token_t* out_token) {
-  if (!engine || !engine->ctx || !out_token || segment_index < 0 || token_index < 0) {
-    return false;
-  }
-  int seg_count = whisper_full_n_segments(engine->ctx);
-  if (segment_index >= seg_count) {
-    return false;
-  }
-  int n_tokens = whisper_full_n_tokens(engine->ctx, segment_index);
-  if (token_index >= n_tokens) {
-    return false;
-  }
-
-  const char* txt = whisper_full_get_token_text(engine->ctx, segment_index, token_index);
-  struct whisper_token_data tdata = whisper_full_get_token_data(engine->ctx, segment_index, token_index);
-
-  if (txt) {
-    strncpy(out_token->text, txt, VW_WHISPER_MAX_TOKEN_BYTES - 1);
-  } else {
-    out_token->text[0] = '\0';
-  }
-  out_token->text[VW_WHISPER_MAX_TOKEN_BYTES - 1] = '\0';
-
-  out_token->t0_us = tdata.t0 * 10000LL;
-  out_token->t1_us = tdata.t1 * 10000LL;
   return true;
 }

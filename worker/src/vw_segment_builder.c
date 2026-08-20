@@ -62,50 +62,6 @@ static const vw_caption_segment_t* vw_segment_builder_get_last_segment(const vw_
   return &builder->segment_queue[last_idx];
 }
 
-// Returns true if prefix is exactly the leading run of str and the following character is a word boundary
-// (whitespace or end of string). Exact equality (prefix == str) is NOT treated as a boundary prefix here; callers
-// must handle exact match separately before consulting this helper.
-static bool vw_segment_builder_is_word_boundary_prefix(const char* prefix, const char* str) {
-  size_t plen = strlen(prefix);
-  size_t slen = strlen(str);
-  if (slen <= plen) {
-    return false;  // exact or shorter -> not a boundary prefix (exact handled by caller)
-  }
-  if (memcmp(str, prefix, plen) != 0) {
-    return false;
-  }
-  char c = str[plen];
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-// Selects the first token index that begins the new suffix of an expanded phrase. Time-first: the first token whose
-// start PTS is at or after the committed prefix end minus tolerance; its cumulative text offset must then land at or
-// after the matched prefix end (within tolerance). Falls back to the pure text-boundary rule (first token whose start
-// offset reaches the prefix end) when no time-consistent token exists. Returns true and sets *out_idx when a valid
-// suffix start is found; callers should drop the candidate when this returns false.
-// Selects the suffix-boundary token index for a word-aligned prefix expansion. The boundary is the
-// first token whose text starts exactly at the committed prefix end — a token fully inside the
-// prefix is never selected, so already-displayed words are never repeated. Any token that SPANS the
-// prefix end (its text begins before the boundary and ends after it) necessarily contains the tail
-// of a committed word, which cannot be split safely, so it returns false (conservative drop). The
-// suffix start time is the boundary token's own authentic t0.
-static bool vw_segment_builder_select_suffix_token(const vw_phrase_token_t* tokens, size_t token_count,
-                                                   size_t prefix_len, size_t* out_idx) {
-  size_t cum = 0;
-  for (size_t k = 0; k < token_count; k++) {
-    if (cum == prefix_len) {
-      *out_idx = k;  // token starts exactly at the prefix end -> fully new
-      return true;
-    }
-    size_t next_cum = cum + strlen(tokens[k].text);
-    if (next_cum > prefix_len) {
-      return false;  // token spans the prefix end -> cannot split without repeating committed text
-    }
-    cum = next_cum;
-  }
-  return false;  // no token extends beyond the prefix (candidate == prefix) -> exact-match drop path
-}
-
 // Allocates a text copy and appends a finalized cue to the pending queue, growing the ring buffer when full. Returns
 // false only on allocation failure; the caller must not commit history when this fails.
 static bool vw_segment_builder_enqueue(vw_segment_builder_t* builder, const char* text, int64_t start, int64_t end) {
@@ -168,8 +124,14 @@ static void vw_segment_builder_commit_history(vw_segment_builder_t* builder, con
   }
 }
 
-bool vw_segment_builder_push_phrase(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
-                                    int64_t end_pts_us, const vw_phrase_token_t* tokens, size_t token_count) {
+// Pushes a new phrase hypothesis as an IMMUTABLE FINAL cue (ADR-017: no expansion or revision of
+// already-emitted subtitles). Deduplicates against the pending queue and committed history:
+// exact matches, fragments, and superstrings (expanded re-recognitions of committed phrases) are
+// all dropped — a later overlapping window can never revise, extend, or repeat an emitted phrase.
+// Each phrase carries its authentic Whisper start/end PTS. History is committed only after a
+// successful enqueue; the queue grows dynamically so committed cues are never discarded.
+bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
+                                        int64_t end_pts_us) {
   if (builder == NULL || text == NULL || start_pts_us < 0 || end_pts_us <= start_pts_us) {
     return false;
   }
@@ -189,46 +151,23 @@ bool vw_segment_builder_push_phrase(vw_segment_builder_t* builder, const char* t
     return false;
   }
 
-  // 1. In-window (un-emitted) check against the last queued segment. Runs before the committed-history loop so an
-  //    expansion of a still-pending cue replaces it in place instead of emitting a separate suffix cue.
+  // 1. In-window (un-emitted) duplicate check against the last queued segment: exact, fragment, or
+  //    superstring all drop (final subtitles — a pending cue is never replaced or extended either).
   const vw_caption_segment_t* last = vw_segment_builder_get_last_segment(builder);
   if (last != NULL && last->text_utf8 != NULL) {
-    // Exact full match -> duplicate re-transcription from the same window -> drop.
     if (strncmp(last->text_utf8, text, len) == 0 && last->text_utf8[len] == '\0') {
       return false;
     }
-    // Candidate is a fragment already covered by the pending cue -> drop.
     if (strstr(last->text_utf8, text) != NULL) {
       return false;
     }
-    // Pending cue is a word-aligned PREFIX of the candidate -> extend it in place (tokenized) or conservatively drop.
-    if (vw_segment_builder_is_word_boundary_prefix(last->text_utf8, text)) {
-      if (tokens != NULL && token_count > 0) {
-        size_t last_idx = (builder->head + builder->capacity - 1) % builder->capacity;
-        vw_caption_segment_t* last_mut = &builder->segment_queue[last_idx];
-        char* new_text = (char*)malloc(len + 1);
-        if (new_text == NULL) {
-          return false;
-        }
-        memcpy(new_text, text, len);
-        new_text[len] = '\0';
-        free(last_mut->text_utf8);
-        last_mut->text_utf8 = new_text;
-        last_mut->text_bytes = (uint16_t)len;
-        last_mut->end_pts_us = end_pts_us;  // start_pts_us (and segment_id/count) intentionally preserved
-        vw_segment_builder_commit_history(builder, text, start_pts_us, end_pts_us);
-        return true;  // replaced in place: no count or next_segment_id increment
-      }
-      // NULL tokens -> legacy conservative superstring drop (no synthetic timing).
-      return false;
-    }
-    // Candidate contains the pending cue mid-way (not as a prefix) -> conservative anti-repeat drop.
     if (strstr(text, last->text_utf8) != NULL) {
       return false;
     }
   }
 
-  // 2. Committed-history loop (newest-first, same time-overlap gate as before). Cross-hop duplicates here.
+  // 2. Committed-history loop (newest-first, same time-overlap gate). Cross-hop duplicates,
+  //    fragments, and expanded re-recognitions of committed phrases are all dropped.
   for (size_t i = 0; i < builder->history_count; i++) {
     size_t idx = (builder->history_head + VW_SEGMENT_HISTORY_CAPACITY - 1 - i) % VW_SEGMENT_HISTORY_CAPACITY;
     const vw_history_entry_t* hist = &builder->history[idx];
@@ -241,82 +180,24 @@ bool vw_segment_builder_push_phrase(vw_segment_builder_t* builder, const char* t
       continue;
     }
 
-    // Exact full match -> duplicate re-transcription from an overlapping hop -> drop.
     if (strncmp(hist->text, text, len) == 0 && hist->text[len] == '\0') {
-      return false;
+      return false;  // exact duplicate
     }
-    // Candidate is a fragment already covered by a committed phrase -> drop.
     if (strstr(hist->text, text) != NULL) {
-      return false;
+      return false;  // fragment already covered
     }
-    // Committed phrase is a word-aligned PREFIX of the candidate -> expand, emitting only the new suffix.
-    if (vw_segment_builder_is_word_boundary_prefix(hist->text, text)) {
-      if (tokens != NULL && token_count > 0) {
-        size_t suffix_idx = 0;
-        if (!vw_segment_builder_select_suffix_token(tokens, token_count, strlen(hist->text), &suffix_idx)) {
-          return false;  // No valid suffix boundary -> conservative drop (never repeat committed words).
-        }
-        // Concatenate the suffix token texts (leading spaces trimmed).
-        size_t suffix_len = 0;
-        for (size_t k = suffix_idx; k < token_count; k++) {
-          suffix_len += strlen(tokens[k].text);
-        }
-        char* suffix_text = (char*)malloc(suffix_len + 1);
-        if (suffix_text == NULL) {
-          return false;
-        }
-        size_t off = 0;
-        for (size_t k = suffix_idx; k < token_count; k++) {
-          size_t tl = strlen(tokens[k].text);
-          memcpy(suffix_text + off, tokens[k].text, tl);
-          off += tl;
-        }
-        suffix_text[off] = '\0';
-        // Trim leading spaces (whisper token text may carry a leading space).
-        size_t lead = 0;
-        while (suffix_text[lead] == ' ') {
-          lead++;
-        }
-        if (lead > 0) {
-          memmove(suffix_text, suffix_text + lead, off - lead + 1);
-          off -= lead;
-        }
-        if (off == 0) {
-          free(suffix_text);
-          return false;  // Suffix collapsed to empty -> drop rather than emit a blank cue.
-        }
-        int64_t suffix_start = tokens[suffix_idx].t0_us;
-        int64_t suffix_end = end_pts_us;
-        if (!vw_segment_builder_enqueue(builder, suffix_text, suffix_start, suffix_end)) {
-          free(suffix_text);
-          return false;
-        }
-        free(suffix_text);  // enqueue copied it
-        // History records the FULL candidate (suffix cue carries only the new words).
-        vw_segment_builder_commit_history(builder, text, start_pts_us, end_pts_us);
-        return true;
-      }
-      // NULL tokens -> legacy conservative superstring drop (no synthetic timing).
-      return false;
-    }
-    // Candidate contains the committed phrase mid-way (not as a prefix) -> conservative anti-repeat drop.
     if (strstr(text, hist->text) != NULL) {
-      return false;
+      return false;  // expansion of a committed phrase -> final subtitles: no revision
     }
   }
 
-  // 3. No duplicate detected -> queue the full candidate and commit it to history only after a successful enqueue.
+  // 3. No duplicate detected -> queue the full candidate and commit it to history only after a
+  //    successful enqueue.
   if (!vw_segment_builder_enqueue(builder, text, start_pts_us, end_pts_us)) {
     return false;
   }
   vw_segment_builder_commit_history(builder, text, start_pts_us, end_pts_us);
   return true;
-}
-
-bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
-                                        int64_t end_pts_us) {
-  // Thin wrapper: no token timing -> legacy whole-phrase deduplication (conservative superstring drop preserved).
-  return vw_segment_builder_push_phrase(builder, text, start_pts_us, end_pts_us, NULL, 0);
 }
 
 bool vw_segment_builder_pop(vw_segment_builder_t* builder, vw_caption_segment_t* out) {
