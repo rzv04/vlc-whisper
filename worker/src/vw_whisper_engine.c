@@ -132,3 +132,43 @@ bool vw_whisper_engine_get_segment(const vw_whisper_engine_t* engine, int index,
   out_seg->text_utf8 = txt ? txt : "";
   return true;
 }
+
+int vw_whisper_engine_get_segment_token_count(const vw_whisper_engine_t* engine, int segment_index) {
+  if (!engine || !engine->ctx || segment_index < 0) {
+    return 0;
+  }
+  int seg_count = whisper_full_n_segments(engine->ctx);
+  if (segment_index >= seg_count) {
+    return 0;
+  }
+  return whisper_full_n_tokens(engine->ctx, segment_index);
+}
+
+bool vw_whisper_engine_get_segment_token(const vw_whisper_engine_t* engine, int segment_index, int token_index,
+                                         vw_whisper_token_t* out_token) {
+  if (!engine || !engine->ctx || !out_token || segment_index < 0 || token_index < 0) {
+    return false;
+  }
+  int seg_count = whisper_full_n_segments(engine->ctx);
+  if (segment_index >= seg_count) {
+    return false;
+  }
+  int n_tokens = whisper_full_n_tokens(engine->ctx, segment_index);
+  if (token_index >= n_tokens) {
+    return false;
+  }
+
+  const char* txt = whisper_full_get_token_text(engine->ctx, segment_index, token_index);
+  struct whisper_token_data tdata = whisper_full_get_token_data(engine->ctx, segment_index, token_index);
+
+  if (txt) {
+    strncpy(out_token->text, txt, VW_WHISPER_MAX_TOKEN_BYTES - 1);
+  } else {
+    out_token->text[0] = '\0';
+  }
+  out_token->text[VW_WHISPER_MAX_TOKEN_BYTES - 1] = '\0';
+
+  out_token->t0_us = tdata.t0 * 10000LL;
+  out_token->t1_us = tdata.t1 * 10000LL;
+  return true;
+}

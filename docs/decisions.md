@@ -147,4 +147,37 @@ Decision:
 1. **Per-Phrase Timestamp Extraction**: The worker extracts individual sub-segments from `whisper_full` using `whisper_full_n_segments(ctx)` and their exact centisecond offsets via `whisper_full_get_segment_t0(ctx, i)` and `whisper_full_get_segment_t1(ctx, i)`.
 2. **Discrete Media PTS Bounds**: Each phrase is assigned discrete media timestamps ($\text{start\_pts} = \text{window\_pts} + t_0 \times 10\,000$, $\text{end\_pts} = \text{window\_pts} + t_1 \times 10\,000$) and pushed independently to `vw_segment_builder`.
 3. **SPU Frame-Accurate Scheduling**: The plugin submits each phrase as a discrete subpicture to VLC's SPU engine. VLC displays and clears each phrase in exact synchrony with the speaker's vocal cadence, blanking during conversational pauses and eliminating dialogue spoilers (see [`docs/plans/phrase_timing_segmentation_plan.md`](file:///home/razvan/vlc-whisper/.worktrees/gemini/docs/plans/phrase_timing_segmentation_plan.md)).
-4. **Discrete Whole-Phrase Deduplication**: Rather than heuristic character-overlap slicing, `vw_segment_builder` performs discrete whole-phrase deduplication against committed history ($\Delta\text{start} \le 500\,\text{ms}$ and text equality/containment). Emitted phrases preserve 100% authentic Whisper acoustic bounds ($t_0, t_1$) with zero synthetic duration fabrication or artificial time shifting.
+4. **Token-Boundary Suffix Extraction (Step 17d.1)**: `vw_segment_builder` deduplicates against committed
+   history using 500ms timestamp proximity and text equality/containment. An expanded overlapping phrase (a
+   candidate that is a superstring of an already-committed phrase at the same timestamp) is no longer rejected
+   wholesale. Instead, the builder extracts only the NEW SUFFIX at authentic token boundaries — per-token t0/t1
+   from `whisper_full_get_token_data`, scaled to microseconds (`×10000LL`) — emits that suffix as the
+   incremental caption, and records the full candidate in history. The last-queued, un-emitted expansion
+   replaces in place; the pending queue grows dynamically so a committed cue is never dropped; history commits
+   only after a successful queue push. Emitted phrases preserve 100% authentic Whisper acoustic bounds (t0,
+   t1) with zero synthetic duration fabrication. When per-token timing is unavailable (NULL tokens), the
+   builder preserves the original whole-phrase dedup behavior, including superstring rejection — no synthetic
+   timing is fabricated.
+
+### Step 17d.1 — Token-Boundary Suffix Extraction (Shipped with token timing)
+
+**Status:** Shipped.
+
+Step 17d.1 fixes the recurring P1 defect where whole-phrase deduplication dropped the NEW SUFFIX of an expanded
+overlapping Whisper phrase (e.g. committed "jumps" then candidate "jumps quickly" was rejected wholesale,
+leaving a permanent subtitle gap). The fix replaces superstring rejection with token-boundary suffix extraction:
+
+* **Engine (`vw_whisper_engine`)**: adds `vw_whisper_engine_get_segment_token_count` and
+  `vw_whisper_engine_get_segment_token`, mirroring the segment accessors and backed by `whisper_full_n_tokens`,
+  `whisper_full_get_token_text`, and `whisper_full_get_token_data`. Token t0/t1 (whisper.cpp centiseconds) are
+  scaled by `10000LL` to microseconds; token text is copied bounded to `VW_WHISPER_MAX_TOKEN_BYTES - 1`.
+  Token-level timestamps require `token_timestamps = true` in the whisper full params.
+* **Builder (`vw_segment_builder`)**: adds `vw_segment_builder_push_phrase(builder, text, start_pts, end_pts,
+  tokens, token_count)` plus the borrowed `vw_phrase_token_t` view (absolute media-PTS t0/t1). `push_hypothesis`
+  is now a wrapper passing `tokens = NULL`. With tokens present, an expanded phrase emits only its new suffix
+  (tokens after the committed/last-queued end) while history records the full candidate. NULL tokens fall back
+  to legacy whole-phrase dedup.
+* **Worker (`vw_worker.c`)**: the three segment-push call sites fetch per-segment tokens, build an absolute-time
+  `vw_phrase_token_t` array (capped at `VW_WHISPER_MAX_TOKENS_PER_SEGMENT`, saturating), and call `push_phrase`;
+  on token-fetch failure they call `push_hypothesis`. No other worker logic changed.
+* **Wire/protocol unchanged**: `vw_caption_segment_t` is unmodified; only the worker-side dedup strategy changed.

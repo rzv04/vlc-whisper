@@ -49,9 +49,9 @@ vlc-whisper/
 │   │   ├── vw_worker.h                        # Main worker event loop and IPC message dispatcher
 │   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
 │   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
-│   │   ├── vw_whisper_engine.h                # C wrapper around third-party whisper.cpp API
+|   │   ├── vw_whisper_engine.h                # C wrapper around whisper.cpp: segments + per-token timing accessors
 │   │   ├── vw_vad.h                           # Voice activity detection state and windowing logic
-│   │   ├── vw_segment_builder.h               # Deduplication and time-ordered segment builder
+|   │   ├── vw_segment_builder.h               # Deduplication, token-boundary suffix extraction, timed segments
 │   │   ├── vw_audio_buffer.h                  # Rolling PCM ring buffer & window extraction
 │   │   └── vw_worker_config.h                 # Model path validation and worker configuration settings
 │   ├── src/
@@ -60,9 +60,9 @@ vlc-whisper/
 │   │   ├── vw_source_decoder_mf.c             # Windows Media Foundation native audio source demuxer
 │   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
 │   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
-│   │   ├── vw_whisper_engine.c                # Model loading & whisper_full inference execution
+|   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, segment & token accessors
 │   │   ├── vw_vad.c                           # Speech boundary detection & active window calculation
-│   │   ├── vw_segment_builder.c               # Segment deduplication & confidence scoring logic
+|   │   ├── vw_segment_builder.c               # Segment dedup, token-boundary suffix extraction, queue growth
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
 │   │   └── vw_worker_config.c                 # Configuration setup and model manifest checks
 │   └── third_party/                           # Pinned external C/C++ dependencies
@@ -160,11 +160,17 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_worker.c`          | IPC event loop, protocol dispatch, look-ahead decoding & state     |
 | `vw_source_decoder_mf.c` | Windows Media Foundation native audio demuxer & resampler        |
 | `vw_source_decoder_ffmpeg.c` | Linux FFmpeg native audio demuxer & resampler                |
-| `vw_whisper_engine.c`  | Whisper C API adapter, model load/unload, inference calls          |
+| `vw_whisper_engine.c`  | Whisper C API adapter: model load/unload, inference, per-segment & per-token accessors |
 | `vw_vad.c`             | Voice-activity detection state and window decisions                |
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
-| `vw_segment_builder.c` | Ordered timed segments and overlap deduplication                   |
+| `vw_segment_builder.c` | Ordered timed segments, token-boundary suffix extraction, dedup, dynamic queue growth |
 | `vw_worker_config.c`   | Validate model path, initial `en` language, and safe defaults      |
+
+The engine exposes per-segment (`vw_whisper_engine_get_segment_count`/`get_segment`) and per-token
+(`vw_whisper_engine_get_segment_token_count`/`get_segment_token`) timing accessors over whisper.cpp.
+The builder exposes `vw_segment_builder_push_hypothesis` (legacy whole-phrase wrapper) and
+`vw_segment_builder_push_phrase` (token-aware, performs token-boundary suffix extraction for expanded
+overlapping phrases). See `docs/plans/phrase_timing_segmentation_plan.md` and ADR-017 step 17d.1.
 
 MVP supports CPU inference using `tiny.en`, one local playback session, and final-only segments.
 

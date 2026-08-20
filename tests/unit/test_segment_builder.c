@@ -68,7 +68,7 @@ static void vw_test_push_and_deduplication(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_circular_buffer_wrap(void) {
+static void vw_test_queue_grows_past_capacity(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -166,7 +166,7 @@ static void vw_test_multi_phrase_per_window(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_hop_deduplication_with_history_persistence(void) {
+static void vw_test_history_commit_after_push(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
 
@@ -278,17 +278,138 @@ static void vw_test_discrete_phrase_authentic_timing(void) {
   vw_segment_builder_free(builder);
 }
 
+// Expansion with authentic token timing: a later hop re-recognizes an expanded phrase; only the new SUFFIX is queued,
+// carrying the per-token boundary (20s..30s) rather than the whole expanded phrase. This is the core Greptile P1 fix.
+static void vw_test_expansion_emits_suffix_with_token_timing(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  vw_phrase_token_t first_tokens[1] = {{"jumps", 10000000LL, 20000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps", 10000000LL, 20000000LL, first_tokens, 1));
+
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "jumps") == 0);
+  assert(out.start_pts_us == 10000000LL);
+  assert(out.end_pts_us == 20000000LL);
+  free(out.text_utf8);
+
+  // Expanded candidate seen in a later hop: only the new suffix "quickly" is queued (NOT dropped wholesale).
+  vw_phrase_token_t second_tokens[2] = {{"jumps", 10000000LL, 20000000LL}, {" quickly", 20000000LL, 30000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps quickly", 10000000LL, 30000000LL, second_tokens, 2));
+
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "quickly") == 0);
+  assert(out.start_pts_us == 20000000LL);
+  assert(out.end_pts_us == 30000000LL);
+  free(out.text_utf8);
+
+  vw_segment_builder_free(builder);
+}
+
+// A chain of expansions records the FULL candidate in history each time, so each new hop emits only its own new word.
+static void vw_test_expansion_chain_records_full_candidate(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  vw_phrase_token_t t1[1] = {{"jumps", 10000000LL, 20000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps", 10000000LL, 20000000LL, t1, 1));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+
+  vw_phrase_token_t t2[2] = {{"jumps", 10000000LL, 20000000LL}, {" quickly", 20000000LL, 30000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps quickly", 10000000LL, 30000000LL, t2, 2));
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+
+  // Third expansion: only "indeed" (30s..40s) is newly spoken; the suffix carries its authentic token timing.
+  vw_phrase_token_t t3[3] = {
+      {"jumps", 10000000LL, 20000000LL}, {" quickly", 20000000LL, 30000000LL}, {" indeed", 30000000LL, 40000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps quickly indeed", 10000000LL, 40000000LL, t3, 3));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "indeed") == 0);
+  assert(out.start_pts_us == 30000000LL);
+  assert(out.end_pts_us == 40000000LL);
+  free(out.text_utf8);
+
+  vw_segment_builder_free(builder);
+}
+
+// When the expanded candidate arrives before the preceding cue is emitted, the pending cue is extended IN PLACE: the
+// queue count stays at 1 and the emitted text is the full candidate with its own (10s..30s) timing.
+static void vw_test_last_queued_expansion_replaces(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  vw_phrase_token_t t1[1] = {{"jumps", 10000000LL, 20000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps", 10000000LL, 20000000LL, t1, 1));
+  assert(builder->count == 1);
+
+  vw_phrase_token_t t2[2] = {{"jumps", 10000000LL, 20000000LL}, {" quickly", 20000000LL, 30000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps quickly", 10000000LL, 30000000LL, t2, 2));
+  assert(builder->count == 1);  // replaced in place, no new queued cue
+
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "jumps quickly") == 0);
+  assert(out.start_pts_us == 10000000LL);
+  assert(out.end_pts_us == 30000000LL);
+  free(out.text_utf8);
+
+  vw_segment_builder_free(builder);
+}
+
+// A committed phrase appearing mid-way inside a new candidate (not as a prefix) is a conservative anti-repeat drop.
+static void vw_test_mid_containment_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  vw_phrase_token_t t1[3] = {
+      {"a", 10000000LL, 15000000LL}, {" b", 15000000LL, 20000000LL}, {" c", 20000000LL, 30000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "a b c", 10000000LL, 30000000LL, t1, 3));
+
+  vw_phrase_token_t t2[5] = {{"x ", 10000000LL, 12000000LL},
+                             {"a", 12000000LL, 15000000LL},
+                             {" b", 15000000LL, 20000000LL},
+                             {" c", 20000000LL, 30000000LL},
+                             {" y", 30000000LL, 40000000LL}};
+  // "a b c" is embedded mid-candidate -> dropped, not expanded.
+  assert(!vw_segment_builder_push_phrase(builder, "x a b c y", 10000000LL, 40000000LL, t2, 5));
+
+  vw_segment_builder_free(builder);
+}
+
+// Without token timing the legacy whole-phrase behavior is preserved: an expanded phrase is dropped, never emitted as a
+// synthetic suffix.
+static void vw_test_no_tokens_expansion_still_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+
+  vw_phrase_token_t t1[1] = {{"jumps", 10000000LL, 20000000LL}};
+  assert(vw_segment_builder_push_phrase(builder, "jumps", 10000000LL, 20000000LL, t1, 1));
+
+  assert(!vw_segment_builder_push_hypothesis(builder, "jumps quickly", 10000000LL, 30000000LL));
+
+  vw_segment_builder_free(builder);
+}
+
 int main(void) {
   vw_test_create_and_free();
   vw_test_invalid_hypothesis_rejection();
+  vw_test_queue_grows_past_capacity();
   vw_test_push_and_deduplication();
-  vw_test_circular_buffer_wrap();
   vw_test_pop();
   vw_test_multi_phrase_per_window();
-  vw_test_hop_deduplication_with_history_persistence();
+  vw_test_history_commit_after_push();
   vw_test_silence_gap_preservation();
   vw_test_clear_resets_history_and_queue();
   vw_test_discrete_phrase_authentic_timing();
+  vw_test_expansion_emits_suffix_with_token_timing();
+  vw_test_expansion_chain_records_full_candidate();
+  vw_test_last_queued_expansion_replaces();
+  vw_test_mid_containment_dropped();
+  vw_test_no_tokens_expansion_still_dropped();
 
   printf("test_segment_builder PASSED (all unit assertions verified)\n");
   return 0;
