@@ -269,3 +269,39 @@ to REVISE already-emitted subtitles.
 - **Natural Sentence Cadence**: Speech chunks are sliced at natural pauses, eliminating mid-word cuts and preserving complete sentence context for Whisper attention.
 - **$75\%$ Compute Reduction**: Reduces Whisper inference invocations from $30$ calls/min to $3\text{--}5$ calls/min during lookahead playback.
 - **Clean SPU Integration**: Non-overlapping discrete cues map cleanly to VLC private SPU subpicture channel scheduling with automatic screen blanking during conversational pauses.
+
+## ADR-021: Subtitle Reading Floor & Deterministic Whisper Decoding Optimization
+
+**Status:** Accepted (2026-08-20).
+
+**Context.** In natural conversational dialogue, short utterances (e.g. "Yeah", "Right", "No", "Okay") have raw acoustic durations between 150ms and 400ms. Displaying cues for their raw acoustic duration creates sub-second "flash cues" that vanish before human eye saccades and cognitive fixation can read them. Furthermore, unconstrained Whisper decoding configurations with non-zero fallback loops can trigger latency explosions (up to $6\times$) or stochastic hallucinations on ambiguous background audio.
+
+**Decision.**
+1. **Wall-Clock Minimum Subtitle Display Floor (`VW_CAPTION_MIN_DISPLAY_DURATION_US = 1000000LL`)**:
+   - The presentation layer (`vw_caption_presenter.c`) acts as the single owner of visual pacing.
+   - For any subtitle cue with raw acoustic duration $< 1.0\,\text{s}$, clamp the media duration to a rate-scaled floor:
+     $$\text{duration\_us} = \max\big(\text{raw\_dur},\ \lfloor 1\,000\,000 \times \text{rate} \rfloor\big),\qquad \text{dur\_wall} = \frac{\text{duration\_us}}{\text{rate}} \ge 1\,000\,000\,\mu\text{s}$$
+   - Guarantees subtitles remain on screen for at least **1.0 second of wall-clock reading time** across all playback rates ($0.5\times \to 0.5\text{s}$ media floor, $2.0\times \to 2.0\text{s}$ media floor).
+   - Lookahead cues are buffered in the presenter (`presenter->has_pending`) so that whenever an adjacent successor cue begins within the floor window ($< 1.0\,\text{s}$), the earlier cue's display duration is cleanly clipped to the successor cue's start PTS ($\text{clipped\_end} = \min(\text{target\_end}, \text{next\_start})$), eliminating any SPU presentation interval overlap.
+   - Long utterances ($> 1.0\text{s}$) preserve their full authentic acoustic duration.
+   - `vw_segment_builder` remains untouched, strictly recording true acoustic boundaries for coverage deduplication.
+2. **Deterministic Single-Pass Whisper Decoding Configuration (`vw_whisper_engine.c`)**:
+   - `wparams.strategy = WHISPER_SAMPLING_GREEDY;`
+   - `wparams.temperature = 0.0f;`
+   - `wparams.temperature_inc = 0.2f;` (explicit bounded fallback $\le 5$ passes on degenerate sequences to prevent silent caption drops while keeping greedy decoding as primary).
+   - `wparams.entropy_thold = 2.40f;` (halts low-entropy token repetition loops).
+   - `wparams.logprob_thold = -1.00f;`
+   - `wparams.no_speech_thold = 0.60f;`
+   - `wparams.no_context = true;` (disables within-window segment conditioning, preventing hallucination carryover).
+   - `wparams.single_segment = false;` (emits discrete sub-segments for phrase-by-phrase timing).
+   - `wparams.suppress_blank = true;`
+   - `wparams.suppress_nst = true;` (suppresses non-speech sound tokens at logit level).
+   - `wparams.print_special = false;`
+   - `wparams.max_len = 0;`
+   - `wparams.token_timestamps = false;`
+
+**Consequences.**
+- **Zero Flash Cues**: Every subtitle is displayed with sufficient human reading time ($\ge 1.0\text{s}$ wall clock).
+- **No Cue Collisions**: Cues display sequentially without visual overlap in VLC's SPU subpicture pipeline.
+- **Deterministic Latency**: Greedy decoding ensures bounded, single-pass inference without search latency spikes.
+- **Overlap prevention mechanism (verified 2026-08-20)**: the presenter posts every cue with `b_ephemer = true` (`vw_caption_presenter.c`), so VLC's SPU keeps only the newest same-channel ephemeral subpicture (`vlc_subpicture.h`: "displayed until the next one appear"). A successor cue therefore auto-evicts its predecessor regardless of the predecessor's posted `i_stop` — the 1s reading floor may leave two cues' *intervals* overlapping in the SPU chain, but only one is ever *rendered*. Interval clipping in `show_segment` is the lookahead precision layer (successor known in advance); ephemeral eviction is the safety net for the live-PCM path (successor not yet knowable at flush time). Static interval-overlap analysis that ignores `b_ephemer` is not a visible defect. This is a regression-tested invariant (`test_caption_presenter.c` asserts `b_ephemer == true` on every posted subpicture).

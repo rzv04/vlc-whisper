@@ -596,6 +596,14 @@ static void* vw_plugin_sender_main(void* arg) {
       }
     }
 
+    // If a pending caption cue is buffered and media position is approaching its display start PTS,
+    // flush it to SPU so it is rendered on time with its reading floor duration.
+    if (sys->presenter.has_pending && !paused) {
+      if (current_position_us <= 0 || sys->presenter.pending_segment.start_pts_us <= current_position_us + 100000LL) {
+        vw_caption_presenter_flush(&sys->presenter, current_position_us);
+      }
+    }
+
     if (sent_any && (sys->chunks_sent % 1024) == 0) {
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER", "sent %llu chunks, received %u worker frames",
                    (unsigned long long)sys->chunks_sent, sys->frames_received);

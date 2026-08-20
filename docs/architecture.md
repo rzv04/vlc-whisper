@@ -85,6 +85,9 @@ Seeking & discontinuity policy (shipped in step 17; hardened in steps 17c & 17d)
 - **VAD-Guided Non-Overlapping Audio Chunking (Step 17e.1 No-Hop, `ADR-020`)**:
   - In **Lookahead Source Mode**, replaces fixed 2-second sliding hops with dynamic VAD-guided non-overlapping audio chunking (`vw_vad_find_chunk_boundary`). Audio is partitioned along natural conversational pauses ($\ge 300\text{ms}$ silence gap between sentences) bounded between $6.0\text{s}$ and $24.0\text{s}$ ($150\text{ms}$ acoustic padding).
   - Each speech chunk is transcribed **exactly once** and drained 100% without overlap, eliminating duplicate/stuttering subtitles, mid-word clipping, and cross-hop timestamp jitter while reducing worker compute by 75%. Leading or all-silence intervals are drained with zero Whisper calls. Live streaming mode retains low-latency sliding windows for real-time responsiveness.
+- **Subtitle Reading Floor & Decoding Optimization (Step 17e.2, `ADR-021`)**:
+  - In `vw_caption_presenter.c`, enforces `VW_CAPTION_MIN_DISPLAY_DURATION_US = 1000000LL` (1.0s) rate-scaled wall-clock minimum display floor ($\text{duration\_us} = \max(\text{raw\_dur}, \lfloor 1000000 \times \text{rate} \rfloor)$), eliminating unreadable sub-second flash cues while preserving authentic acoustic timing for long phrases.
+  - In `vw_whisper_engine.c`, configures deterministic greedy decoding (`strategy = GREEDY`, `temperature = 0.0f`, `temperature_inc = 0.2f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`), isolating audio windows and preventing latency spikes or hallucination cascades.
 
 ## IPC protocol
 

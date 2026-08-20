@@ -30,7 +30,7 @@ vlc-whisper/
 │   │   ├── vw_plugin.h                        # Core module structs, capabilities, and setup declarations
 │   │   ├── vw_session.h                       # Playback session lifecycle & discontinuity state machine
 │   │   ├── vw_audio_capture.h                 # Decoded PCM extraction & monotonic media PTS assignment
-│   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC SPU/OSD caption cues
+│   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC SPU/OSD caption cues with 1.0s reading floor
 │   │   ├── vw_worker_client.h                 # Authenticated IPC client, worker process supervisor
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
 │   │   └── vw_platform.h                      # OS abstraction: CSPRNG, timing, process spawning
@@ -38,7 +38,7 @@ vlc-whisper/
 │       ├── vw_whisper_module.c               # Entry point: VLC module descriptor, open/close hooks
 │       ├── vw_session.c                       # Session lifecycle logic (start, pause, resume, seek reset)
 │       ├── vw_audio_capture.c                 # Audio callback handler & PCM format normalization
-│       ├── vw_caption_presenter.c             # Schedules and renders timed text captions via SPU with OSD fallback
+│       ├── vw_caption_presenter.c             # Schedules and renders timed text captions via SPU with 1.0s floor & OSD fallback
 │       ├── vw_worker_client.c                 # Worker process launcher, IPC client & HELLO handshake
 │       ├── vw_queue.c                         # Non-blocking lock-free SPSC queue implementation
 │       ├── vw_platform_win32.c                # Windows: paths, BCrypt CSPRNG, process spawn, timing
@@ -103,12 +103,12 @@ vlc-whisper/
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
 │   │   ├── test_audio_buffer.c                # PCM ring buffer float32 conversion & overflow tests
-│   │   ├── test_whisper_engine.c              # whisper.cpp model init & transcription unit tests
+│   │   ├── test_whisper_engine.c              # whisper.cpp model init, determinism & decoding parameter tests
 │   │   ├── test_vad.c                         # Silero GGML VAD, chunk boundary & RMS Energy fallback tests
 │   │   ├── test_hallucination_filter.c        # Non-speech tag & isolated punctuation filter tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
-│   │   ├── test_caption_presenter.c           # Caption cue conversion tests
+│   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
 │   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model/--vad-model) parsing tests

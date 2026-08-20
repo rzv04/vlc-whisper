@@ -96,6 +96,22 @@ int main(void) {
     EXPECT(seg.text_utf8 != NULL);
   }
 
+  // 4. Test decoding determinism (greedy argmax decoding yields identical output on repeat)
+  float tone_pcm[32000];
+  for (int i = 0; i < 32000; i++) {
+    tone_pcm[i] = 0.3f * (float)((i % 80) - 40) / 40.0f;
+  }
+  EXPECT(vw_whisper_engine_transcribe_pcm(eng, tone_pcm, 32000));
+  int count_1 = vw_whisper_engine_get_segment_count(eng);
+  char text_1[512] = {0};
+  strncpy(text_1, vw_whisper_engine_get_text(eng), sizeof(text_1) - 1);
+
+  EXPECT(vw_whisper_engine_transcribe_pcm(eng, tone_pcm, 32000));
+  int count_2 = vw_whisper_engine_get_segment_count(eng);
+  const char* text_2 = vw_whisper_engine_get_text(eng);
+  EXPECT(count_1 == count_2);
+  EXPECT(strcmp(text_1, text_2) == 0);
+
   vw_whisper_engine_free(eng);
   printf("test_whisper_engine PASSED\n");
   return 0;
