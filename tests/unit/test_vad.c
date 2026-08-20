@@ -174,12 +174,107 @@ static void vw_test_vad_silero_model(void) {
   vw_vad_free(vctx);
 }
 
+static void vw_test_vad_find_chunk_boundary_energy(void) {
+  size_t cut_samples = 0;
+  size_t silence_drain = 0;
+
+  // 1. Invalid args
+  assert(!vw_vad_find_chunk_boundary(NULL, 16000, NULL, false, &cut_samples, &silence_drain));
+  assert(!vw_vad_find_chunk_boundary((const float[]){0.1f}, 0, NULL, false, &cut_samples, &silence_drain));
+  assert(!vw_vad_find_chunk_boundary((const float[]){0.1f}, 16000, NULL, false, NULL, &silence_drain));
+  assert(!vw_vad_find_chunk_boundary((const float[]){0.1f}, 16000, NULL, false, &cut_samples, NULL));
+
+  // 2. Pure silence in energy fallback
+  float silence[VW_CHUNK_MAX_SAMPLES] = {0};
+  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MAX_SAMPLES, NULL, false, &cut_samples, &silence_drain));
+  assert(silence_drain == VW_CHUNK_MAX_SAMPLES);
+  assert(cut_samples == 0);
+
+  // 3. Speech signal in energy fallback
+  float speech[VW_CHUNK_MAX_SAMPLES];
+  for (size_t i = 0; i < VW_CHUNK_MAX_SAMPLES; i++) {
+    speech[i] = 0.3f * sinf(2.0f * 3.14159f * 440.0f * (float)i / 16000.0f);
+  }
+  assert(vw_vad_find_chunk_boundary(speech, VW_CHUNK_MAX_SAMPLES, NULL, false, &cut_samples, &silence_drain));
+  assert(cut_samples > 0);
+  assert(silence_drain == 0);
+
+  // 4. EOF partial audio in energy fallback
+  assert(vw_vad_find_chunk_boundary(speech, 32000, NULL, true, &cut_samples, &silence_drain));
+  assert(cut_samples == 32000);
+}
+
+static void vw_test_vad_find_chunk_boundary_silero(void) {
+  if (running_under_valgrind()) {
+    return;
+  }
+
+  const char* vad_paths[] = {"models/ggml-silero-vad.bin", "../../../models/ggml-silero-vad.bin",
+                             "../../models/ggml-silero-vad.bin", "../models/ggml-silero-vad.bin"};
+  const char* vad_path = NULL;
+  for (size_t i = 0; i < sizeof(vad_paths) / sizeof(vad_paths[0]); i++) {
+    FILE* f = fopen(vad_paths[i], "rb");
+    if (f) {
+      fclose(f);
+      vad_path = vad_paths[i];
+      break;
+    }
+  }
+
+  if (!vad_path) return;
+
+  struct whisper_vad_context* vctx = vw_vad_init_default(vad_path);
+  assert(vctx != NULL);
+
+  size_t cut_samples = 0;
+  size_t silence_drain = 0;
+
+  // 1. Pure silence at max chunk size -> silence drain without Whisper inference
+  float silence[VW_CHUNK_MAX_SAMPLES] = {0};
+  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MAX_SAMPLES, vctx, false, &cut_samples, &silence_drain));
+  assert(silence_drain == VW_CHUNK_MAX_SAMPLES);
+  assert(cut_samples == 0);
+
+  // 2. JFK speech audio fixture
+  const char* speech_fixtures[] = {"worker/third_party/whisper.cpp/samples/jfk.wav",
+                                   "../worker/third_party/whisper.cpp/samples/jfk.wav",
+                                   "../../worker/third_party/whisper.cpp/samples/jfk.wav",
+                                   "../../../worker/third_party/whisper.cpp/samples/jfk.wav", NULL};
+  const char* speech_path = NULL;
+  for (int i = 0; speech_fixtures[i]; i++) {
+    FILE* f = fopen(speech_fixtures[i], "rb");
+    if (f) {
+      fclose(f);
+      speech_path = speech_fixtures[i];
+      break;
+    }
+  }
+
+  if (speech_path) {
+    float speech_buf[VW_CHUNK_MAX_SAMPLES] = {0};
+    size_t samples_read = 0;
+    if (load_wav_pcm32(speech_path, speech_buf, VW_CHUNK_MAX_SAMPLES, &samples_read) && samples_read >= 96000) {
+      cut_samples = 0;
+      silence_drain = 0;
+      bool res = vw_vad_find_chunk_boundary(speech_buf, samples_read, vctx, false, &cut_samples, &silence_drain);
+      if (res) {
+        assert(cut_samples > 0 || silence_drain > 0);
+      }
+    }
+  }
+
+  vw_vad_reset_state(vctx);
+  vw_vad_free(vctx);
+}
+
 int main(void) {
   vw_test_vad_energy_detection();
   vw_test_vad_fallback_null_context();
   vw_test_vad_partial_window_sample_counts();
   vw_test_vad_null_safety();
   vw_test_vad_silero_model();
+  vw_test_vad_find_chunk_boundary_energy();
+  vw_test_vad_find_chunk_boundary_silero();
   printf("All VAD unit tests passed!\n");
   return 0;
 }

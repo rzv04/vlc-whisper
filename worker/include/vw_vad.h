@@ -20,6 +20,16 @@ bool vw_vad_detect_speech(const float* pcm32, size_t sample_count, struct whispe
 // true if audio energy exceeds the specified limit without requiring model weights.
 bool vw_vad_detect_speech_energy(const float* pcm32, size_t sample_count, float threshold);
 
+#define VW_CHUNK_MIN_SAMPLES 96000     // 6.0s at 16kHz
+#define VW_CHUNK_MAX_SAMPLES 384000    // 24.0s at 16kHz
+#define VW_CHUNK_PAD_SAMPLES 2400      // 150ms speech boundary padding
+#define VW_CHUNK_MIN_SILENCE_GAP 4800  // 300ms silence interval for natural sentence pause
+
+// Evaluates speech intervals in an audio buffer to determine the optimal non-overlapping chunk cut point at a natural
+// silence pause (or leading silence drain) to avoid word clipping and redundant inference.
+bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct whisper_vad_context* vctx, bool is_eof,
+                                size_t* out_cut_samples, size_t* out_silence_drain);
+
 // Resets internal recurrent LSTM states in the Silero VAD context. Must be invoked during seeking, pause resume, or
 // session epoch transitions to prevent past audio state leakage.
 void vw_vad_reset_state(struct whisper_vad_context* vctx);

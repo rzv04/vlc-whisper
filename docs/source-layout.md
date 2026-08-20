@@ -50,7 +50,7 @@ vlc-whisper/
 │   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
 │   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
 │   │   ├── vw_whisper_engine.h                # C wrapper around whisper.cpp: segment-level timing & no_speech_prob accessors
-│   │   ├── vw_vad.h                           # Silero VAD GGML context management and RMS Energy fallback detection
+│   │   ├── vw_vad.h                           # Silero VAD GGML context management, chunk finding & RMS Energy fallback
 │   │   ├── vw_hallucination_filter.h          # Non-speech sound tag and isolated punctuation filter
 │   │   ├── vw_segment_builder.h               # Final-subtitles dedup (no expansion/revision), timed segments
 │   │   ├── vw_audio_buffer.h                  # Rolling PCM ring buffer & window extraction
@@ -62,7 +62,7 @@ vlc-whisper/
 │   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
 │   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
 │   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, confidence & segment accessors
-│   │   ├── vw_vad.c                           # Silero GGML VAD integration & RMS energy fallback
+│   │   ├── vw_vad.c                           # Silero GGML VAD integration, chunk boundary finding & RMS energy fallback
 │   │   ├── vw_hallucination_filter.c          # Sound descriptor tag stripping and isolated punctuation filter
 │   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
@@ -104,7 +104,7 @@ vlc-whisper/
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
 │   │   ├── test_audio_buffer.c                # PCM ring buffer float32 conversion & overflow tests
 │   │   ├── test_whisper_engine.c              # whisper.cpp model init & transcription unit tests
-│   │   ├── test_vad.c                         # Silero GGML VAD and RMS Energy fallback unit tests
+│   │   ├── test_vad.c                         # Silero GGML VAD, chunk boundary & RMS Energy fallback tests
 │   │   ├── test_hallucination_filter.c        # Non-speech tag & isolated punctuation filter tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
@@ -112,9 +112,6 @@ vlc-whisper/
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
 │   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model/--vad-model) parsing tests
-│   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
-│   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
-│   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model) parsing tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test
 │   │   └── test_worker_lifecycle.c            # Worker startup, crash recovery & shutdown test

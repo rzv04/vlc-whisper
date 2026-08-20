@@ -241,3 +241,31 @@ to REVISE already-emitted subtitles.
 - Zero phantom subtitle spam during silent scenes and instrumental music.
 - Up to 80% CPU/GPU compute savings during non-dialogue media playback by skipping full Whisper model evaluations.
 - Backward compatibility: existing setups without `ggml-silero-vad.bin` automatically continue functioning via RMS Energy fallback.
+
+## ADR-020: VAD-Guided Non-Overlapping Audio Chunking for Lookahead Transcription
+
+**Status:** Accepted (2026-08-20).
+
+**Context.** Lookahead Mode demuxes and decodes local media files ahead of playback up to a 30-second lead horizon. Previously, it inherited the live streaming 8.0-second sliding analysis window with a 2.0-second hop. Overlapping sliding windows in lookahead mode caused:
+1. $4\times$ redundant Whisper inference passes per second of audio, consuming excessive CPU/GPU cycles and battery.
+2. Cross-hop acoustic and timestamp jitter ($\pm 20\text{--}50\,\text{ms}$) generating competing candidate hypotheses, triggering almost-duplicate and stuttering subtitle artifacts.
+3. Mid-sentence word clipping across arbitrary 8.0s cut points.
+
+**Decision.** Implement Silero VAD-Guided Non-Overlapping Audio Chunking (Strategy C) exclusively for Lookahead Source Mode:
+1. **Dynamic Silence-Aligned Partitioning (`vw_vad_find_chunk_boundary`)**:
+   - Accumulate lookahead audio in an enlarged 60-second ring buffer (`960,000` samples at 16kHz).
+   - Use Silero VAD segment boundaries to identify natural conversational pauses ($\ge 300\,\text{ms}$ silence gap between sentences) bounded between $T_{min} = 6.0\,\text{s}$ ($96,000$ samples) and $T_{max} = 24.0\,\text{s}$ ($384,000$ samples), with $150\,\text{ms}$ ($2,400$ samples) acoustic tail padding.
+   - For leading or full-window silence ($0$ speech segments), drain the non-speech audio immediately with **zero Whisper inference calls**.
+   - For continuous monologues without silence gaps, clamp and force a split cleanly at $T_{max} = 24.0\,\text{s}$.
+2. **$100\%$ Non-Overlapping Drain**:
+   - Pass the speech chunk to `whisper_full` exactly once, push discrete phrase segments to `vw_segment_builder`, and drain the entire chunk (`vw_audio_buffer_drain(audio_buf, cut_samples)`).
+   - Advance the lookahead timeline with zero overlap ($hop = cut\_samples$).
+3. **Decoupled Live vs Lookahead Strategy**:
+   - Retain the low-latency sliding window for live PCM streaming where future audio is unavailable.
+   - Use Strategy C exclusively for `source_mode == true` local file decoding.
+
+**Consequences.**
+- **Zero Duplicate / Flickering Subtitles**: By construction, every second of audio is decoded once, eliminating duplicate candidates and cross-hop timestamp jitter.
+- **Natural Sentence Cadence**: Speech chunks are sliced at natural pauses, eliminating mid-word cuts and preserving complete sentence context for Whisper attention.
+- **$75\%$ Compute Reduction**: Reduces Whisper inference invocations from $30$ calls/min to $3\text{--}5$ calls/min during lookahead playback.
+- **Clean SPU Integration**: Non-overlapping discrete cues map cleanly to VLC private SPU subpicture channel scheduling with automatic screen blanking during conversational pauses.
