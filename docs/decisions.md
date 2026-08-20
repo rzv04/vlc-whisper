@@ -209,4 +209,8 @@ to REVISE already-emitted subtitles.
 - Known limitation: a genuinely new word recognized only inside an expanded later window is omitted rather
   than emitted late or with synthetic timing. This is deliberate: revision churn and spoiler/repetition bugs
   are worse than the omission, and the next non-overlapping phrase resumes coverage.
+- Partial-overlap dedup: a candidate whose word-aligned prefix repeats a ≥2-word word-aligned suffix of a
+  time-adjacent/overlapping committed or pending cue (e.g. a continuation phrase that re-captions the previous
+  cue's tail) is trimmed to emit only the not-yet-shown remainder, starting at that cue's end — each word
+  appears once, so embedded previous-caption context is never duplicated on screen.
 - Supersedes ADR-017 item 4 (Token-Boundary Suffix Extraction) and the Step 17d.1 "Shipped" section below.

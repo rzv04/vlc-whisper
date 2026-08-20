@@ -33,6 +33,7 @@ typedef struct vw_segment_builder {
   vw_history_entry_t history[VW_SEGMENT_HISTORY_CAPACITY];  // Sliding history of committed phrases for deduplication
   size_t history_head;                                      // Next write index in history (0..15)
   size_t history_count;                                     // Count of active history entries (0..16)
+  int64_t covered_end_us;  // End of the last committed cue (audio coverage frontier, -1 = none)
 } vw_segment_builder_t;
 
 // Allocates and initializes a segment builder instance, creating a circular pending-output queue and a sliding

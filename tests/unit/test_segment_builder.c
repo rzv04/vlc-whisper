@@ -271,9 +271,15 @@ static void vw_test_discrete_phrase_authentic_timing(void) {
   assert(out.end_pts_us == 5200000LL);
   free(out.text_utf8);
 
-  // If a later overlapping window expands a committed phrase (e.g. "I'm from Germany, indeed" at 3.4s)
-  // superstring matching drops the expanded candidate at the same timestamp to prevent repeating committed words
-  assert(!vw_segment_builder_push_hypothesis(builder, "I'm from Germany, indeed", 3420000LL, 5800000LL));
+  // If a later overlapping window expands a committed phrase beyond the coverage frontier
+  // (e.g. "I'm from Germany, indeed" extends to 5.8s), the tail-prefix trim emits only the NEW
+  // remainder ("indeed") starting at the frontier — no repeated committed words, no lost text.
+  assert(vw_segment_builder_push_hypothesis(builder, "I'm from Germany, indeed", 3420000LL, 5800000LL));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "indeed") == 0);
+  assert(out.start_pts_us == 5200000LL);  // clamped to the coverage frontier
+  assert(out.end_pts_us == 5800000LL);
+  free(out.text_utf8);
 
   vw_segment_builder_free(builder);
 }
@@ -330,9 +336,14 @@ static void vw_test_superstring_dropped(void) {
   assert(vw_segment_builder_pop(builder, &out));
   assert(strcmp(out.text_utf8, "hello world") == 0);
   free(out.text_utf8);
-  // Whole-phrase superstring (even without a clean word-prefix split) -> dropped.
-  assert(!vw_segment_builder_push_hypothesis(builder, "hello world again", 10000000LL, 30000000LL));
-  assert(builder->count == 0);
+  // Whole-phrase superstring extending past the frontier (2+ word cue): the new word is RECOVERED
+  // via the tail-prefix trim instead of being lost — emitted at the covered frontier.
+  assert(vw_segment_builder_push_hypothesis(builder, "hello world again", 10000000LL, 30000000LL));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "again") == 0);
+  assert(out.start_pts_us == 20000000LL);
+  assert(out.end_pts_us == 30000000LL);
+  free(out.text_utf8);
   vw_segment_builder_free(builder);
 }
 
@@ -383,6 +394,280 @@ static void vw_test_pending_dedup_overlapping_time_dropped(void) {
   vw_segment_builder_free(builder);
 }
 
+static void vw_test_partial_overlap_prefix_trimmed(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  // Long caption A (window N); its tail re-appears as the prefix of continuation B (window N+1).
+  assert(vw_segment_builder_push_hypothesis(
+      builder, "england so i used to skype very often or go and look films on the internet or listen to music more",
+      10000000LL, 14000000LL));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // B overlaps A in time and starts with A's tail -> only the NEW remainder is emitted, starting at
+  // A's end (each word appears once, no embedded-context duplication).
+  assert(vw_segment_builder_push_hypothesis(builder, "or listen to music more because i have more free time now",
+                                            13000000LL, 16000000LL));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "because i have more free time now") == 0);
+  assert(out.start_pts_us == 14000000LL);  // A's end
+  assert(out.end_pts_us == 16000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_partial_overlap_whole_tail_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "go and look films on the internet", 10000000LL, 14000000LL));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // The candidate is entirely the cue's tail -> dropped (already shown).
+  assert(!vw_segment_builder_push_hypothesis(builder, "on the internet", 13000000LL, 14000000LL));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_partial_overlap_far_time_not_trimmed(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "the store was closed", 10000000LL, 14000000LL));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Same tail words but far later in time (not adjacent/overlapping): genuinely new speech -> kept whole.
+  assert(vw_segment_builder_push_hypothesis(builder, "the store was crowded", 50000000LL, 54000000LL));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "the store was crowded") == 0);
+  assert(out.start_pts_us == 50000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_prefix_change_retranscription_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "i'm from peru, i live in the capital", 0, 3000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Whisper re-transcribes the same audio with a CHANGED PREFIX (text not contained). The audio is
+  // already covered -> dropped by time coverage, regardless of the text difference.
+  assert(!vw_segment_builder_push_hypothesis(builder, "i live in the capital", 1500000, 3000000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_suffix_swap_retranscription_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "capital lima is near the coast", 10000000, 14000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Re-transcription with a swapped suffix ending within covered audio -> dropped.
+  assert(!vw_segment_builder_push_hypothesis(builder, "i'm from peru capital lima", 11000000, 13000000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_boundary_extension_clamped_no_overwrite(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "long caption phrase", 10000000, 14000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Boundary-spanning continuation: starts before the covered end (would overwrite the showing cue
+  // mid-display) but extends past it. Emit only the new remainder, starting at the covered end.
+  assert(vw_segment_builder_push_hypothesis(builder, "long caption phrase continues", 13000000, 16000000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "continues") == 0);
+  assert(out.start_pts_us == 14000000LL);  // clamped to the coverage frontier (previous cue end)
+  assert(out.end_pts_us == 16000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_new_audio_after_coverage_emitted(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "first utterance", 10000000, 14000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Genuinely new audio well past the covered range -> emitted whole (no trim, no drop).
+  assert(vw_segment_builder_push_hypothesis(builder, "second utterance after silence", 20000000, 24000000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "second utterance after silence") == 0);
+  assert(out.start_pts_us == 20000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_jittered_fragment_past_cue_end_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat sat on the mat", 10000000, 20000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Fragment whose time jitters PAST the cue's end and the covered frontier: all words are still
+  // covered -> dropped (no new text to emit).
+  assert(!vw_segment_builder_push_hypothesis(builder, "cat sat on the", 12000000, 21000000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_hallucinated_retranscription_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat sat on the mat", 10000000, 20000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Same audio re-transcribed with COMPLETELY different text within the covered range: the audio is
+  // authoritative -> dropped (text-independent coverage dedup).
+  assert(!vw_segment_builder_push_hypothesis(builder, "completely different words", 11000000, 19000000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_tolerance_boundary(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "base phrase", 10000000, 20000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Exactly at covered + VW_DEDUP_TIME_TOLERANCE_US (500ms) -> dropped (<=).
+  assert(!vw_segment_builder_push_hypothesis(builder, "late retranscription", 11000000, 20500000));
+  assert(builder->count == 0);
+  // One microsecond past the tolerance -> emitted (new audio), start clamped to the frontier.
+  assert(vw_segment_builder_push_hypothesis(builder, "past tolerance phrase", 11000000, 20500001));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(out.start_pts_us == 20000000LL);  // clamped, never overwrites the showing cue
+  assert(out.end_pts_us == 20500001LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_same_start_time_extension_trimmed(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "first phrase", 10000000, 13000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Whisper sometimes stamps consecutive segments at the same start; the extension of a 2+ word
+  // cue is recovered via the tail-prefix trim (prefix removed, remainder emitted at the frontier).
+  assert(vw_segment_builder_push_hypothesis(builder, "first phrase continued", 10000000, 14000000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "continued") == 0);
+  assert(out.start_pts_us == 13000000LL);
+  assert(out.end_pts_us == 14000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_backward_time_candidate_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "forward phrase", 10000000, 14000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // A candidate stamped earlier than the frontier but ending inside covered audio -> dropped.
+  assert(!vw_segment_builder_push_hypothesis(builder, "backward stamp", 5000000, 9000000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_one_word_expansion_dropped_adr018(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "jumps", 10000000, 20000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // One-word cue cannot be safely trimmed (>=2 word rule) -> expansion dropped (ADR-018 preserved).
+  assert(!vw_segment_builder_push_hypothesis(builder, "jumps quickly", 10000000, 30000000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_two_word_expansion_recovered(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat", 10000000, 20000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Two-word cue prefix-extension: the new word is recovered (not lost) via the tail-prefix trim.
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat sat", 10000000, 30000000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "sat") == 0);
+  assert(out.start_pts_us == 20000000LL);
+  assert(out.end_pts_us == 30000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_history_wrap_retranscription_dropped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  // Fill and evict the 16-entry history ring with 20 sequential cues.
+  for (int i = 0; i < 20; i++) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "cue number %d", i + 1);
+    int64_t start = (int64_t)i * 2000000;
+    assert(vw_segment_builder_push_hypothesis(builder, buf, start, start + 1800000));
+    vw_caption_segment_t out;
+    assert(vw_segment_builder_pop(builder, &out));
+    free(out.text_utf8);
+  }
+  // Cue #1 has long left the history ring, but the coverage frontier still covers its audio ->
+  // re-transcription is dropped (frontier survives history eviction).
+  assert(!vw_segment_builder_push_hypothesis(builder, "cue number 1", 0, 1800000));
+  assert(builder->count == 0);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_unrelated_boundary_extension_clamped(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "first phrase", 10000000, 13000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // Boundary-spanning candidate with unrelated text: no trim applies, but the start is clamped to
+  // the frontier so it never overwrites the showing cue mid-display.
+  assert(vw_segment_builder_push_hypothesis(builder, "unrelated words", 10000000, 14000000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "unrelated words") == 0);
+  assert(out.start_pts_us == 13000000LL);
+  assert(out.end_pts_us == 14000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_evil_repeat_phrase_distinct_times_kept(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "repeat phrase", 10000000, 12000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // The same words genuinely spoken again much later (far outside coverage/tolerance) -> kept.
+  assert(vw_segment_builder_push_hypothesis(builder, "repeat phrase", 20000000, 22000000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "repeat phrase") == 0);
+  assert(out.start_pts_us == 20000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
 int main(void) {
   vw_test_create_and_free();
   vw_test_invalid_hypothesis_rejection();
@@ -398,6 +683,23 @@ int main(void) {
   vw_test_last_queued_expansion_dropped();
   vw_test_pending_dedup_time_gated();
   vw_test_pending_dedup_overlapping_time_dropped();
+  vw_test_partial_overlap_prefix_trimmed();
+  vw_test_partial_overlap_whole_tail_dropped();
+  vw_test_partial_overlap_far_time_not_trimmed();
+  vw_test_prefix_change_retranscription_dropped();
+  vw_test_suffix_swap_retranscription_dropped();
+  vw_test_boundary_extension_clamped_no_overwrite();
+  vw_test_new_audio_after_coverage_emitted();
+  vw_test_evil_jittered_fragment_past_cue_end_dropped();
+  vw_test_evil_hallucinated_retranscription_dropped();
+  vw_test_evil_tolerance_boundary();
+  vw_test_evil_same_start_time_extension_trimmed();
+  vw_test_evil_backward_time_candidate_dropped();
+  vw_test_evil_one_word_expansion_dropped_adr018();
+  vw_test_evil_two_word_expansion_recovered();
+  vw_test_evil_history_wrap_retranscription_dropped();
+  vw_test_evil_unrelated_boundary_extension_clamped();
+  vw_test_evil_repeat_phrase_distinct_times_kept();
   vw_test_mid_containment_dropped();
   vw_test_superstring_dropped();
   vw_test_short_prefix_expansion_dropped();

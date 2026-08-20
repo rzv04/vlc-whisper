@@ -13,6 +13,7 @@ vw_segment_builder_t* vw_segment_builder_create(void) {
     return NULL;
   }
   b->next_segment_id = 1;
+  b->covered_end_us = -1;
   b->capacity = VW_SEGMENT_BUILDER_INITIAL_CAPACITY;
   b->segment_queue = (vw_caption_segment_t*)calloc(b->capacity, sizeof(vw_caption_segment_t));
   if (b->segment_queue == NULL) {
@@ -50,6 +51,7 @@ void vw_segment_builder_clear(vw_segment_builder_t* builder) {
   builder->count = 0;
   builder->history_head = 0;
   builder->history_count = 0;
+  builder->covered_end_us = -1;
   memset(builder->history, 0, sizeof(builder->history));
 }
 
@@ -118,6 +120,9 @@ static void vw_segment_builder_commit_history(vw_segment_builder_t* builder, con
   builder->history[h_slot].end_pts_us = end;
   memcpy(builder->history[h_slot].text, text, copy_len);
   builder->history[h_slot].text[copy_len] = '\0';
+  if (end > builder->covered_end_us) {
+    builder->covered_end_us = end;
+  }
   builder->history_head = (builder->history_head + 1) % VW_SEGMENT_HISTORY_CAPACITY;
   if (builder->history_count < VW_SEGMENT_HISTORY_CAPACITY) {
     builder->history_count++;
@@ -130,6 +135,95 @@ static void vw_segment_builder_commit_history(vw_segment_builder_t* builder, con
 // all dropped — a later overlapping window can never revise, extend, or repeat an emitted phrase.
 // Each phrase carries its authentic Whisper start/end PTS. History is committed only after a
 // successful enqueue; the queue grows dynamically so committed cues are never discarded.
+// Returns the length in characters of the longest word-aligned SUFFIX of `cue` that equals a
+// word-aligned PREFIX of `cand` and spans at least two words, or 0 when none. The matched prefix
+// ends at a word boundary in cand; the suffix starts at a word boundary in cue. The two-word
+// minimum guards against trimming a single common word that is genuinely new context.
+static size_t vw_segment_builder_tail_prefix_len(const char* cue, const char* cand) {
+  size_t clen = strlen(cue);
+  size_t alen = strlen(cand);
+  if (clen == 0 || alen == 0) {
+    return 0;
+  }
+  // Iterate candidate word-end boundaries (positions after a complete word), longest first. The
+  // first match found is the longest candidate prefix that is also a word-aligned cue suffix.
+  for (size_t be = alen; be > 0; be--) {
+    if (be < alen && cand[be] != ' ' && cand[be] != '\t' && cand[be] != '\n' && cand[be] != '\r') {
+      continue;  // be is not after a complete word in cand
+    }
+    if (be > 0 && (cand[be - 1] == ' ' || cand[be - 1] == '\t' || cand[be - 1] == '\n' || cand[be - 1] == '\r')) {
+      continue;  // be is not at a word end
+    }
+    if (be > clen || strncmp(cue + (clen - be), cand, be) != 0) {
+      continue;
+    }
+    size_t cue_start = clen - be;
+    if (cue_start > 0 && cue[cue_start - 1] != ' ' && cue[cue_start - 1] != '\t' && cue[cue_start - 1] != '\n' &&
+        cue[cue_start - 1] != '\r') {
+      continue;  // suffix does not start at a word boundary in cue
+    }
+    // Count words in the matched candidate prefix.
+    size_t words = 0;
+    for (size_t k = 0; k < be; k++) {
+      if (cand[k] != ' ' && cand[k] != '\t' && cand[k] != '\n' && cand[k] != '\r' &&
+          (k == 0 || cand[k - 1] == ' ' || cand[k - 1] == '\t' || cand[k - 1] == '\n' || cand[k - 1] == '\r')) {
+        words++;
+      }
+    }
+    if (words >= 2) {
+      return be;
+    }
+  }
+  return 0;
+}
+
+// Applies the partial-overlap prefix trim: if `text`'s word-aligned prefix repeats a >=2-word
+// word-aligned suffix of a time-adjacent/overlapping cue (boundary within VW_DEDUP_TIME_TOLERANCE_US
+// or interval overlap), the candidate re-covers already-captioned audio. Emits only the not-yet-shown
+// remainder starting at cue_end_pts_us and commits it to history — each word appears once, so the
+// embedded previous-caption context is not duplicated. Returns true when handled (a trimmed cue was
+// queued, or the candidate was wholly the repeated tail -> *dropped=true); false when not applicable.
+static bool vw_segment_builder_apply_tail_trim(vw_segment_builder_t* builder, const char* text, size_t len,
+                                               int64_t start_pts_us, int64_t end_pts_us, const char* cue_text,
+                                               int64_t cue_start_pts_us, int64_t cue_end_pts_us, bool* dropped) {
+  *dropped = false;
+  bool near_cue = (end_pts_us > cue_start_pts_us && start_pts_us < cue_end_pts_us) ||
+                  (start_pts_us >= cue_end_pts_us - VW_DEDUP_TIME_TOLERANCE_US &&
+                   start_pts_us <= cue_end_pts_us + VW_DEDUP_TIME_TOLERANCE_US);
+  if (!near_cue || cue_text == NULL) {
+    return false;
+  }
+  size_t m = vw_segment_builder_tail_prefix_len(cue_text, text);
+  if (m == 0) {
+    return false;
+  }
+  if (m == len || cue_end_pts_us >= end_pts_us) {
+    *dropped = true;  // entire candidate repeats the cue's tail, or no room for a new cue
+    return true;
+  }
+  size_t si = m;
+  while (si < len && (text[si] == ' ' || text[si] == '\t' || text[si] == '\n' || text[si] == '\r')) {
+    si++;
+  }
+  if (si >= len) {
+    *dropped = true;  // remainder is only whitespace
+    return true;
+  }
+  char* trimmed = (char*)malloc(len - si + 1);
+  if (trimmed == NULL) {
+    return false;
+  }
+  memcpy(trimmed, text + si, len - si);
+  trimmed[len - si] = '\0';
+  if (!vw_segment_builder_enqueue(builder, trimmed, cue_end_pts_us, end_pts_us)) {
+    free(trimmed);
+    return false;
+  }
+  vw_segment_builder_commit_history(builder, trimmed, cue_end_pts_us, end_pts_us);
+  free(trimmed);
+  return true;
+}
+
 bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const char* text, int64_t start_pts_us,
                                         int64_t end_pts_us) {
   if (builder == NULL || text == NULL || start_pts_us < 0 || end_pts_us <= start_pts_us) {
@@ -151,6 +245,15 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
     return false;
   }
 
+  // 0. Time-coverage re-transcription drop: the audio timeline is the authoritative signal.
+  //    Overlapping windows (8s window, 2s hop) make whisper re-transcribe already-covered audio with
+  //    text that varies from the first pass (prefix or suffix changes, dropped/inserted words, time
+  //    jitter), so text-only dedup is unreliable. Any candidate whose range ends within the covered
+  //    frontier (+tolerance) re-covers audio that was already captioned -> drop, regardless of text.
+  if (builder->covered_end_us >= 0 && end_pts_us <= builder->covered_end_us + VW_DEDUP_TIME_TOLERANCE_US) {
+    return false;
+  }
+
   // 1. In-window (un-emitted) duplicate check against the last queued segment: exact, fragment, or
   //    superstring all drop (final subtitles — a pending cue is never replaced or extended either).
   //    The textual dedup applies ONLY when the candidate time-overlaps the pending cue — Whisper can
@@ -169,9 +272,18 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
       if (strstr(last->text_utf8, text) != NULL) {
         return false;
       }
-      if (strstr(text, last->text_utf8) != NULL) {
-        return false;
-      }
+    }
+    // Partial-overlap prefix trim against the pending cue (candidate starts with the cue's tail, or
+    // extends a cue that is its word-aligned prefix -> emit only the new remainder).
+    bool dropped = false;
+    if (vw_segment_builder_apply_tail_trim(builder, text, len, start_pts_us, end_pts_us, last->text_utf8,
+                                           last->start_pts_us, last->end_pts_us, &dropped)) {
+      return !dropped;
+    }
+    // Mid-containment (the cue appears mid-candidate, not as a word-aligned prefix): all candidate
+    // words are covered -> drop (runs after the trim, which handles the prefix-extension case).
+    if (time_matches && strstr(text, last->text_utf8) != NULL) {
+      return false;
     }
   }
 
@@ -195,17 +307,32 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
     if (strstr(hist->text, text) != NULL) {
       return false;  // fragment already covered
     }
+    // Partial-overlap prefix trim against this committed cue: handles both the candidate-repeats-
+    // cue-tail shape and the candidate-extends-cue-prefix shape (emitting only the new remainder).
+    bool dropped = false;
+    if (vw_segment_builder_apply_tail_trim(builder, text, len, start_pts_us, end_pts_us, hist->text, hist->start_pts_us,
+                                           hist->end_pts_us, &dropped)) {
+      return !dropped;
+    }
+    // Mid-containment (the cue appears mid-candidate, not as a word-aligned prefix): all candidate
+    // words are covered -> drop.
     if (strstr(text, hist->text) != NULL) {
-      return false;  // expansion of a committed phrase -> final subtitles: no revision
+      return false;
     }
   }
 
   // 3. No duplicate detected -> queue the full candidate and commit it to history only after a
-  //    successful enqueue.
-  if (!vw_segment_builder_enqueue(builder, text, start_pts_us, end_pts_us)) {
+  //    successful enqueue. Clamp the start to the coverage frontier: a boundary-spanning candidate
+  //    must never overwrite the still-showing cue mid-display (VLC keeps the newest i_start per
+  //    channel), so the new cue begins where the covered audio ends.
+  int64_t emit_start = (builder->covered_end_us > start_pts_us) ? builder->covered_end_us : start_pts_us;
+  if (emit_start >= end_pts_us) {
     return false;
   }
-  vw_segment_builder_commit_history(builder, text, start_pts_us, end_pts_us);
+  if (!vw_segment_builder_enqueue(builder, text, emit_start, end_pts_us)) {
+    return false;
+  }
+  vw_segment_builder_commit_history(builder, text, emit_start, end_pts_us);
   return true;
 }
 
