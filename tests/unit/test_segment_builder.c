@@ -506,7 +506,7 @@ static void vw_test_new_audio_after_coverage_emitted(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_jittered_fragment_past_cue_end_dropped(void) {
+static void vw_test_edge_jittered_fragment_past_cue_end_dropped(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "the cat sat on the mat", 10000000, 20000000));
@@ -520,7 +520,7 @@ static void vw_test_evil_jittered_fragment_past_cue_end_dropped(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_hallucinated_retranscription_dropped(void) {
+static void vw_test_edge_hallucinated_retranscription_dropped(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "the cat sat on the mat", 10000000, 20000000));
@@ -534,7 +534,7 @@ static void vw_test_evil_hallucinated_retranscription_dropped(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_tolerance_boundary(void) {
+static void vw_test_edge_tolerance_boundary(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "base phrase", 10000000, 20000000));
@@ -553,7 +553,7 @@ static void vw_test_evil_tolerance_boundary(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_same_start_time_extension_trimmed(void) {
+static void vw_test_edge_same_start_time_extension_trimmed(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "first phrase", 10000000, 13000000));
@@ -571,7 +571,7 @@ static void vw_test_evil_same_start_time_extension_trimmed(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_backward_time_candidate_dropped(void) {
+static void vw_test_edge_backward_time_candidate_dropped(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "forward phrase", 10000000, 14000000));
@@ -584,7 +584,7 @@ static void vw_test_evil_backward_time_candidate_dropped(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_one_word_expansion_dropped_adr018(void) {
+static void vw_test_edge_one_word_expansion_dropped_adr018(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "jumps", 10000000, 20000000));
@@ -597,7 +597,7 @@ static void vw_test_evil_one_word_expansion_dropped_adr018(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_two_word_expansion_recovered(void) {
+static void vw_test_edge_two_word_expansion_recovered(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "the cat", 10000000, 20000000));
@@ -614,7 +614,7 @@ static void vw_test_evil_two_word_expansion_recovered(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_history_wrap_retranscription_dropped(void) {
+static void vw_test_edge_history_wrap_retranscription_dropped(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   // Fill and evict the 16-entry history ring with 20 sequential cues.
@@ -634,7 +634,7 @@ static void vw_test_evil_history_wrap_retranscription_dropped(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_unrelated_boundary_extension_clamped(void) {
+static void vw_test_edge_unrelated_boundary_extension_clamped(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "first phrase", 10000000, 13000000));
@@ -652,7 +652,7 @@ static void vw_test_evil_unrelated_boundary_extension_clamped(void) {
   vw_segment_builder_free(builder);
 }
 
-static void vw_test_evil_repeat_phrase_distinct_times_kept(void) {
+static void vw_test_edge_repeat_phrase_distinct_times_kept(void) {
   vw_segment_builder_t *builder = vw_segment_builder_create();
   assert(builder != NULL);
   assert(vw_segment_builder_push_hypothesis(builder, "repeat phrase", 10000000, 12000000));
@@ -664,6 +664,24 @@ static void vw_test_evil_repeat_phrase_distinct_times_kept(void) {
   assert(vw_segment_builder_pop(builder, &out));
   assert(strcmp(out.text_utf8, "repeat phrase") == 0);
   assert(out.start_pts_us == 20000000LL);
+  free(out.text_utf8);
+  vw_segment_builder_free(builder);
+}
+
+static void vw_test_edge_trailing_distinct_subsegment_kept(void) {
+  vw_segment_builder_t *builder = vw_segment_builder_create();
+  assert(builder != NULL);
+  assert(vw_segment_builder_push_hypothesis(builder, "the cat sat", 10000000, 14000000));
+  vw_caption_segment_t out;
+  assert(vw_segment_builder_pop(builder, &out));
+  free(out.text_utf8);
+  // A DISTINCT non-overlapping trailing sub-segment that starts after the frontier but ends within
+  // the 500ms tolerance must NOT be coverage-dropped (it is new audio, not a re-transcription).
+  assert(vw_segment_builder_push_hypothesis(builder, "on the mat", 14100000, 14400000));
+  assert(vw_segment_builder_pop(builder, &out));
+  assert(strcmp(out.text_utf8, "on the mat") == 0);
+  assert(out.start_pts_us == 14100000LL);
+  assert(out.end_pts_us == 14400000LL);
   free(out.text_utf8);
   vw_segment_builder_free(builder);
 }
@@ -690,16 +708,17 @@ int main(void) {
   vw_test_suffix_swap_retranscription_dropped();
   vw_test_boundary_extension_clamped_no_overwrite();
   vw_test_new_audio_after_coverage_emitted();
-  vw_test_evil_jittered_fragment_past_cue_end_dropped();
-  vw_test_evil_hallucinated_retranscription_dropped();
-  vw_test_evil_tolerance_boundary();
-  vw_test_evil_same_start_time_extension_trimmed();
-  vw_test_evil_backward_time_candidate_dropped();
-  vw_test_evil_one_word_expansion_dropped_adr018();
-  vw_test_evil_two_word_expansion_recovered();
-  vw_test_evil_history_wrap_retranscription_dropped();
-  vw_test_evil_unrelated_boundary_extension_clamped();
-  vw_test_evil_repeat_phrase_distinct_times_kept();
+  vw_test_edge_jittered_fragment_past_cue_end_dropped();
+  vw_test_edge_hallucinated_retranscription_dropped();
+  vw_test_edge_tolerance_boundary();
+  vw_test_edge_same_start_time_extension_trimmed();
+  vw_test_edge_backward_time_candidate_dropped();
+  vw_test_edge_one_word_expansion_dropped_adr018();
+  vw_test_edge_two_word_expansion_recovered();
+  vw_test_edge_history_wrap_retranscription_dropped();
+  vw_test_edge_unrelated_boundary_extension_clamped();
+  vw_test_edge_repeat_phrase_distinct_times_kept();
+  vw_test_edge_trailing_distinct_subsegment_kept();
   vw_test_mid_containment_dropped();
   vw_test_superstring_dropped();
   vw_test_short_prefix_expansion_dropped();

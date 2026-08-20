@@ -248,9 +248,13 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   // 0. Time-coverage re-transcription drop: the audio timeline is the authoritative signal.
   //    Overlapping windows (8s window, 2s hop) make whisper re-transcribe already-covered audio with
   //    text that varies from the first pass (prefix or suffix changes, dropped/inserted words, time
-  //    jitter), so text-only dedup is unreliable. Any candidate whose range ends within the covered
-  //    frontier (+tolerance) re-covers audio that was already captioned -> drop, regardless of text.
-  if (builder->covered_end_us >= 0 && end_pts_us <= builder->covered_end_us + VW_DEDUP_TIME_TOLERANCE_US) {
+  //    jitter), so text-only dedup is unreliable. A candidate that STARTS inside covered audio and
+  //    ends within the frontier (+tolerance) re-covers audio that was already captioned -> drop,
+  //    regardless of text. A candidate starting AT or AFTER the frontier is new audio and must NOT be
+  //    dropped, even when it ends within tolerance (a distinct trailing sub-segment would otherwise
+  //    be silently omitted).
+  if (builder->covered_end_us >= 0 && start_pts_us < builder->covered_end_us &&
+      end_pts_us <= builder->covered_end_us + VW_DEDUP_TIME_TOLERANCE_US) {
     return false;
   }
 
