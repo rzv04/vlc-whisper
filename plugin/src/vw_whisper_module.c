@@ -124,6 +124,47 @@ static bool vw_plugin_probe_ancestors(const char* file_path, int max_up, const c
   return false;
 }
 
+#ifdef _WIN32
+// Probes Windows registry and environment paths for worker or model files.
+static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_count, char* out, size_t out_size) {
+  char candidate[VW_PATH_MAX_BYTES];
+  // 1. Probe HKCU and HKLM \Software\VLC-Whisper\InstallPath
+  const HKEY roots[] = {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+  for (int i = 0; i < 2; i++) {
+    HKEY hkey = NULL;
+    if (RegOpenKeyExA(roots[i], "Software\\VLC-Whisper", 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
+      char val[MAX_PATH];
+      DWORD len = sizeof(val);
+      DWORD type = 0;
+      if (RegQueryValueExA(hkey, "InstallPath", NULL, &type, (LPBYTE)val, &len) == ERROR_SUCCESS && type == REG_SZ &&
+          len > 0) {
+        RegCloseKey(hkey);
+        if (vw_plugin_probe_ancestors(val, 0, names, name_count, out, out_size)) return true;
+      } else {
+        RegCloseKey(hkey);
+      }
+    }
+  }
+
+  // 2. Probe %LOCALAPPDATA%/vlc-whisper
+  char local_app_data[MAX_PATH];
+  DWORD llen = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, sizeof(local_app_data));
+  if (llen > 0 && llen < sizeof(local_app_data)) {
+    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper", local_app_data);
+    if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+  }
+
+  // 3. Probe %PROGRAMFILES%/vlc-whisper
+  char prog_files[MAX_PATH];
+  DWORD plen = GetEnvironmentVariableA("PROGRAMFILES", prog_files, sizeof(prog_files));
+  if (plen > 0 && plen < sizeof(prog_files)) {
+    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper", prog_files);
+    if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+  }
+  return false;
+}
+#endif
+
 // Resolves the vlc-whisper-worker executable path: plugin dir ancestors, then the exe dir.
 // Probes the GPU worker ("vlc-whisper-worker") first, then falls back to the CPU worker
 // ("vlc-whisper-worker-cpu") if only a CPU-preset binary was built/installed.
@@ -145,6 +186,7 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
   if (elen > 0 && elen < sizeof(exe_path)) {
     if (vw_plugin_probe_ancestors(exe_path, 0, worker_names, 2, out, out_size)) return true;
   }
+  if (vw_plugin_probe_windows_paths(worker_names, 2, out, out_size)) return true;
   return false;
 #else
   const char* worker_names[] = {"vlc-whisper-worker", "vlc-whisper-worker-cpu"};
@@ -184,6 +226,7 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
   if (elen > 0 && elen < sizeof(exe_path)) {
     if (vw_plugin_probe_ancestors(exe_path, 0, model_names, 2, out, out_size)) return true;
   }
+  if (vw_plugin_probe_windows_paths(model_names, 2, out, out_size)) return true;
   return false;
 #else
   Dl_info info;

@@ -1,0 +1,199 @@
+; ==============================================================================
+; VLC-Whisper Windows Installer Script (NSIS 3.x)
+; ==============================================================================
+
+!include "MUI2.nsh"
+!include "x64.nsh"
+!include "FileFunc.nsh"
+
+; General Configuration
+Name "VLC-Whisper AI Subtitles"
+OutFile "@CMAKE_BINARY_DIR@/vlc-whisper-@PROJECT_VERSION@-win64-setup.exe"
+InstallDir "$PROGRAMFILES64\VideoLAN\VLC"
+InstallDirRegKey HKLM "Software\VideoLAN\VLC" "InstallDir"
+RequestExecutionLevel admin
+SetCompressor /SOLID lzma
+
+; Version Information
+VIProductVersion "@PROJECT_VERSION@.0"
+VIAddVersionKey "ProductName" "VLC-Whisper"
+VIAddVersionKey "CompanyName" "VLC-Whisper Project"
+VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 VLC-Whisper Contributors (MIT License)"
+VIAddVersionKey "FileDescription" "Offline Whisper AI Real-Time Subtitle Plugin for VLC"
+VIAddVersionKey "FileVersion" "@PROJECT_VERSION@.0"
+VIAddVersionKey "ProductVersion" "@PROJECT_VERSION@.0"
+
+; Variables
+Var VLC_DIR
+
+; Interface Settings
+!define MUI_ABORTWARNING
+
+; Installer Pages
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "@CMAKE_SOURCE_DIR@/LICENSE"
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+; Uninstaller Pages
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+; Language
+!insertmacro MUI_LANGUAGE "English"
+
+; ------------------------------------------------------------------------------
+; Initialization Function (Detect 64-bit Architecture and VLC Installation)
+; ------------------------------------------------------------------------------
+Function .onInit
+  ${IfNot} ${RunningX64}
+    MessageBox MB_OK|MB_ICONSTOP "VLC-Whisper requires a 64-bit version of Windows."
+    Abort
+  ${EndIf}
+
+  ; Enforce 64-bit Registry View
+  SetRegView 64
+
+  ; 1. Try reading VLC install path from 64-bit HKLM Registry
+  ReadRegStr $VLC_DIR HKLM "Software\VideoLAN\VLC" "InstallDir"
+
+  ; 2. Fallback to Uninstall Key
+  ${If} $VLC_DIR == ""
+    ReadRegStr $VLC_DIR HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC media player" "InstallLocation"
+  ${EndIf}
+
+  ; 3. Fallback to default Program Files location
+  ${If} $VLC_DIR == ""
+    StrCpy $VLC_DIR "$PROGRAMFILES64\VideoLAN\VLC"
+  ${EndIf}
+
+  ; Verify if vlc.exe actually exists in the discovered directory
+  ${IfNot} ${FileExists} "$VLC_DIR\vlc.exe"
+    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
+      "Could not automatically detect VLC 64-bit in '$VLC_DIR'.$\r$\nPlease select your VLC installation folder on the next screen." \
+      IDOK proceed_install
+    Abort
+    proceed_install:
+  ${EndIf}
+
+  StrCpy $INSTDIR $VLC_DIR
+FunctionEnd
+
+; ------------------------------------------------------------------------------
+; Section 1: Core Plugin, Worker & Models
+; ------------------------------------------------------------------------------
+Section "VLC Plugin & AI Engine" SecCore
+  SectionIn RO
+
+  ; Close any running VLC processes before file operations
+  DetailPrint "Stopping running VLC and worker processes..."
+  nsExec::Exec 'taskkill /F /IM vlc.exe /T'
+  nsExec::Exec 'taskkill /F /IM vlc-whisper-worker.exe /T'
+  nsExec::Exec 'taskkill /F /IM vlc-whisper-worker-cpu.exe /T'
+  Sleep 1000
+
+  ; 1. Install Plugin DLL into VLC Audio Filter Directory
+  SetOutPath "$INSTDIR\plugins\audio_filter"
+  File "@CMAKE_BINARY_DIR@/plugin/libvlc_whisper_plugin.dll"
+
+  ; 2. Install Worker Executables into VLC Root
+  SetOutPath "$INSTDIR"
+  File "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
+  File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker-cpu.exe"
+
+  ; 3. Install AI Models into <VLC>/models
+  SetOutPath "$INSTDIR\models"
+  File "@CMAKE_SOURCE_DIR@/models/manifest.json"
+  File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.en.bin"
+  File /nonfatal "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
+
+  ; 4. Install Licenses and Notices
+  SetOutPath "$INSTDIR"
+  File "@CMAKE_SOURCE_DIR@/LICENSE"
+  File "@CMAKE_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"
+
+  ; 5. Write Application Registry Metadata
+  WriteRegStr HKCU "Software\VLC-Whisper" "InstallPath" "$INSTDIR"
+  WriteRegStr HKCU "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
+  WriteRegStr HKLM "Software\VLC-Whisper" "InstallPath" "$INSTDIR"
+  WriteRegStr HKLM "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
+
+  ; 6. Register Windows Uninstaller
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "DisplayName" "VLC-Whisper AI Subtitle Plugin"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "DisplayVersion" "@PROJECT_VERSION@"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "Publisher" "VLC-Whisper Contributors"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "UninstallString" '"$INSTDIR\uninstall-vlc-whisper.exe"'
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "InstallLocation" "$INSTDIR"
+  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "NoModify" 1
+  WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "NoRepair" 1
+  WriteUninstaller "$INSTDIR\uninstall-vlc-whisper.exe"
+
+  ; 7. Create Start Menu & Desktop Shortcuts
+  CreateDirectory "$SMPROGRAMS\VLC-Whisper"
+  CreateShortcut "$SMPROGRAMS\VLC-Whisper\VLC (with AI Whisper Captions).lnk" \
+    "$INSTDIR\vlc.exe" '--audio-filter=vlc_whisper' "$INSTDIR\vlc.exe" 0
+  CreateShortcut "$SMPROGRAMS\VLC-Whisper\Uninstall VLC-Whisper.lnk" \
+    "$INSTDIR\uninstall-vlc-whisper.exe"
+  CreateShortcut "$DESKTOP\VLC (with AI Whisper Captions).lnk" \
+    "$INSTDIR\vlc.exe" '--audio-filter=vlc_whisper' "$INSTDIR\vlc.exe" 0
+
+  ; 8. Regenerate VLC Plugin Cache (plugins.dat)
+  DetailPrint "Regenerating VLC plugin cache (plugins.dat)..."
+  ${If} ${FileExists} "$INSTDIR\vlc-cache-gen.exe"
+    ExecWait '"$INSTDIR\vlc-cache-gen.exe" "$INSTDIR\plugins"' $0
+    DetailPrint "vlc-cache-gen completed (exit code: $0)"
+  ${Else}
+    ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache --version' $0
+  ${EndIf}
+SectionEnd
+
+; ------------------------------------------------------------------------------
+; Uninstaller Implementation
+; ------------------------------------------------------------------------------
+Section "Uninstall"
+  SetRegView 64
+
+  ; Stop running instances
+  nsExec::Exec 'taskkill /F /IM vlc.exe /T'
+  nsExec::Exec 'taskkill /F /IM vlc-whisper-worker.exe /T'
+  nsExec::Exec 'taskkill /F /IM vlc-whisper-worker-cpu.exe /T'
+  Sleep 1000
+
+  ; 1. Remove Plugin DLL
+  Delete "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
+
+  ; 2. Remove Worker Executables
+  Delete "$INSTDIR\vlc-whisper-worker.exe"
+  Delete "$INSTDIR\vlc-whisper-worker-cpu.exe"
+
+  ; 3. Remove Models
+  Delete "$INSTDIR\models\ggml-tiny.en.bin"
+  Delete "$INSTDIR\models\ggml-silero-vad.bin"
+  Delete "$INSTDIR\models\manifest.json"
+  RMDir "$INSTDIR\models"
+
+  ; 4. Remove Licenses
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
+
+  ; 5. Remove Shortcuts
+  Delete "$SMPROGRAMS\VLC-Whisper\VLC (with AI Whisper Captions).lnk"
+  Delete "$SMPROGRAMS\VLC-Whisper\Uninstall VLC-Whisper.lnk"
+  RMDir "$SMPROGRAMS\VLC-Whisper"
+  Delete "$DESKTOP\VLC (with AI Whisper Captions).lnk"
+
+  ; 6. Remove Uninstaller & Registry Entries
+  Delete "$INSTDIR\uninstall-vlc-whisper.exe"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper"
+  DeleteRegKey HKLM "Software\VLC-Whisper"
+  DeleteRegKey HKCU "Software\VLC-Whisper"
+
+  ; 7. Rebuild VLC Plugin Cache without the plugin
+  DetailPrint "Rebuilding VLC plugin cache..."
+  ${If} ${FileExists} "$INSTDIR\vlc-cache-gen.exe"
+    ExecWait '"$INSTDIR\vlc-cache-gen.exe" "$INSTDIR\plugins"' $0
+  ${Else}
+    ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache --version' $0
+  ${EndIf}
+SectionEnd

@@ -257,49 +257,88 @@ This ensures that output binaries (`vlc-whisper-worker.exe`, `vlc_whisper_plugin
 
 ---
 
-## Manual Plugin Installation (Windows)
+## Windows Installation (Plug & Play Setup)
 
-To install and verify the VLC plugin manually on Windows:
+For end users with VLC 3.0 (64-bit) already installed on Windows 10/11:
+
+### Option 1: Standalone Windows Installer (.exe) — Recommended
+1. Download `vlc-whisper-0.3.0-win64-setup.exe` from GitHub Releases.
+2. Run the installer. It will automatically detect your 64-bit VLC directory (e.g. `C:\Program Files\VideoLAN\VLC`), deploy `libvlc_whisper_plugin.dll` to `plugins\audio_filter\`, place the AI worker and models into `models\`, rebuild the VLC plugin cache (`plugins.dat`), and generate desktop/start menu shortcuts.
+3. Launch VLC using the created shortcut **"VLC (with AI Whisper Captions)"** (or pass `--audio-filter=vlc_whisper`).
+4. Play any video or audio stream — AI subtitles appear automatically in real time!
+
+### Option 2: Portable Release Archive (.zip)
+1. Download `vlc-whisper-0.3.0-win64.zip`.
+2. Extract the contents directly into your VLC installation folder (e.g. `C:\Program Files\VideoLAN\VLC`).
+3. Open a terminal in the VLC folder and regenerate the plugin cache:
+   ```cmd
+   vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
+   ```
+4. Launch VLC with `--audio-filter=vlc_whisper`.
+
+---
+
+## Compiling the Windows Installer & Packaging Releases
+
+To compile the standalone Windows installer on Linux (requires `nsis` / `makensis`):
+
+```bash
+# 1. Install NSIS compiler
+sudo apt-get install -y nsis
+
+# 2. Build the Windows release binaries and NSIS setup installer
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release --target installer
+
+# 3. Generate portable release ZIP archive
+cpack --config build/windows-x64-release/CPackConfig.cmake
+```
+
+_Outputs generated in `build/windows-x64-release/`:_
+- `vlc-whisper-0.3.0-win64-setup.exe` (~74 MB standalone setup wizard with embedded Whisper tiny.en + Silero VAD weights)
+- `vlc-whisper-0.3.0-win64.zip` (Portable release archive)
+
+---
+
+## Manual Plugin Installation (Windows Developer Workflow)
+
+To install and verify the VLC plugin manually during development:
 
 1. **Install DLL**: Copy the compiled `libvlc_whisper_plugin.dll` to your VLC installation's plugin directory:
-   - Example path: `C:\Program Files\VideoLAN\VLC\plugins\misc\libvlc_whisper_plugin.dll`
+   - Path: `C:\Program Files\VideoLAN\VLC\plugins\audio_filter\libvlc_whisper_plugin.dll`
 
-2. **Install Worker**: Copy the compiled `vlc-whisper-worker.exe` to your VLC installation's root directory:
-   - Example path: `C:\Program Files\VideoLAN\VLC\vlc-whisper-worker.exe`
-   - The worker is self-contained: all MinGW runtime (incl. OpenMP) is statically linked — no extra DLLs to copy (ADR-010).
-   - The plugin looks for the worker next to the plugin, up to three ancestor directories, and next to the VLC executable. If your layout places it elsewhere, set the module option `--vlc-whisper-worker-path` (a.k.a. `worker-path`) to its full path.
+2. **Install Worker**: Copy the compiled `vlc-whisper-worker.exe` to your VLC root directory:
+   - Path: `C:\Program Files\VideoLAN\VLC\vlc-whisper-worker.exe`
+   - The worker is self-contained: all MinGW runtime is statically linked — zero external DLL dependencies (ADR-010).
 
 3. **Install the Models**:
-   - **Speech Model (`ggml-tiny.en.bin`)**: Copy `ggml-tiny.en.bin` next to the worker (VLC root), into a `models\` subdirectory of any ancestor of the plugin, or next to the VLC executable — the plugin probes `<dir>\ggml-tiny.en.bin` and `<dir>\models\ggml-tiny.en.bin` during module open. If the model lives elsewhere, set the module option `--vlc-whisper-model-path` (a.k.a. `model-path`) to its full path. Without a model, captions are disabled cleanly (`E_MODEL_MISSING`) and playback is unaffected.
-   - **Voice Activity Detection Model (`ggml-silero-vad.bin`) (Optional but Recommended)**:
-      - Download helper scripts are provided in `models/`:
-        - **Linux / POSIX**: `./models/vw_download_vad_model.sh`
-        - **Windows**: `.\models\vw_download_vad_model.cmd`
-      - Place `ggml-silero-vad.bin` in the same directory as your speech model or pass `--vad-model <path>` to the worker. The worker automatically detects `ggml-silero-vad.bin` in the model directory or alongside the worker executable.
-     - *Zero-Config Fallback*: If `ggml-silero-vad.bin` is not provided, the worker automatically falls back to built-in RMS Energy VAD. Silero VAD provides superior discrimination between human voice and background music/soundtracks, suppressing phantom captions during non-speech audio.
+   - Speech Model: `C:\Program Files\VideoLAN\VLC\models\ggml-tiny.en.bin`
+   - VAD Model: `C:\Program Files\VideoLAN\VLC\models\ggml-silero-vad.bin`
 
 4. **Reset Plugin Cache & Verify Registration**:
-   Open Command Prompt or PowerShell and run:
-
    ```cmd
+   "C:\Program Files\VideoLAN\VLC\vlc-cache-gen.exe" "C:\Program Files\VideoLAN\VLC\plugins"
    "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
    ```
 
-   _Expected Output_: You should see the `VLC-Whisper` audio filter module listed. (Always re-run `--reset-plugins-cache` after copying a new plugin DLL — VLC caches module metadata and may otherwise keep using the old one.)
-
-   **Listed ≠ active.** The module being listed (or shown as "enabled" in Tools → Preferences) does not mean it runs: an audio filter is only instantiated when it is actually in the audio chain. Either (a) pass `--audio-filter=vlc_whisper` on the command line, or (b) enable it in Preferences → All → Audio → Filters (it appears there because the module declares the audio-filter subcategory). If you toggle it in the GUI, restart VLC before playing.
-
-5. **Inspect Debug Logs**:
-   Audio filters only instantiate when audio media is playing and the filter is explicitly selected in the audio chain. To trigger `vw_plugin_open` and write debug output to a file:
-
+5. **Run VLC with AI Subtitles**:
    ```cmd
-   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --audio-filter=vlc_whisper --file-logging --logfile=vlc-debug.log -vvv C:\path\to\audio.mp3
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" --audio-filter=vlc_whisper C:\path\to\media.mp4
    ```
 
-   _(Note: For `.mp4` video files in Virtual Machines or dual-GPU laptops, add `--avcodec-hw=none` to avoid D3D11 hardware acceleration crashes)._
+---
 
-   _Expected Output_: Inspect `vlc-debug.log` to confirm `vlc_whisper debug: [vw_log:PLUGIN_OPEN] vlc-whisper audio filter module opened`.
+## Open Source License & Third-Party Notices
 
-   **Success signal**: while the audio plays, `vlc-whisper-worker.exe` must appear in Task Manager (it is a long-lived process, not a flash; with `CREATE_NO_WINDOW` it shows under _Background processes_, not Apps). If it appears, the plugin spawned it; if `PLUGIN_OPEN` is logged but no worker appears, check `PLUGIN_WORKER_UNAVAILABLE`/`PLUGIN_SESSION_START_FAIL` in the log (worker path, model path, or spawn failure). If `PLUGIN_OPEN` itself is missing, the filter is not in the chain — re-check `--audio-filter=vlc_whisper` and the module cache.
+VLC-Whisper is released under the permissive [MIT License](LICENSE).
 
-   **Worker diagnostics**: the worker is spawned with no console, so its stdout/stderr (whisper output, worker lifecycle logs) are captured to `%TEMP%\vlc-whisper-worker.log` on Windows (`/tmp/vlc-whisper-worker.log` or `$XDG_RUNTIME_DIR` on Linux) — truncated every run, so it always holds the last worker session. When diagnosing "worker died" issues, check this file — it shows `WORKER_LIFECYCLE`/`WORKER_ENGINE`/`WORKER_SESSION`/`WORKER_INFERENCE`/`WORKER_READER` events up to the crash. To place the log elsewhere, pass `--vlc-whisper-worker-path ... --log-file <path>` via the worker invocation (the plugin passes through `worker-path`; for a custom worker log location, set the `model-path`-style worker option or launch the worker manually with `--log-file`). The VLC log additionally carries `PLUGIN_WORKER_LAUNCH` (resolved worker path), `PLUGIN_WORKER_CONNECT`, and `PLUGIN_WORKER_DEAD` (failing call + chunk count).
+All bundled models and runtime components adhere to open-source licensing:
+- `whisper.cpp` & `ggml`: MIT License
+- OpenAI Whisper Weights: MIT License
+- Silero VAD Weights: MIT License
+- VLC Media Player Plugin API: LGPL v2.1+ (Dynamic Linking / Out-of-tree plugin)
+- Windows Media Foundation: Standard Windows OS Component
+- Vulkan SDK Headers & Loader: Apache License 2.0
+- MinGW-w64 Runtime: GNU GPL v3 with GCC Runtime Library Exception v3.1
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for full legal attributions and license texts.

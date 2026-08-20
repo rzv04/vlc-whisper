@@ -42,7 +42,7 @@ if(WIN32)
     )
     add_custom_target(vlc_core_import DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libvlccore.dll.a)
     add_dependencies(vlc_whisper_plugin vlc_core_import)
-    target_link_libraries(vlc_whisper_plugin PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/libvlccore.dll.a bcrypt)
+    target_link_libraries(vlc_whisper_plugin PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/libvlccore.dll.a bcrypt advapi32)
 endif()
 
 target_compile_options(vlc_whisper_plugin PRIVATE
