@@ -36,6 +36,73 @@ static int running_under_valgrind(void) {
 static int running_under_valgrind(void) { return 0; }
 #endif
 
+// Minimal 16-bit PCM WAV loader (mono 16kHz expected); returns a float32 buffer or NULL when the
+// file is absent/malformed (caller skips fixture-gated assertions).
+static float* vw_test_load_wav_f32(const char* path, size_t* out_samples) {
+  FILE* f = fopen(path, "rb");
+  if (!f) {
+    return NULL;
+  }
+  uint8_t hdr[12];
+  if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr) || memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0) {
+    fclose(f);
+    return NULL;
+  }
+  uint16_t channels = 0, bits = 0;
+  uint32_t sample_rate = 0, data_off = 0, data_size = 0;
+  uint8_t chunk_hdr[8];
+  while (fread(chunk_hdr, 1, sizeof(chunk_hdr), f) == sizeof(chunk_hdr)) {
+    uint32_t size = (uint32_t)chunk_hdr[4] | ((uint32_t)chunk_hdr[5] << 8) | ((uint32_t)chunk_hdr[6] << 16) |
+                    ((uint32_t)chunk_hdr[7] << 24);
+    if (memcmp(chunk_hdr, "fmt ", 4) == 0) {
+      uint8_t fmt[16];
+      if (size < 16 || fread(fmt, 1, 16, f) != 16) {
+        fclose(f);
+        return NULL;
+      }
+      channels = (uint16_t)(fmt[2] | (fmt[3] << 8));
+      sample_rate = (uint32_t)fmt[4] | ((uint32_t)fmt[5] << 8) | ((uint32_t)fmt[6] << 16) | ((uint32_t)fmt[7] << 24);
+      bits = (uint16_t)(fmt[14] | (fmt[15] << 8));
+      if (size > 16) {
+        fseek(f, (long)(size - 16), SEEK_CUR);
+      }
+    } else if (memcmp(chunk_hdr, "data", 4) == 0) {
+      data_off = (uint32_t)ftell(f);
+      data_size = size;
+      break;
+    } else {
+      fseek(f, (long)size, SEEK_CUR);
+    }
+  }
+  if (channels != 1 || sample_rate != 16000 || bits != 16 || data_size == 0) {
+    fclose(f);
+    return NULL;
+  }
+  size_t frames = data_size / 2;
+  int16_t* s16 = (int16_t*)malloc(frames * sizeof(int16_t));
+  float* f32 = (float*)malloc(frames * sizeof(float));
+  if (!s16 || !f32) {
+    free(s16);
+    free(f32);
+    fclose(f);
+    return NULL;
+  }
+  fseek(f, (long)data_off, SEEK_SET);
+  if (fread(s16, 2, frames, f) != frames) {
+    free(s16);
+    free(f32);
+    fclose(f);
+    return NULL;
+  }
+  fclose(f);
+  for (size_t i = 0; i < frames; i++) {
+    f32[i] = (float)s16[i] / 32768.0f;
+  }
+  free(s16);
+  *out_samples = frames;
+  return f32;
+}
+
 int main(void) {
   // 1. Invalid or non-existent model path returns NULL cleanly
   vw_whisper_engine_t* null_eng = vw_whisper_engine_init("no_such_model_file.bin", VW_WORKER_BACKEND_CPU, 0);
@@ -93,6 +160,41 @@ int main(void) {
     EXPECT(seg.t0_us >= 0);
     EXPECT(seg.t1_us >= seg.t0_us);
     EXPECT(seg.text_utf8 != NULL);
+  }
+
+  // 4. Fixture-gated regression: token-level timing must be AUTHENTIC. whisper.cpp only computes
+  // per-token t0/t1 when params.token_timestamps is enabled (default false); without it the token
+  // count getter reports 0 and the builder would fall back to whole-phrase dedup, losing suffix
+  // cues. Assert a speech segment exposes tokens with non-zero timing.
+  size_t n_speech = 0;
+  const char* fixture_paths[] = {"worker/third_party/whisper.cpp/samples/jfk.wav",
+                                 "../worker/third_party/whisper.cpp/samples/jfk.wav",
+                                 "../../worker/third_party/whisper.cpp/samples/jfk.wav",
+                                 "../../../worker/third_party/whisper.cpp/samples/jfk.wav"};
+  float* speech = NULL;
+  for (size_t p = 0; p < sizeof(fixture_paths) / sizeof(fixture_paths[0]); p++) {
+    speech = vw_test_load_wav_f32(fixture_paths[p], &n_speech);
+    if (speech != NULL) {
+      break;
+    }
+  }
+  if (speech != NULL) {
+    size_t take = n_speech < 80000 ? n_speech : 80000;  // first 5s
+    EXPECT(vw_whisper_engine_transcribe_pcm(eng, speech, take));
+    int n_segs = vw_whisper_engine_get_segment_count(eng);
+    for (int i = 0; i < n_segs && i < 2; i++) {
+      int n_tok = vw_whisper_engine_get_segment_token_count(eng, i);
+      EXPECT(n_tok > 0);  // fails if token_timestamps is disabled (count guard returns 0)
+      if (n_tok > 0) {
+        vw_whisper_token_t tok = {0};
+        EXPECT(vw_whisper_engine_get_segment_token(eng, i, n_tok - 1, &tok));
+        EXPECT(tok.t1_us > 0);  // authentic spoken boundary, not zero
+        EXPECT(tok.t1_us >= tok.t0_us);
+      }
+    }
+    free(speech);
+  } else {
+    printf("WAV fixture jfk.wav not present - skipping token-timing regression\n");
   }
 
   vw_whisper_engine_free(eng);

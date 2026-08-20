@@ -75,6 +75,10 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.translate = false;
   wparams.language = "en";
   wparams.n_threads = 4;
+  // Token-level timestamps must be enabled or whisper_full_get_token_data returns all-zero
+  // t0/t1 (whisper.cpp gates whisper_exp_compute_token_level_timestamps on params.token_timestamps,
+  // default false). The segment builder uses these boundaries as the authentic suffix start.
+  wparams.token_timestamps = true;
 
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;
@@ -141,7 +145,20 @@ int vw_whisper_engine_get_segment_token_count(const vw_whisper_engine_t* engine,
   if (segment_index >= seg_count) {
     return 0;
   }
-  return whisper_full_n_tokens(engine->ctx, segment_index);
+  int n_tokens = whisper_full_n_tokens(engine->ctx, segment_index);
+  if (n_tokens <= 0) {
+    return 0;
+  }
+  // Availability guard: token t0/t1 are only populated when token_timestamps was enabled AND the
+  // model produced timestamp tokens (distilled models force no_timestamps). When computed, the
+  // LAST token always carries t1 = segment end (> 0 for non-empty audio); an all-zero last token
+  // means timing was never computed — report 0 so the caller falls back to whole-phrase behavior
+  // instead of using non-authentic boundaries.
+  struct whisper_token_data last = whisper_full_get_token_data(engine->ctx, segment_index, n_tokens - 1);
+  if (last.t1 <= 0) {
+    return 0;
+  }
+  return n_tokens;
 }
 
 bool vw_whisper_engine_get_segment_token(const vw_whisper_engine_t* engine, int segment_index, int token_index,
