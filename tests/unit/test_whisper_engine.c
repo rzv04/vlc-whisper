@@ -41,6 +41,11 @@ int main(void) {
   vw_whisper_engine_t* null_eng = vw_whisper_engine_init("no_such_model_file.bin", VW_WORKER_BACKEND_CPU, 0);
   EXPECT(null_eng == NULL);
 
+  // 1b. Segment accessors return safe defaults when engine is NULL
+  EXPECT(vw_whisper_engine_get_segment_count(NULL) == 0);
+  vw_whisper_segment_t dummy_seg = {0};
+  EXPECT(vw_whisper_engine_get_segment(NULL, 0, &dummy_seg) == false);
+
   // 2. Check for model file in CWD or build parent directories
   const char* model_paths[] = {"models/ggml-tiny.en.bin", "../../../models/ggml-tiny.en.bin",
                                "../../models/ggml-tiny.en.bin", "../models/ggml-tiny.en.bin"};
@@ -66,14 +71,29 @@ int main(void) {
     return 77;
   }
 
-  // 3. Model present: test engine init, silent transcribe, and get_text
+  // 3. Model present: test engine init, silent transcribe, get_text, and sub-segment getters
   vw_whisper_engine_t* eng = vw_whisper_engine_init(model_path, VW_WORKER_BACKEND_CPU, 0);
   EXPECT(eng != NULL);
+
+  // Test bounds before transcription
+  EXPECT(vw_whisper_engine_get_segment(eng, -1, &dummy_seg) == false);
+  EXPECT(vw_whisper_engine_get_segment(eng, 0, NULL) == false);
+  EXPECT(vw_whisper_engine_get_segment(eng, 999, &dummy_seg) == false);
 
   float pcm[16000] = {0};
   EXPECT(vw_whisper_engine_transcribe_pcm(eng, pcm, 16000));
   const char* text = vw_whisper_engine_get_text(eng);
   EXPECT(text != NULL);
+
+  int seg_count = vw_whisper_engine_get_segment_count(eng);
+  EXPECT(seg_count >= 0);
+  for (int i = 0; i < seg_count; i++) {
+    vw_whisper_segment_t seg = {0};
+    EXPECT(vw_whisper_engine_get_segment(eng, i, &seg));
+    EXPECT(seg.t0_us >= 0);
+    EXPECT(seg.t1_us >= seg.t0_us);
+    EXPECT(seg.text_utf8 != NULL);
+  }
 
   vw_whisper_engine_free(eng);
   printf("test_whisper_engine PASSED\n");

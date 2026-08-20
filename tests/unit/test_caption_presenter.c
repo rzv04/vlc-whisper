@@ -288,11 +288,46 @@ int main(void) {
   assert(spu_presenter.spu_channel_id == 43);
   assert(spu_presenter.spu_channel_registered == true);
 
+  // Test 14: Discrete SPU phrase scheduling with silence interval gap
+  vw_caption_segment_t phrase1 = {.start_pts_us = 10500000LL,  // 10.5s (lead = +0.5s)
+                                  .end_pts_us = 12800000LL,    // 12.8s (dur = 2.3s)
+                                  .text_utf8 = (char*)"Where are you from?",
+                                  .text_bytes = 20,
+                                  .is_final = true};
+  vw_caption_segment_t phrase2 = {.start_pts_us = 13400000LL,  // 13.4s (lead = +3.4s, 0.6s silence gap)
+                                  .end_pts_us = 17100000LL,    // 17.1s (dur = 3.7s)
+                                  .text_utf8 = (char*)"I'm from Germany.",
+                                  .text_bytes = 17,
+                                  .is_final = true};
+
+  g_mock_mdate = 100000000LL;  // 100s
+  g_mock_rate = 1.0f;
+  g_put_subpicture_calls = 0;
+
+  // Display phrase 1
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &phrase1, 10000000LL));
+  assert(g_put_subpicture_calls == 1);
+  int64_t phrase1_start = g_last_subpic_start;
+  int64_t phrase1_stop = g_last_subpic_stop;
+  assert(phrase1_start == 100500000LL);  // 100s + 0.5s = 100.5s
+  assert(phrase1_stop == 102800000LL);   // 100.5s + 2.3s = 102.8s
+
+  // Display phrase 2
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &phrase2, 10000000LL));
+  assert(g_put_subpicture_calls == 2);
+  int64_t phrase2_start = g_last_subpic_start;
+  int64_t phrase2_stop = g_last_subpic_stop;
+  assert(phrase2_start == 103400000LL);  // 100s + 3.4s = 103.4s
+  assert(phrase2_stop == 107100000LL);   // 103.4s + 3.7s = 107.1s
+
+  // Assert silence gap interval of exactly 0.6s between phrase 1 stop and phrase 2 start
+  assert(phrase2_start - phrase1_stop == 600000LL);
+
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (13/13 tests)\n");
+  printf("test_caption_presenter PASSED (14/14 tests)\n");
   return 0;
 }

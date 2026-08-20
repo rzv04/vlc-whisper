@@ -387,10 +387,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
           session_active = true;
           // Discard any segment-builder hypothesis left over from the previous epoch
           if (builder) {
-            vw_caption_segment_t stale_seg;
-            while (vw_segment_builder_pop(builder, &stale_seg)) {
-              if (stale_seg.text_utf8) free(stale_seg.text_utf8);
-            }
+            vw_segment_builder_clear(builder);
           }
 
           // Check if source_url is supplied for Ahead-of-Time Look-Ahead Decoding
@@ -465,12 +462,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             paused = is_pos_paused;
             if (paused) {
               if (audio_buf) vw_audio_buffer_clear(audio_buf);
-              if (builder) {
-                vw_caption_segment_t stale_seg;
-                while (vw_segment_builder_pop(builder, &stale_seg)) {
-                  if (stale_seg.text_utf8) free(stale_seg.text_utf8);
-                }
-              }
+              if (builder) vw_segment_builder_clear(builder);
             }
           }
 
@@ -493,12 +485,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
               source_eof = false;
               eof_retry_count = 0;
               if (audio_buf) vw_audio_buffer_clear(audio_buf);
-              if (builder) {
-                vw_caption_segment_t stale_seg;
-                while (vw_segment_builder_pop(builder, &stale_seg)) {
-                  if (stale_seg.text_utf8) free(stale_seg.text_utf8);
-                }
-              }
+              if (builder) vw_segment_builder_clear(builder);
             }
             last_playback_pts_us = payload_decoded.position.current_pts_us;
           }
@@ -529,10 +516,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE", "speech window @%lldus; transcribing",
                                (long long)window_pts_us);
                   if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
-                    const char* text = vw_whisper_engine_get_text(engine);
-                    if (text && text[0] != '\0' && builder) {
-                      int64_t duration_us = (int64_t)(((double)read_cnt / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
-                      vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
+                    if (builder) {
+                      int n_segs = vw_whisper_engine_get_segment_count(engine);
+                      for (int s_idx = 0; s_idx < n_segs; s_idx++) {
+                        vw_whisper_segment_t seg_info;
+                        if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info) && seg_info.text_utf8) {
+                          int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
+                          int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
+                          vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
+                        }
+                      }
                     }
                   } else {
                     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_INFERENCE", "whisper_full FAILED @%lldus",
@@ -550,6 +543,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
           if (!session_active) break;
           paused = true;
           if (audio_buf) vw_audio_buffer_clear(audio_buf);
+          if (builder) vw_segment_builder_clear(builder);
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "paused; window cleared, transcription suspended");
           break;
         }
@@ -564,6 +558,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             source_eof = false;
             eof_retry_count = 0;
             if (audio_buf) vw_audio_buffer_clear(audio_buf);
+            if (builder) vw_segment_builder_clear(builder);
           }
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "resumed; transcription active");
           break;
@@ -580,6 +575,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             source_mode = false;
           }
           if (audio_buf) vw_audio_buffer_clear(audio_buf);
+          if (builder) vw_segment_builder_clear(builder);
           break;
         }
 
@@ -621,10 +617,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
               vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE", "lookahead speech window @%lldus; transcribing",
                            (long long)window_pts_us);
               if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
-                const char* text = vw_whisper_engine_get_text(engine);
-                if (text && text[0] != '\0' && builder) {
-                  int64_t duration_us = (int64_t)(((double)read_cnt / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
-                  vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
+                if (builder) {
+                  int n_segs = vw_whisper_engine_get_segment_count(engine);
+                  for (int s_idx = 0; s_idx < n_segs; s_idx++) {
+                    vw_whisper_segment_t seg_info;
+                    if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info) && seg_info.text_utf8) {
+                      int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
+                      int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
+                      vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
+                    }
+                  }
                 }
               }
             }
@@ -644,10 +646,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
                              "lookahead trailing speech window @%lldus; transcribing", (long long)window_pts_us);
                 if (vw_whisper_engine_transcribe_pcm(engine, window_samples, remaining)) {
-                  const char* text = vw_whisper_engine_get_text(engine);
-                  if (text && text[0] != '\0' && builder) {
-                    int64_t duration_us = (int64_t)(((double)remaining / VW_AUDIO_SAMPLE_RATE) * 1000000.0);
-                    vw_segment_builder_push_hypothesis(builder, text, window_pts_us, window_pts_us + duration_us);
+                  if (builder) {
+                    int n_segs = vw_whisper_engine_get_segment_count(engine);
+                    for (int s_idx = 0; s_idx < n_segs; s_idx++) {
+                      vw_whisper_segment_t seg_info;
+                      if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info) && seg_info.text_utf8) {
+                        int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
+                        int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
+                        vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
+                      }
+                    }
                   }
                 }
               }

@@ -106,3 +106,29 @@ const char* vw_whisper_engine_get_text(const vw_whisper_engine_t* engine) {
   if (!engine || !engine->last_text) return "";
   return engine->last_text;
 }
+
+int vw_whisper_engine_get_segment_count(const vw_whisper_engine_t* engine) {
+  if (!engine || !engine->ctx) {
+    return 0;
+  }
+  return whisper_full_n_segments(engine->ctx);
+}
+
+bool vw_whisper_engine_get_segment(const vw_whisper_engine_t* engine, int index, vw_whisper_segment_t* out_seg) {
+  if (!engine || !engine->ctx || !out_seg || index < 0) {
+    return false;
+  }
+  int count = whisper_full_n_segments(engine->ctx);
+  if (index >= count) {
+    return false;
+  }
+
+  int64_t t0 = whisper_full_get_segment_t0(engine->ctx, index);
+  int64_t t1 = whisper_full_get_segment_t1(engine->ctx, index);
+  const char* txt = whisper_full_get_segment_text(engine->ctx, index);
+
+  out_seg->t0_us = t0 * 10000LL;
+  out_seg->t1_us = t1 * 10000LL;
+  out_seg->text_utf8 = txt ? txt : "";
+  return true;
+}
