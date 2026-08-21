@@ -139,7 +139,10 @@ static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_
       if (RegQueryValueExA(hkey, "InstallPath", NULL, &type, (LPBYTE)val, &len) == ERROR_SUCCESS && type == REG_SZ &&
           len > 0) {
         RegCloseKey(hkey);
-        if (vw_plugin_probe_ancestors(val, 0, names, name_count, out, out_size)) return true;
+        size_t vlen = (len < sizeof(val)) ? len : sizeof(val) - 1;
+        val[vlen] = '\0';
+        snprintf(candidate, sizeof(candidate), "%s\\.vw_probe", val);
+        if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
       } else {
         RegCloseKey(hkey);
       }
@@ -150,7 +153,7 @@ static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_
   char local_app_data[MAX_PATH];
   DWORD llen = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, sizeof(local_app_data));
   if (llen > 0 && llen < sizeof(local_app_data)) {
-    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper", local_app_data);
+    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", local_app_data);
     if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
   }
 
@@ -158,7 +161,7 @@ static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_
   char prog_files[MAX_PATH];
   DWORD plen = GetEnvironmentVariableA("PROGRAMFILES", prog_files, sizeof(prog_files));
   if (plen > 0 && plen < sizeof(prog_files)) {
-    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper", prog_files);
+    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", prog_files);
     if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
   }
   return false;
@@ -317,15 +320,17 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
   // worker without SOURCE_MODE must not be handed a URI it will reject.
   char* source_url = NULL;
   input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
-  if (input && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
-    input_item_t* item = input_GetItem(input);
-    if (item) {
-      char* uri = input_item_GetURI(item);
-      if (uri &&
-          (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' || (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
-        source_url = uri;
-      } else {
-        free(uri);
+  if (input) {
+    if (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE) {
+      input_item_t* item = input_GetItem(input);
+      if (item) {
+        char* uri = input_item_GetURI(item);
+        if (uri && (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' ||
+                    (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
+          source_url = uri;
+        } else {
+          free(uri);
+        }
       }
     }
     vlc_object_release(VLC_OBJECT(input));
@@ -546,7 +551,7 @@ static void* vw_plugin_sender_main(void* arg) {
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity at %lldus; blanking presenter",
                    (long long)seek_target_us);
       vw_caption_presenter_blank(&sys->presenter);  // erase captions on seek
-      if (seek_target_us > 0) {
+      if (seek_target_us >= 0) {
         if (!vw_worker_client_send_position(sys->client, seek_target_us, seek_target_us, 1.0f,
                                             (paused ? VW_POSITION_FLAG_PAUSED : 0) | VW_POSITION_FLAG_SEEK)) {
           atomic_store(&sys->worker_dead, true);

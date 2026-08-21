@@ -126,6 +126,7 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       const vw_caption_segment_t* p = (const vw_caption_segment_t*)payload;
       if (p->end_pts_us <= p->start_pts_us) return false;
       if (p->text_bytes > VW_MAX_TEXT_BYTES) return false;
+      if (p->text_bytes > 0 && !p->text_utf8) return false;
       if (is_empty_or_whitespace(p->text_utf8, p->text_bytes)) return false;
       if (!is_valid_utf8(p->text_utf8, p->text_bytes)) return false;
       // No control characters except space and newline (handled strictly)
