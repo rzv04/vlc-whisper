@@ -55,6 +55,16 @@ find_package(OpenMP)
 
 add_subdirectory(third_party/whisper.cpp)
 
+# Optimize third-party tensor compute kernels (ggml & whisper) so VAD and Whisper unit tests
+# run in milliseconds rather than suffering unvectorized -O0 CPU slowdowns during debug runs.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    foreach(t whisper ggml ggml-base ggml-cpu)
+        if(TARGET ${t})
+            target_compile_options(${t} PRIVATE -O3)
+        endif()
+    endforeach()
+endif()
+
 if(WIN32)
     set(VW_SOURCE_DECODER_SRCS src/vw_source_decoder_mf.c)
 else()
