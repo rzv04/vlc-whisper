@@ -315,6 +315,33 @@
 
 ## 7. Code Review Findings (Bugs, Risks, Nitpicks)
 
+### 7.0 Executive Issue Validity & Actionability Matrix
+
+Every finding reported across all review passes (§7 to §7.5) has been evaluated against the C17 standard, VLC architecture, and project invariants:
+
+| Category | Count | Status & Summary |
+|---|---|---|
+| **Real Bugs (Critical / High)** | **8** | Wire protocol NULL derefs (`VW_MSG_STARTED`, validator), NSIS admin shortcuts & directory checks, seek to origin (`00:00:00`), `input_thread_t` leak, lookahead start seek, FFmpeg multi-frame overwrite. |
+| **Real Bugs (Medium)** | **6** | Playback rate query (`VLC_ENOVAR`), Silero silence classification, `VW_MSG_ERROR` overread, Linux unreaped PIDs data race, NSIS cache error handling, Rule 3 packaging names. |
+| **Code Cleanup & Test Gaps (Low)** | **8** | Dual worker workflow docs, ISO C relational pointer UB, CNG `BCRYPT_SUCCESS` macro, registry NUL termination, license header comment alignment, test assertion additions. |
+| **False Positives / Invariants** | **3** | **1.** Static interval overlap flags (resolved by `b_ephemer=true`). **2.** Predecessor floor clipped by successor (intentional ADR-021 no-overlap invariant). **3.** Cue dropped on missing vout (intentional Rule 4 realtime memory-safety invariant). |
+
+---
+
+### False Positive & Invariant Analysis
+
+1. **FP-1: Static Interval Overlap Analysis Flags** (`plugin/src/vw_caption_presenter.c:266-276`):
+   - *Analysis*: Static analyzers report that a 1.0s reading floor extension overlaps if the next cue arrives at 600ms.
+   - *Verdict*: **FALSE POSITIVE / ARCHITECTURAL INVARIANT**. In VLC, `b_ephemer=true` (`vw_caption_presenter.c:121`) ensures the arrival of the next subpicture instantly replaces the previous one on the private channel without rendering overlap (verified by Test 14 & ADR-021).
+2. **FP-2: Predecessor Reading Floor Clipped by Successor** (`plugin/src/vw_caption_presenter.c:271`):
+   - *Analysis*: A 200ms cue with a successor 600ms later is clipped to 600ms instead of 1.0s.
+   - *Verdict*: **INTENTIONAL ADR-021 DESIGN TRADEOFF**. In rapid conversational exchanges, preserving the successor's authentic onset timestamp without overlap takes precedence over extending the predecessor to 1.0s.
+3. **FP-3: Buffered Cue Dropped when `p_held_vout` is Unavailable** (`plugin/src/vw_caption_presenter.c:311`):
+   - *Analysis*: If video output is recreating or media is audio-only, `render_internal` drops the buffered cue.
+   - *Verdict*: **INTENTIONAL RULE 4 SAFETY INVARIANT**. Retaining unbounded pending cues or blocking during transient vout destruction would violate Rule 4 (realtime safety and zero unbounded allocation).
+
+---
+
 ### Bugs (Sorted by Priority)
 
 | Priority | Component / Location | Description | Impact | Proposed Fix |
