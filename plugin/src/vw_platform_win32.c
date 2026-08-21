@@ -21,7 +21,7 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size) {
 
   // generate a random size-byte (32) token for authentication
   NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-  if (status != CMC_STATUS_SUCCESS) {
+  if (!BCRYPT_SUCCESS(status)) {
     return false;
   }
 

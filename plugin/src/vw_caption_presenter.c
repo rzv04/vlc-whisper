@@ -157,19 +157,28 @@ bool vw_caption_presenter_display(void* p_filter_ptr, const char* text, int64_t 
   return vw_caption_presenter_render_text(p_filter, text, duration_us);
 }
 
+static float vw_caption_presenter_get_rate(vw_caption_presenter_t* presenter) {
+  if (!presenter || !presenter->p_filter_ctx) {
+    return 1.0f;
+  }
+  vlc_object_t* obj = (vlc_object_t*)presenter->p_filter_ctx;
+  vlc_value_t rval;
+  while (obj) {
+    if (var_Get(obj, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+      return rval.f_float;
+    }
+    obj = obj->obj.parent;
+  }
+  return 1.0f;
+}
+
 static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
                                                  int64_t duration_us, int64_t input_time_us) {
   if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }
 
-  float rate = 1.0f;
-  if (presenter->p_filter_ctx) {
-    vlc_value_t rval;
-    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
-      rate = rval.f_float;
-    }
-  }
+  float rate = vw_caption_presenter_get_rate(presenter);
 
   if (!presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy
@@ -249,13 +258,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
     return false;
   }
 
-  float rate = 1.0f;
-  if (presenter->p_filter_ctx) {
-    vlc_value_t rval;
-    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
-      rate = rval.f_float;
-    }
-  }
+  float rate = vw_caption_presenter_get_rate(presenter);
   int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
 
   // If a preceding cue was buffered, dispatch it now with duration clipped to the incoming segment's start PTS
@@ -286,6 +289,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   strncpy(presenter->pending_text, segment->text_utf8, sizeof(presenter->pending_text) - 1);
   presenter->pending_text[sizeof(presenter->pending_text) - 1] = '\0';
   presenter->pending_segment.text_utf8 = presenter->pending_text;
+  presenter->pending_segment.text_bytes = (uint16_t)strlen(presenter->pending_text);
 
   return true;
 }
@@ -295,13 +299,7 @@ bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input
     return false;
   }
 
-  float rate = 1.0f;
-  if (presenter->p_filter_ctx) {
-    vlc_value_t rval;
-    if (var_Get((vlc_object_t*)presenter->p_filter_ctx, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
-      rate = rval.f_float;
-    }
-  }
+  float rate = vw_caption_presenter_get_rate(presenter);
   int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
   int64_t raw_duration_us = presenter->pending_segment.end_pts_us - presenter->pending_segment.start_pts_us;
   int64_t duration_us = (raw_duration_us <= 0)                   ? 2000000LL

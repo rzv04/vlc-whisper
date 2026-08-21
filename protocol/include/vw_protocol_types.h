@@ -79,7 +79,7 @@ typedef enum vw_message_type {
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
   VW_MSG_SHUTDOWN = 11,  // zero-payload: instruct worker to exit
-  VW_MSG_STARTED = 12,   // zero-payload: worker confirms session started
+  VW_MSG_STARTED = 12,   // worker confirms session started; carries uint8_t source_active
   VW_MSG_POSITION = 13   // plugin sends media playback position and pacing updates
 } vw_message_type_t;
 
