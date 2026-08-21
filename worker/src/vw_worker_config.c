@@ -41,7 +41,14 @@ static void vw_worker_config_autodiscover_vad(vw_worker_config_t* config) {
   char dir_cand[VW_PATH_MAX_BYTES];
   const char* last_slash = strrchr(config->model_path, '/');
   const char* last_bslash = strrchr(config->model_path, '\\');
-  const char* slash = (last_slash > last_bslash) ? last_slash : last_bslash;
+  const char* slash = NULL;
+  if (last_slash && last_bslash) {
+    slash = (last_slash > last_bslash) ? last_slash : last_bslash;
+  } else if (last_slash) {
+    slash = last_slash;
+  } else {
+    slash = last_bslash;
+  }
   if (slash != NULL) {
     size_t dir_len = (size_t)(slash - config->model_path) + 1;
     if (dir_len + strlen("ggml-silero-vad.bin") < sizeof(dir_cand)) {
@@ -52,6 +59,7 @@ static void vw_worker_config_autodiscover_vad(vw_worker_config_t* config) {
       if (f != NULL) {
         fclose(f);
         strncpy(config->vad_model_path, dir_cand, sizeof(config->vad_model_path) - 1);
+        config->vad_model_path[sizeof(config->vad_model_path) - 1] = '\0';
         return;
       }
     }

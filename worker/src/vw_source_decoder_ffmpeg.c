@@ -152,6 +152,51 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return false;
 }
 
+static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
+                                            size_t* inout_total_samples, int64_t* out_pts_us) {
+  AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
+  int64_t frame_pts = decoder->frame->pts;
+  if (frame_pts == AV_NOPTS_VALUE) {
+    frame_pts = decoder->frame->best_effort_timestamp;
+  }
+  if (frame_pts == AV_NOPTS_VALUE) {
+    frame_pts = decoder->frame->pkt_dts;
+  }
+  if (frame_pts != AV_NOPTS_VALUE && stream) {
+    decoder->current_pts_us = (int64_t)av_rescale_q(frame_pts, stream->time_base, (AVRational){1, 1000000});
+  }
+
+  if (out_pts_us && *inout_total_samples == 0) {
+    *out_pts_us = decoder->current_pts_us;
+  }
+
+  int16_t resample_buf[4096];
+  uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
+  int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)),
+                              (const uint8_t**)decoder->frame->extended_data, decoder->frame->nb_samples);
+
+  if (converted > 0) {
+    size_t samples_converted = (size_t)converted;
+    size_t needed = max_samples - *inout_total_samples;
+    if (samples_converted <= needed) {
+      memcpy(out_pcm + *inout_total_samples, resample_buf, samples_converted * sizeof(int16_t));
+      *inout_total_samples += samples_converted;
+      decoder->current_pts_us += (int64_t)((samples_converted * 1000000ULL) / 16000ULL);
+    } else {
+      memcpy(out_pcm + *inout_total_samples, resample_buf, needed * sizeof(int16_t));
+      *inout_total_samples += needed;
+      decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
+
+      size_t remainder = samples_converted - needed;
+      if (remainder > sizeof(decoder->leftover_buffer) / sizeof(int16_t)) {
+        remainder = sizeof(decoder->leftover_buffer) / sizeof(int16_t);
+      }
+      memcpy(decoder->leftover_buffer, resample_buf + needed, remainder * sizeof(int16_t));
+      decoder->leftover_count = remainder;
+    }
+  }
+}
+
 size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
                                     int64_t* out_pts_us) {
   if (!decoder || !decoder->fmt_ctx || !out_pcm || max_samples == 0) return 0;
@@ -187,49 +232,20 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
 
     if (decoder->pkt->stream_index == decoder->audio_stream_idx) {
       int send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
+      if (send_ret == AVERROR(EAGAIN)) {
+        while (total_samples < max_samples && decoder->leftover_count == 0 &&
+               avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
+          vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+        }
+        if (total_samples < max_samples && decoder->leftover_count == 0) {
+          send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
+        }
+      }
+
       if (send_ret >= 0) {
-        while (avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
-          AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
-          int64_t frame_pts = decoder->frame->pts;
-          if (frame_pts == AV_NOPTS_VALUE) {
-            frame_pts = decoder->frame->best_effort_timestamp;
-          }
-          if (frame_pts == AV_NOPTS_VALUE) {
-            frame_pts = decoder->frame->pkt_dts;
-          }
-          if (frame_pts != AV_NOPTS_VALUE && stream) {
-            decoder->current_pts_us = (int64_t)av_rescale_q(frame_pts, stream->time_base, (AVRational){1, 1000000});
-          }
-
-          if (out_pts_us && total_samples == 0) {
-            *out_pts_us = decoder->current_pts_us;
-          }
-
-          int16_t resample_buf[4096];
-          uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
-          int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)),
-                                      (const uint8_t**)decoder->frame->extended_data, decoder->frame->nb_samples);
-
-          if (converted > 0) {
-            size_t samples_converted = (size_t)converted;
-            size_t needed = max_samples - total_samples;
-            if (samples_converted <= needed) {
-              memcpy(out_pcm + total_samples, resample_buf, samples_converted * sizeof(int16_t));
-              total_samples += samples_converted;
-              decoder->current_pts_us += (int64_t)((samples_converted * 1000000ULL) / 16000ULL);
-            } else {
-              memcpy(out_pcm + total_samples, resample_buf, needed * sizeof(int16_t));
-              total_samples += needed;
-              decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
-
-              size_t remainder = samples_converted - needed;
-              if (remainder > sizeof(decoder->leftover_buffer) / sizeof(int16_t)) {
-                remainder = sizeof(decoder->leftover_buffer) / sizeof(int16_t);
-              }
-              memcpy(decoder->leftover_buffer, resample_buf + needed, remainder * sizeof(int16_t));
-              decoder->leftover_count = remainder;
-            }
-          }
+        while (total_samples < max_samples && decoder->leftover_count == 0 &&
+               avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
+          vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
         }
       } else if (send_ret != AVERROR(EAGAIN) && send_ret != AVERROR_EOF) {
         vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
