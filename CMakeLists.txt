@@ -47,4 +47,4 @@ endif()
 add_subdirectory(samples EXCLUDE_FROM_ALL)
 
 # Packaging and distribution (CPack & NSIS installer)
-include(cmake/Packaging.cmake)
+include(cmake/vw_packaging.cmake)

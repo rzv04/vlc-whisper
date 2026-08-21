@@ -9,8 +9,8 @@ if(WIN32)
     message(STATUS "Found NSIS compiler: ${MAKENSIS_EXECUTABLE}")
 
     # Configure the NSIS template
-    set(NSIS_SCRIPT_IN "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vlc_whisper_installer.nsi.in")
-    set(NSIS_SCRIPT_OUT "${CMAKE_CURRENT_BINARY_DIR}/vlc_whisper_installer.nsi")
+    set(NSIS_SCRIPT_IN "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_installer.nsi.in")
+    set(NSIS_SCRIPT_OUT "${CMAKE_CURRENT_BINARY_DIR}/vw_installer.nsi")
 
     configure_file(${NSIS_SCRIPT_IN} ${NSIS_SCRIPT_OUT} @ONLY)
 

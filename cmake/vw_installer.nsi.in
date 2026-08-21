@@ -32,6 +32,7 @@ Var VLC_DIR
 ; Installer Pages
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "@CMAKE_SOURCE_DIR@/LICENSE"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -44,6 +45,17 @@ Var VLC_DIR
 !insertmacro MUI_LANGUAGE "English"
 
 ; ------------------------------------------------------------------------------
+; Directory Page Leave Callback (Validate VLC Installation Target)
+; ------------------------------------------------------------------------------
+Function DirectoryLeave
+  ${IfNot} ${FileExists} "$INSTDIR\vlc.exe"
+    MessageBox MB_YESNO|MB_ICONQUESTION "vlc.exe was not found in '$INSTDIR'.$\r$\nAre you sure you want to install into this directory?" IDYES proceed
+    Abort
+    proceed:
+  ${EndIf}
+FunctionEnd
+
+; ------------------------------------------------------------------------------
 ; Initialization Function (Detect 64-bit Architecture and VLC Installation)
 ; ------------------------------------------------------------------------------
 Function .onInit
@@ -52,8 +64,9 @@ Function .onInit
     Abort
   ${EndIf}
 
-  ; Enforce 64-bit Registry View
+  ; Enforce 64-bit Registry View and All-Users Shell Context
   SetRegView 64
+  SetShellVarContext all
 
   ; 1. Try reading VLC install path from 64-bit HKLM Registry
   ReadRegStr $VLC_DIR HKLM "Software\VideoLAN\VLC" "InstallDir"
@@ -99,7 +112,7 @@ Section "VLC Plugin & AI Engine" SecCore
 
   ; 2. Install Worker Executables into VLC Root
   SetOutPath "$INSTDIR"
-  File "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
+  File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
   File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker-cpu.exe"
 
   ; 3. Install AI Models into <VLC>/models
@@ -113,9 +126,7 @@ Section "VLC Plugin & AI Engine" SecCore
   File "@CMAKE_SOURCE_DIR@/LICENSE"
   File "@CMAKE_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"
 
-  ; 5. Write Application Registry Metadata
-  WriteRegStr HKCU "Software\VLC-Whisper" "InstallPath" "$INSTDIR"
-  WriteRegStr HKCU "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
+  ; 5. Write Application Registry Metadata (Machine-wide HKLM)
   WriteRegStr HKLM "Software\VLC-Whisper" "InstallPath" "$INSTDIR"
   WriteRegStr HKLM "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
 
@@ -145,6 +156,12 @@ Section "VLC Plugin & AI Engine" SecCore
     DetailPrint "vlc-cache-gen completed (exit code: $0)"
   ${Else}
     ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache --version' $0
+    DetailPrint "vlc --reset-plugins-cache completed (exit code: $0)"
+  ${EndIf}
+  ${If} $0 != 0
+    DetailPrint "Warning: VLC plugin cache update returned exit code $0."
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "Warning: VLC plugin cache update returned exit code $0.$\r$\nYou may need to restart VLC or manually run 'vlc --reset-plugins-cache' if captions do not appear."
   ${EndIf}
 SectionEnd
 
@@ -153,6 +170,7 @@ SectionEnd
 ; ------------------------------------------------------------------------------
 Section "Uninstall"
   SetRegView 64
+  SetShellVarContext all
 
   ; Stop running instances
   nsExec::Exec 'taskkill /F /IM vlc.exe /T'
@@ -183,17 +201,22 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\VLC-Whisper"
   Delete "$DESKTOP\VLC (with AI Whisper Captions).lnk"
 
-  ; 6. Remove Uninstaller & Registry Entries
+  ; 6. Remove Uninstaller & Registry Entries (Machine-wide HKLM)
   Delete "$INSTDIR\uninstall-vlc-whisper.exe"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper"
   DeleteRegKey HKLM "Software\VLC-Whisper"
-  DeleteRegKey HKCU "Software\VLC-Whisper"
 
   ; 7. Rebuild VLC Plugin Cache without the plugin
   DetailPrint "Rebuilding VLC plugin cache..."
   ${If} ${FileExists} "$INSTDIR\vlc-cache-gen.exe"
     ExecWait '"$INSTDIR\vlc-cache-gen.exe" "$INSTDIR\plugins"' $0
+    DetailPrint "vlc-cache-gen completed (exit code: $0)"
   ${Else}
     ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache --version' $0
+    DetailPrint "vlc --reset-plugins-cache completed (exit code: $0)"
+  ${EndIf}
+  ${If} $0 != 0
+    DetailPrint "Warning: VLC plugin cache rebuild returned exit code $0."
   ${EndIf}
 SectionEnd
+

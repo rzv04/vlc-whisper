@@ -280,17 +280,22 @@ For end users with VLC 3.0 (64-bit) already installed on Windows 10/11:
 
 ## Compiling the Windows Installer & Packaging Releases
 
-To compile the standalone Windows installer on Linux (requires `nsis` / `makensis`):
+To compile the standalone Windows installer with both Vulkan GPU worker and CPU fallback (requires `nsis` / `makensis`):
 
 ```bash
 # 1. Install NSIS compiler
 sudo apt-get install -y nsis
 
-# 2. Build the Windows release binaries and NSIS setup installer
+# 2. (Optional) Build CPU fallback worker to bundle alongside GPU worker
+cmake --preset windows-x64-release-cpu
+cmake --build --preset windows-x64-release-cpu -j4
+cp build/windows-x64-release-cpu/worker/vlc-whisper-worker-cpu.exe build/windows-x64-release/worker/ 2>/dev/null || true
+
+# 3. Build Windows release binaries and NSIS setup installer
 cmake --preset windows-x64-release
 cmake --build --preset windows-x64-release --target installer
 
-# 3. Generate portable release ZIP archive
+# 4. Generate portable release ZIP archive
 cpack --config build/windows-x64-release/CPackConfig.cmake
 ```
 

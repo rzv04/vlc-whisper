@@ -126,8 +126,8 @@ vlc-whisper/
 │   └── snippets/                              # Standalone C17 sample code files
 │       └── vw_sample_whisper_pcm.c            # 16kHz WAV reader, float resampler & Whisper runner
 ├── cmake/                                     # Build system configurations & toolchains
-│   ├── Packaging.cmake                        # CPack release archive & NSIS installer target definitions
-│   ├── vlc_whisper_installer.nsi.in          # Templated NSIS script for standalone Windows installer
+│   ├── vw_packaging.cmake                     # CPack release archive & NSIS installer target definitions
+│   ├── vw_installer.nsi.in                   # Templated NSIS script for standalone Windows installer
 │   └── toolchains/
 │       └── windows-x64-mingw.cmake            # MinGW cross-compilation CMake toolchain configuration
 ├── docs/                                      # Project specifications, ADRs & architectural design docs
