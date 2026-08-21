@@ -70,8 +70,9 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   wparams.strategy = WHISPER_SAMPLING_GREEDY;
   wparams.temperature = 0.0f;
-  wparams.temperature_inc = 0.2f;  // Explicit bounded temperature fallback (<= 5 passes)
-  wparams.entropy_thold = 2.40f;   // Shannon entropy gate over last 32 tokens
+  wparams.temperature_inc =
+      0.2f;  // Explicit bounded temperature fallback (initial pass + <= 5 retries, up to 6 total passes)
+  wparams.entropy_thold = 2.40f;  // Shannon entropy gate over last 32 tokens
   wparams.logprob_thold = -1.00f;
   wparams.no_speech_thold = 0.60f;
   wparams.no_context = true;       // Disables within-window segment prompt conditioning
@@ -99,12 +100,18 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
     const char* txt = whisper_full_get_segment_text(engine->ctx, i);
     if (!txt) continue;
     size_t len = strlen(txt);
-    if (written + len + 2 >= engine->last_text_bytes) {
-      size_t new_cap = engine->last_text_bytes * 2 + len + 2;
+    if (len == 0) continue;
+    bool needs_space = (written > 0 && engine->last_text[written - 1] != ' ' && txt[0] != ' ');
+    size_t extra = needs_space ? 1 : 0;
+    if (written + len + extra + 2 >= engine->last_text_bytes) {
+      size_t new_cap = engine->last_text_bytes * 2 + len + extra + 2;
       char* new_buf = (char*)realloc(engine->last_text, new_cap);
       if (!new_buf) return false;  // return false instead of shipping truncated text
       engine->last_text = new_buf;
       engine->last_text_bytes = new_cap;
+    }
+    if (needs_space) {
+      engine->last_text[written++] = ' ';
     }
     memcpy(engine->last_text + written, txt, len);
     written += len;
