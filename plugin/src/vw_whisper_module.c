@@ -177,7 +177,7 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
   char plugin_path[MAX_PATH];
   HMODULE hmod = NULL;
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)(void*)vw_plugin_open, &hmod) &&
+                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
       hmod) {
     DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
     if (len > 0 && len < sizeof(plugin_path)) {
@@ -217,7 +217,7 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
   char plugin_path[MAX_PATH];
   HMODULE hmod = NULL;
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)(void*)vw_plugin_open, &hmod) &&
+                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
       hmod) {
     DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
     if (len > 0 && len < sizeof(plugin_path)) {
