@@ -31,13 +31,13 @@
 
 ---
 
-## 3. Prerequisite findings (blockers for any download flow)
+## 3. Prerequisite findings (verified against current plumbing)
 
-These were discovered while tracing the current plumbing; all are code-level facts, none are speculative:
+Code-level facts checked before designing the download flow:
 
-1. **`model-path` / `worker-path` config vars are never registered.** The plugin registers only `whisper-backend`, `whisper-language`, `whisper-threads`, `whisper-backend-active` (`plugin/src/vw_whisper_module.c:1082-1087`). The 2 s snapshot loop reads `config_GetPsz(..., "model-path")` (:434) and `worker-path` (:433), but in VLC 3.0 `config_PutPsz`/`config_GetPsz` on an unregistered name resolve through `config_FindConfig` → NULL → **silent no-op / NULL**. Consequence: the Lua extension's `Apply` of a model currently persists nothing and the plugin's diff loop can never see a model change. Any 19c work must first register both vars via `add_string` in the plugin descriptor. (The 19b manual test only exercised the three registered keys — this gap was not covered.)
+1. **`model-path` / `worker-path` registration is intact — no fix needed.** Both are registered via `add_loadfile` (`plugin/src/vw_whisper_module.c:1076` worker-path, `:1080` model-path); in VLC 3.0 `add_loadfile` is a string-backed config item, so Lua `vlc.config.set`, `config_GetPsz` in the 2 s snapshot loop (:433-434), the snapshot diff, and the respawn path all work for model changes. New progress-mirror vars (`whisper-model-progress`, `whisper-model-status`, §8) follow the same pattern as the existing read-only `whisper-backend-active` mirror (:1087).
 2. **Worker has no HTTP client.** `grep -rl "download|curl|winhttp|URLDownload" worker/src plugin/src` → no matches. The only network code in the repo is CMake build-time (`cmake/vw_provision_model.cmake` `file(DOWNLOAD ...)`, sha256-pinned) and the standalone helper scripts `models/vw_download_vad_model.{cmd,sh}`.
-3. **Model path resolution probes only bundled names** (`vw_plugin_resolve_model_path`, :214-240). A lazily downloaded model in a per-user directory (§6) will not be found until the probe list/order is extended (config `model-path` → install `models/` → per-user dir).
+3. **Model path resolution probes only bundled names** (`vw_plugin_resolve_model_path`, :214-240 — `{"ggml-tiny.en.bin", "models/ggml-tiny.en.bin"}`). Switching the bundle to universal tiny requires a `ggml-tiny.bin` entry here, and a lazily downloaded model in a per-user directory (§6) will not be found until the probe list/order is extended (config `model-path` → install `models/` → per-user dir).
 4. **Worker rejects `--language auto`** (19b contract). Bundling universal tiny makes `auto` meaningful again; worker must accept it when `whisper_full` model `is_multilingual()` (whisper.cpp auto-detects when language unset).
 
 ---
@@ -111,7 +111,7 @@ Reminder from the scan-state incident (commits `0993112`/`36616bc`): the *scan* 
 
 Reuses the 19b live-apply pattern end to end; protocol change is a compatible minor bump (v1.4):
 
-1. **Config vars** (plugin registers all of them — see §3.1): `whisper-model-download` (string: model id to fetch, or `abort`), `whisper-model-progress` (int 0–100, read-only mirror), `whisper-model-status` (string: `idle|downloading|verifying|done|failed|missing|aborting`, read-only mirror).
+1. **Config vars** (registered like the existing `whisper-*` items; read-only mirrors follow the `whisper-backend-active` precedent): `whisper-model-download` (string: model id to fetch, or `abort`), `whisper-model-progress` (int 0–100, read-only mirror), `whisper-model-status` (string: `idle|downloading|verifying|done|failed|missing|aborting`, read-only mirror).
 2. **Plugin** (2 s snapshot loop already exists): detects `whisper-model-download` diff → sends new `MODEL_CTRL` frame to worker (same authenticated IPC, single listener). Drains `MODEL_PROGRESS` frames → `config_PutInt`/`PutPsz` mirrors (VLC config lock already proven safe for cross-thread writes in 19b's `whisper-backend-active`).
 3. **Worker**: dedicated download thread; WinHTTP/subprocess-curl to the manifest URL into `<per-user dir>/<name>.part`; sha256 verify; atomic rename; progress frames at ~1 Hz (pct + bytes); honors `abort`; never blocks the IPC loop; deletes stale `.part` at startup.
 4. **Extension**: `Download` button / menu entry writes the control var, then loops at ~1–2 Hz: `cfg_get("whisper-model-progress")` → `w_status:set_text(...)` → `dlg:update()`, with `pcall` around dialog ops (user may close), `spin_icon` animate/stop, final OSD message on done/fail. No filesystem access, no network in Lua.
@@ -129,7 +129,7 @@ Reuses the 19b live-apply pattern end to end; protocol change is a compatible mi
 | Write location | Per-user model dir; probe order config → install dir → user dir |
 | User trigger points | Installer checkboxes (optional) · settings dropdown annotation + menu entry (primary) · `E_MODEL_MISSING` OSD (passive) |
 | Progress UI | Settings-dialog status label via `w:set_text` + `d:update()` loop (real-time, verified) + `spin_icon`; OSD message/slider over video; SPU rejected |
-| Prerequisites to fix first | Register `model-path`/`worker-path` config vars; extend model probe list; worker `--language auto` for multilingual; worker HTTP client + download thread |
+| Prerequisites to fix first | Probe-list entries (`ggml-tiny.bin` bundle + per-user dir) in `vw_plugin_resolve_model_path`; worker `--language auto` for multilingual; worker HTTP client + download thread |
 
 ## 10. Open questions
 
