@@ -316,6 +316,14 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
     vw_worker_client_disconnect(sys->client);
     sys->client = NULL;
   }
+  // The old transport is gone; its dead-flag is obsolete bookkeeping. Clear it unconditionally
+  // (even when client was already NULL) so a config respawn attempted while worker_dead was set
+  // — transport failure followed by a settings change inside one 2s poll window — cannot leave
+  // the flag set across a failed launch: the transport block in the sender loop would otherwise
+  // reclassify that config failure as transport recovery, consume the bounded budget, and break
+  // the loop. A failed respawn returns with client == NULL; the sender loop's NULL-client guard
+  // idles on that until the next config diff.
+  atomic_store(&sys->worker_dead, false);
   vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN", "%s; respawning worker (%u/%u)",
                transport_recovery ? "transport death" : "config change", sys->respawn_count,
                (unsigned)VW_MAX_WORKER_RESPAWNS);
@@ -374,7 +382,6 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
   if (paused) {
     vw_worker_client_pause_session(sys->client);  // restart in the paused state the death left us in
   }
-  atomic_store(&sys->worker_dead, false);
   sys->chunks_sent = 0;
   sys->frames_received = 0;
   sys->segments_received = 0;
