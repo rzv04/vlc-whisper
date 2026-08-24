@@ -32,24 +32,28 @@ if(WIN32)
 
     configure_file(${NSIS_SCRIPT_IN} ${NSIS_SCRIPT_OUT} @ONLY)
 
+    # Zero-network default: the model MUST be provisioned locally (manual
+    # placement or `--target provision_models` run once while online).
+    # Downloads happen only when -DVW_PROVISION_MODELS=ON is set explicitly.
+    option(VW_PROVISION_MODELS "Allow build-time model download (installer/provision targets)" OFF)
+
     add_custom_target(provision_models
       COMMAND ${CMAKE_COMMAND}
               -DMODEL_PATH=${VW_MODEL_TINY_EN}
               -DMODEL_URL=${VW_MODEL_TINY_EN_URL}
               -DMODEL_SHA256=${VW_MODEL_TINY_EN_SHA256}
+              -DALLOW_DOWNLOAD=${VW_PROVISION_MODELS}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_provision_model.cmake
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "Provisioning models/ggml-tiny.en.bin (skipped when present)..."
     )
 
-    # Installer auto-provisions its mandatory model as a pre-step: building the
-    # installer is an explicit opt-in to producing a distributable, so fetching
-    # its pinned dependency here never surprises plain/offline builds.
     add_custom_target(installer
       COMMAND ${CMAKE_COMMAND}
               -DMODEL_PATH=${VW_MODEL_TINY_EN}
               -DMODEL_URL=${VW_MODEL_TINY_EN_URL}
               -DMODEL_SHA256=${VW_MODEL_TINY_EN_SHA256}
+              -DALLOW_DOWNLOAD=${VW_PROVISION_MODELS}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_provision_model.cmake
       COMMAND ${MAKENSIS_EXECUTABLE} ${NSIS_SCRIPT_OUT}
       DEPENDS vlc_whisper_plugin vlc-whisper-worker

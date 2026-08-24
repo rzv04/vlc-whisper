@@ -444,6 +444,18 @@ Net semantics: **no network at configure ever; network only on explicit distribu
 
 ---
 
+### 7.10 Tenth-Pass — Milestone-3 Pre-Merge Fixes (2026-08-24, branch `gemini/milestone-3-step-18`)
+
+| # | Issue | Verdict | Resolution |
+|---|---|---|---|
+| M3-1 | **Stream timestamp domains diverge** (`worker/src/vw_source_decoder_ffmpeg.c` seek + `process_frame`): with a nonzero container `start_time` (common in MPEG-TS), seeks treated VLC's media-relative position as a raw stream timestamp and decoded raw PTS propagated into caption scheduling unnormalized → captions early/late/stale/duplicated. | **VALID — FIXED** | Decoder now caches `stream_start_time` at open (`AV_NOPTS_VALUE → 0`) and normalizes both directions: seek adds the offset to the converted target (`target_ts += stream_start_time`); `process_frame` strips it from resolved frame PTS before µs conversion (clamped at 0 for head padding). Media-relative timeline is now consistent across seek/decode/caption scheduling for any container offset. |
+| M3-2 | **Packaging performs network downloads** (`vw_provision_model.cmake` via installer/provision targets): build-time fetch violates zero-network default; offline/restricted environments cannot package. | **VALID (policy) — FIXED** | Restored default-deny semantics dropped in §7.8: new `VW_PROVISION_MODELS` option (default `OFF`) gates every download via `-DALLOW_DOWNLOAD`; with it OFF (default) provisioning FATAL_ERRORs with manual-placement + opt-in instructions and no network I/O occurs anywhere in the build. With it ON, the fetch proceeds as before but now downloads to `<path>.part` and renames only after the hash check passes, so failed/interrupted downloads can never poison the `EXISTS` short-circuit with a corrupt file (edge proven in-gate). Standalone `provision_models` honors the same gate. Net: strict zero-network by default; online convenience preserved behind an explicit flag — reconciles M3-2 with §7.7 G1/§7.8 P1 rather than reverting them. |
+
+**Gates**: clang-format clean; Linux build 0 errors; ctest 20/20; memcheck 20/20 run — 0 definitely/indirectly/possibly-lost bytes; ctest's "Defects: 245" on `test_worker_lifecycle` fully attributed to *still-reachable* system-library allocations (libgobject/libglib/loader/pixman/gcrypt — zero project frames), pre-existing environmental noise under `--leak-check=full`, not project leaks; Windows MinGW build 0 errors.
+
+---
+
+
 ## 8. Windows Sandbox Manual Testing Matrix (E2E with Internet Access)
 
 ### 8.1 Sandbox Prerequisites & Environment Setup
