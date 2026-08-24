@@ -100,6 +100,7 @@ target_include_directories(vlc-whisper-worker PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../plugin/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/whisper.cpp/ggml/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vlc-3.0.23/include
 )
 

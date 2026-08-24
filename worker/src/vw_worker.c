@@ -489,11 +489,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
             st.queued_audio_us = 0;
             st.inference_us = 0;
             st.dropped_audio_us = 0;
-#ifdef VW_HAVE_VULKAN
-            const char* resolved = (config->backend == VW_WORKER_BACKEND_CPU) ? "cpu" : "gpu";
-#else
-            const char* resolved = "cpu";
-#endif
+            // Runtime truth, not the request: whisper transparently falls back to CPU when the
+            // requested GPU/IGPU ordinal does not exist; the engine re-derives whisper's own
+            // device selection after init, so a Vulkan-built worker without a usable device
+            // reports "cpu". Engine init failure also reports "cpu" (no inference is running).
+            const char* resolved =
+                (config->backend == VW_WORKER_BACKEND_CPU || !vw_whisper_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
             snprintf(st.resolved_backend, sizeof(st.resolved_backend), "%s", resolved);
             uint8_t st_payload[64];
             size_t st_len = 0;

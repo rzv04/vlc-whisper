@@ -28,6 +28,8 @@ typedef struct vw_whisper_engine {
   size_t last_text_bytes;       // Capacity of last_text buffer
   char language[16];            // Concrete whisper language code (e.g. "en"), NUL-terminated
   int n_threads;                // CPU threads for inference (1..16, clamped)
+  bool gpu_active;              // True when inference actually runs on a GPU/IGPU device (runtime truth,
+                                // not the requested backend); false after CPU fallback or CPU-forced init
 } vw_whisper_engine_t;
 
 // Initializes whisper.cpp engine instance from the specified model file path (ADR-015: model-once lifetime).
@@ -37,9 +39,18 @@ typedef struct vw_whisper_engine {
 // Runs a silent warmup inference pass on load. Returns NULL if model file is missing or invalid.
 vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device);
 
-// Optional setters to configure language/threads after init (live-settable, no reinit). Return false on NULL.
+// Sets the language used by subsequent transcription calls without reinitializing the model; rejects NULL,
+// empty, "auto", and values exceeding the fixed 16-byte buffer, returning false without side effects.
 bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* language);
+
+// Sets the thread count used by subsequent transcription calls without reinitializing the model; clamps
+// values into the supported inclusive range 1..16 and always returns true for a non-NULL engine.
 bool vw_whisper_engine_set_n_threads(vw_whisper_engine_t* engine, int n_threads);
+
+// Reports whether inference actually executes on a GPU/IGPU device for this engine instance: mirrors
+// whisper.cpp's own device selection (requested ordinal must exist), so CPU runtime fallback reports
+// false even when AUTO/GPU was requested. STATUS resolved_backend must read this, not the request.
+bool vw_whisper_engine_is_gpu_active(const vw_whisper_engine_t* engine);
 
 // Safely destroys whisper.cpp engine instance and frees associated model memory.
 void vw_whisper_engine_free(vw_whisper_engine_t* engine);
