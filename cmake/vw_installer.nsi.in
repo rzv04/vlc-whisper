@@ -165,6 +165,8 @@ Section "VLC Plugin & AI Engine" SecCore
   DetailPrint "Invalidating VLC plugin cache (plugins.dat); VLC rebuilds it automatically on next launch."
   Delete "$INSTDIR\plugins\plugins.dat"
 
+SectionEnd
+
 ; ------------------------------------------------------------------------------
 ; Uninstaller Implementation
 ; ------------------------------------------------------------------------------
