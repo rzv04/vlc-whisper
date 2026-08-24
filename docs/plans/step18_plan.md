@@ -7,7 +7,7 @@ Deliver a production-grade, plug-and-play Windows installer (`.exe` / `.zip`) an
 
 ## Context
 - **Relevant docs/ADR**: `docs/architecture.md`, `docs/product.md`, `docs/source-layout.md`, `docs/api-contracts.md`, `docs/whisper-api.md`, `ADR-010` (Static MinGW runtime linking), `ADR-012` (Out-of-tree plugin packaging), `ADR-015` (Single Model Lifetime), `ADR-020` (Silero VAD Chunking), `ADR-021` (Subtitle Reading Floor & Deterministic Decoding).
-- **VLC/worker/protocol version affected**: Packaging toolchain (`cmake/Packaging.cmake`, `cmake/vlc_whisper_installer.nsi.in`), Root `LICENSE`, Root `THIRD_PARTY_NOTICES.md`, Plugin path resolution (`plugin/src/vw_whisper_module.c`), Protocol v1.2 (compatible).
+- **VLC/worker/protocol version affected**: Packaging toolchain (`cmake/vw_packaging.cmake`, `cmake/vw_installer.nsi.in`), Root `LICENSE`, Root `THIRD_PARTY_NOTICES.md`, Plugin path resolution (`plugin/src/vw_whisper_module.c`), Protocol v1.2 (compatible).
 - **Assumptions and explicit non-goals**:
   - Non-goal: Re-distributing the full VLC Media Player installer (VLC-Whisper is an out-of-tree plugin that detects and integrates into pre-installed VLC 3.0.x x64 instances).
   - Non-goal: Modifying or forking VLC source code.
@@ -26,8 +26,8 @@ Deliver a production-grade, plug-and-play Windows installer (`.exe` / `.zip`) an
   3. **VLC Plugin & Worker Path Auto-Discovery**:
      - Extend `vw_plugin_resolve_worker_path` and `vw_plugin_resolve_model_path` in `plugin/src/vw_whisper_module.c` to probe Windows Registry keys (`HKCU\Software\VLC-Whisper\InstallPath`, `HKLM\Software\VLC-Whisper\InstallPath`) and `%LOCALAPPDATA%\vlc-whisper\`.
   4. **Plug-and-Play Windows Installer & Packaging Script**:
-     - NSIS script template (`cmake/vlc_whisper_installer.nsi.in`): 64-bit registry detection of VLC (`HKLM\Software\VideoLAN\VLC`), plugin deployment to `<VLC_DIR>\plugins\audio_filter\`, worker and models deployment, automated `vlc-cache-gen.exe` / `--reset-plugins-cache` cache regeneration, full uninstaller, and Start Menu/Desktop shortcuts with `--audio-filter=vlc_whisper`.
-     - CMake CPack integration (`cmake/Packaging.cmake`): Standalone NSIS installer target (`installer`) and portable release ZIP generator (`cpack -G ZIP`).
+     - NSIS script template (`cmake/vw_installer.nsi.in`): 64-bit registry detection of VLC (`HKLM\Software\VideoLAN\VLC`), plugin deployment to `<VLC_DIR>\plugins\audio_filter\`, worker and models deployment, automated `vlc-cache-gen.exe` / `--reset-plugins-cache` cache regeneration, full uninstaller, and Start Menu/Desktop shortcuts with `--audio-filter=vlc_whisper`.
+     - CMake CPack integration (`cmake/vw_packaging.cmake`): Standalone NSIS installer target (`installer`) and portable release ZIP generator (`cpack -G ZIP`).
   5. **End-to-End Local Media & Stream Acceptance Protocol**:
      - Structured test matrices for local video files (`.mp4`, `.mkv`, `.avi`, `.mov`), audio-only files (`.mp3`, `.flac`, `.wav`), live network streams (HTTP/HLS/RTSP), seeking/pause handling, and clean uninstallation.
 - **Out of scope**:
@@ -113,8 +113,8 @@ is **fully legal and compliant** because:
 ## Acceptance Criteria
 - [ ] Root `LICENSE` (MIT) and `THIRD_PARTY_NOTICES.md` authored and verified compliant with all dependencies.
 - [ ] `plugin/src/vw_whisper_module.c` updated with Windows Registry (`HKCU\Software\VLC-Whisper\InstallPath`) and `%LOCALAPPDATA%` worker/model discovery.
-- [ ] NSIS installer script template `cmake/vlc_whisper_installer.nsi.in` authored with VLC auto-detection, plugin placement, cache regeneration, and uninstaller.
-- [ ] CMake packaging module `cmake/Packaging.cmake` wired into `CMakeLists.txt` supporting both standalone NSIS installer (`installer` target) and portable release ZIP (`cpack -G ZIP`).
+- [ ] NSIS installer script template `cmake/vw_installer.nsi.in` authored with VLC auto-detection, plugin placement, cache regeneration, and uninstaller.
+- [ ] CMake packaging module `cmake/vw_packaging.cmake` wired into `CMakeLists.txt` supporting both standalone NSIS installer (`installer` target) and portable release ZIP (`cpack -G ZIP`).
 - [ ] Windows MinGW cross-compilation builds `libvlc_whisper_plugin.dll` and `vlc-whisper-worker.exe` with zero errors.
 - [ ] Packaging generation verified producing clean standalone distribution archives.
 - [ ] Acceptance testing protocol documented covering local media playback, live streams, seeking, rate changes, and uninstallation.
@@ -133,7 +133,7 @@ is **fully legal and compliant** because:
 - Extend `vw_plugin_resolve_worker_path` and `vw_plugin_resolve_model_path` to probe the registry install directory and `%LOCALAPPDATA%\vlc-whisper\` alongside ancestor walks.
 
 ### Task 18.3: NSIS Installer & CMake Packaging Pipeline
-- Create `cmake/vlc_whisper_installer.nsi.in` incorporating:
+- Create `cmake/vw_installer.nsi.in` incorporating:
   - 64-bit architecture verification.
   - VLC installation registry search (`HKLM\Software\VideoLAN\VLC` and Uninstall key).
   - Plugin deployment to `$INSTDIR\plugins\audio_filter\`.
@@ -141,8 +141,8 @@ is **fully legal and compliant** because:
   - Automatic invocation of `vlc-cache-gen.exe "$INSTDIR\plugins"` to regenerate `plugins.dat`.
   - Windows Add/Remove Programs uninstaller registration (`uninstall-vlc-whisper.exe`).
   - Start Menu & Desktop shortcuts (`vlc.exe --audio-filter=vlc_whisper`).
-- Create `cmake/Packaging.cmake` with CPack configuration and optional `makensis` custom target.
-- Include `cmake/Packaging.cmake` in root `CMakeLists.txt`.
+- Create `cmake/vw_packaging.cmake` with CPack configuration and optional `makensis` custom target.
+- Include `cmake/vw_packaging.cmake` in root `CMakeLists.txt`.
 
 ### Task 18.4: Windows Release Packaging & Build Verification
 - Execute native Linux debug build and test suite (`cmake --preset linux-x64-debug && ctest --preset linux-x64-debug`).
@@ -209,7 +209,7 @@ cpack --config build/windows-x64-release/CPackConfig.cmake
 - [ ] Offline privacy invariant preserved (zero network calls, zero telemetry).
 - [ ] Root `LICENSE` and `THIRD_PARTY_NOTICES.md` present in repository.
 - [ ] `vw_whisper_module.c` probes registry and local app data for worker/model discovery.
-- [ ] Windows packaging scripts (`Packaging.cmake`, `vlc_whisper_installer.nsi.in`) integrated.
+- [ ] Windows packaging scripts (`vw_packaging.cmake`, `vw_installer.nsi.in`) integrated.
 - [ ] 20/20 automated tests pass on Linux and Windows cross-builds cleanly.
 - [ ] Valgrind memcheck clean (0 leaks).
 - [ ] `docs/roadmap.md`, `docs/architecture.md`, `docs/source-layout.md`, and `README.md` updated in the same change.

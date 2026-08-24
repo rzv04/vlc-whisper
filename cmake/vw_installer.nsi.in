@@ -49,9 +49,9 @@ Var VLC_DIR
 ; ------------------------------------------------------------------------------
 Function DirectoryLeave
   ${IfNot} ${FileExists} "$INSTDIR\vlc.exe"
-    MessageBox MB_YESNO|MB_ICONQUESTION "vlc.exe was not found in '$INSTDIR'.$\r$\nAre you sure you want to install into this directory?" IDYES proceed
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "vlc.exe was not found in '$INSTDIR'.$\r$\nPlease select your VLC installation folder (the directory that contains vlc.exe)."
     Abort
-    proceed:
   ${EndIf}
 FunctionEnd
 
@@ -149,20 +149,11 @@ Section "VLC Plugin & AI Engine" SecCore
   CreateShortcut "$DESKTOP\VLC (with AI Whisper Captions).lnk" \
     "$INSTDIR\vlc.exe" '--audio-filter=vlc_whisper' "$INSTDIR\vlc.exe" 0
 
-  ; 8. Regenerate VLC Plugin Cache (plugins.dat)
-  DetailPrint "Regenerating VLC plugin cache (plugins.dat)..."
-  ${If} ${FileExists} "$INSTDIR\vlc-cache-gen.exe"
-    ExecWait '"$INSTDIR\vlc-cache-gen.exe" "$INSTDIR\plugins"' $0
-    DetailPrint "vlc-cache-gen completed (exit code: $0)"
-  ${Else}
-    ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache --version' $0
-    DetailPrint "vlc --reset-plugins-cache completed (exit code: $0)"
-  ${EndIf}
-  ${If} $0 != 0
-    DetailPrint "Warning: VLC plugin cache update returned exit code $0."
-    MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "Warning: VLC plugin cache update returned exit code $0.$\r$\nYou may need to restart VLC or manually run 'vlc --reset-plugins-cache' if captions do not appear."
-  ${EndIf}
+  ; 8. Invalidate VLC Plugin Cache (plugins.dat)
+  ; VLC automatically rescans its plugins and rebuilds plugins.dat on the next
+  ; unprivileged launch, so no elevated execution of INSTDIR binaries is needed.
+  DetailPrint "Invalidating VLC plugin cache (plugins.dat); VLC rebuilds it automatically on next launch."
+  Delete "$INSTDIR\plugins\plugins.dat"
 SectionEnd
 
 ; ------------------------------------------------------------------------------
@@ -206,17 +197,9 @@ Section "Uninstall"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper"
   DeleteRegKey HKLM "Software\VLC-Whisper"
 
-  ; 7. Rebuild VLC Plugin Cache without the plugin
-  DetailPrint "Rebuilding VLC plugin cache..."
-  ${If} ${FileExists} "$INSTDIR\vlc-cache-gen.exe"
-    ExecWait '"$INSTDIR\vlc-cache-gen.exe" "$INSTDIR\plugins"' $0
-    DetailPrint "vlc-cache-gen completed (exit code: $0)"
-  ${Else}
-    ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache --version' $0
-    DetailPrint "vlc --reset-plugins-cache completed (exit code: $0)"
-  ${EndIf}
-  ${If} $0 != 0
-    DetailPrint "Warning: VLC plugin cache rebuild returned exit code $0."
-  ${EndIf}
+  ; 7. Invalidate VLC Plugin Cache without the plugin
+  ; VLC rebuilds its plugin cache automatically on the next unprivileged launch.
+  DetailPrint "Invalidating VLC plugin cache; VLC rebuilds it automatically on next launch."
+  Delete "$INSTDIR\plugins\plugins.dat"
 SectionEnd
 

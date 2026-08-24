@@ -138,6 +138,12 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->error_code);
       ENC_FIELD(p->recoverable);
+      // Reject messages that cannot carry their own NUL terminator within the buffer.
+      // Enforcing strlen < VW_MAX_ERROR_MSG_BYTES guarantees every encoded message is
+      // NUL-terminated, so the decoder can preserve it byte-for-byte (see decode path).
+      if (strnlen(p->message, VW_MAX_ERROR_MSG_BYTES) >= VW_MAX_ERROR_MSG_BYTES) {
+        return false;
+      }
       ENC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
       break;
     }
@@ -284,7 +290,12 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       DEC_FIELD(p->error_code);
       DEC_FIELD(p->recoverable);
       DEC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
-      p->message[VW_MAX_ERROR_MSG_BYTES - 1] = '\0';
+      // Preserve contract-conforming messages byte-for-byte: they carry their own NUL
+      // terminator, so leave the buffer untouched. Only force-terminate hostile or
+      // truncated payloads that contain no NUL anywhere in the fixed-size field.
+      if (!memchr(p->message, '\0', VW_MAX_ERROR_MSG_BYTES)) {
+        p->message[VW_MAX_ERROR_MSG_BYTES - 1] = '\0';
+      }
       break;
     }
     case VW_MSG_STARTED: {

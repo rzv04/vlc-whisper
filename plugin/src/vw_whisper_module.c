@@ -873,7 +873,11 @@ static int vw_plugin_open(vlc_object_t* obj) {
     atomic_init(&sys->sender_running, true);
     atomic_init(&sys->worker_dead, false);
     atomic_init(&sys->discontinuity_pending, false);
-    atomic_init(&sys->resume_pts_us, 0);
+    // Initialize to -1 (not 0) so "no known media position" is representable.
+    // Poll detectors overwrite this with a real (>=0) media position on discontinuity;
+    // when neither a polled position nor a stored target exists, the -1 sentinel lets the
+    // PLUGIN_SEEK_TARGET_MISSING branch fire instead of emitting a spurious seek to 0.
+    atomic_init(&sys->resume_pts_us, -1);
     if (vw_platform_thread_create(&sys->sender_thread, vw_plugin_sender_main, sys)) {
       sys->sender_started = true;
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER_START", "sender thread started (5/20 ms cadence)");

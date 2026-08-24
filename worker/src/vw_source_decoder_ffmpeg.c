@@ -27,6 +27,7 @@ struct vw_source_decoder {
   int64_t duration_us;
   int64_t current_pts_us;
   bool eof_reached;
+  bool pkt_pending;
   int16_t leftover_buffer[4096];
   size_t leftover_count;
 };
@@ -147,6 +148,10 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
     decoder->current_pts_us = target_pts_us;
     decoder->eof_reached = false;
     decoder->leftover_count = 0;
+    if (decoder->pkt_pending) {
+      av_packet_unref(decoder->pkt);
+      decoder->pkt_pending = false;
+    }
     return true;
   }
   return false;
@@ -223,16 +228,24 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
     }
   }
 
+  int defer_no_progress = 0;
   while (total_samples < max_samples && !decoder->eof_reached) {
-    int ret = av_read_frame(decoder->fmt_ctx, decoder->pkt);
-    if (ret < 0) {
-      decoder->eof_reached = true;
-      break;
+    if (!decoder->pkt_pending) {
+      int ret = av_read_frame(decoder->fmt_ctx, decoder->pkt);
+      if (ret < 0) {
+        decoder->eof_reached = true;
+        break;
+      }
     }
 
     if (decoder->pkt->stream_index == decoder->audio_stream_idx) {
+      size_t progress_total = total_samples;
+      int progress_leftover = (int)decoder->leftover_count;
       int send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
       if (send_ret == AVERROR(EAGAIN)) {
+        // Decoder output buffer is full: drain what we can, then retry the same
+        // packet. We never drop the packet here -- it is deferred to the next
+        // iteration so no compressed audio is lost.
         while (total_samples < max_samples && decoder->leftover_count == 0 &&
                avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
           vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
@@ -247,11 +260,36 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
                avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
           vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
         }
-      } else if (send_ret != AVERROR(EAGAIN) && send_ret != AVERROR_EOF) {
-        vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
+        av_packet_unref(decoder->pkt);
+        decoder->pkt_pending = false;
+        defer_no_progress = 0;
+      } else if (send_ret == AVERROR(EAGAIN)) {
+        // Decoder still cannot accept the packet after draining. Defer it and loop
+        // without reading a new packet until the decoder makes room. Guard against a
+        // genuine deadlock: if draining produced no new samples and the leftover
+        // buffer did not shrink twice in a row, stop to avoid an infinite loop.
+        if (total_samples == progress_total && (int)decoder->leftover_count == progress_leftover) {
+          defer_no_progress++;
+        } else {
+          defer_no_progress = 0;
+        }
+        if (defer_no_progress >= 2) {
+          av_packet_unref(decoder->pkt);
+          decoder->pkt_pending = false;
+          break;
+        }
+        decoder->pkt_pending = true;
+      } else {
+        if (send_ret != AVERROR_EOF) {
+          vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
+        }
+        av_packet_unref(decoder->pkt);
+        decoder->pkt_pending = false;
       }
+    } else {
+      av_packet_unref(decoder->pkt);
+      decoder->pkt_pending = false;
     }
-    av_packet_unref(decoder->pkt);
   }
 
   return total_samples;

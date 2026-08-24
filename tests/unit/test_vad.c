@@ -266,6 +266,40 @@ static void vw_test_vad_find_chunk_boundary_silero(void) {
     }
   }
 
+  // 4. Multi-chunk streaming simulation across iterations (Finding L4, restored with
+  //    16000-sample buffers). A lone sub-min-chunk (16000 < VW_CHUNK_MIN_SAMPLES=96000)
+  //    with is_eof=false must wait (return false); once the window crosses the minimum
+  //    chunk size with an EOF tail the API must emit a cut for the tone region and then
+  //    drain trailing silence on the following iteration.
+  float lone_tone[16000];
+  for (size_t i = 0; i < 16000; i++) {
+    lone_tone[i] = 0.35f * sinf(2.0f * 3.14159f * 300.0f * (float)i / 16000.0f);
+  }
+  cut_samples = 0;
+  silence_drain = 0;
+  assert(!vw_vad_find_chunk_boundary(lone_tone, 16000, vctx, false, &cut_samples, &silence_drain));
+
+  // Accumulate 6 chunks (96000 samples = VW_CHUNK_MIN_SAMPLES) of tone, then mark EOF so
+  // the speech/tone path must yield a boundary instead of buffering indefinitely.
+  float acc[VW_CHUNK_MIN_SAMPLES + 16000] = {0};
+  for (size_t i = 0; i < VW_CHUNK_MIN_SAMPLES; i++) {
+    acc[i] = 0.35f * sinf(2.0f * 3.14159f * 300.0f * (float)i / 16000.0f);
+  }
+  cut_samples = 0;
+  silence_drain = 0;
+  bool s1 = vw_vad_find_chunk_boundary(acc, VW_CHUNK_MIN_SAMPLES, vctx, true, &cut_samples, &silence_drain);
+  assert(s1);
+  assert(cut_samples > 0 || silence_drain > 0);
+
+  // Iteration 2: trailing 16000-sample silence chunk with EOF -> progressive silence drain.
+  float trail_silence[16000] = {0};
+  cut_samples = 0;
+  silence_drain = 0;
+  bool s2 = vw_vad_find_chunk_boundary(trail_silence, 16000, vctx, true, &cut_samples, &silence_drain);
+  assert(s2);
+  assert(silence_drain == 16000);
+  assert(cut_samples == 0);
+
   vw_vad_reset_state(vctx);
   vw_vad_free(vctx);
 }
