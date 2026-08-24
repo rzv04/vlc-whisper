@@ -298,20 +298,27 @@ typedef struct {
 // fresh session. The old worker exits once its pipe end is closed (disconnect waits up to 5s for
 // it), freeing the pipe name before the delay elapses. Returns false (permanent passthrough) when
 // the respawn budget is exhausted or the new worker cannot start a session.
-static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
-  if (sys->respawn_count >= VW_MAX_WORKER_RESPAWNS) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN_EXHAUSTED",
-                 "worker respawn limit (%u) reached; captions disabled, passthrough only",
-                 (unsigned)VW_MAX_WORKER_RESPAWNS);
-    return false;
+// transport_recovery: true for transport-death recovery (consumes one of VW_MAX_WORKER_RESPAWNS
+// per filter lifetime); false for user-initiated config-change respawns, which must NEVER consume
+// that budget — otherwise three settings changes would leave later settings silently unapplied
+// (snapshot already refreshed) and a later transport death would kill captions permanently.
+static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool transport_recovery) {
+  if (transport_recovery) {
+    if (sys->respawn_count >= VW_MAX_WORKER_RESPAWNS) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN_EXHAUSTED",
+                   "worker respawn limit (%u) reached; captions disabled, passthrough only",
+                   (unsigned)VW_MAX_WORKER_RESPAWNS);
+      return false;
+    }
+    sys->respawn_count++;
   }
-  sys->respawn_count++;
   if (sys->client) {
     vw_worker_client_disconnect(sys->client);
     sys->client = NULL;
   }
-  vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN", "transport death; respawning worker (%u/%u)",
-               sys->respawn_count, (unsigned)VW_MAX_WORKER_RESPAWNS);
+  vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN", "%s; respawning worker (%u/%u)",
+               transport_recovery ? "transport death" : "config change", sys->respawn_count,
+               (unsigned)VW_MAX_WORKER_RESPAWNS);
   vw_platform_sleep_ms(VW_WORKER_RESPAWN_DELAY_MS);  // let the old worker exit and free the pipe name
   char* respawn_be = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
   char* respawn_lg = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
@@ -512,7 +519,7 @@ static void* vw_plugin_sender_main(void* arg) {
                 sys->model_path[0] = '\0';
               }
             }
-            vw_plugin_respawn_worker(sys, paused);
+            vw_plugin_respawn_worker(sys, paused, false);
             atomic_store(&sys->respawn_in_progress, false);
           }
         }
@@ -525,7 +532,7 @@ static void* vw_plugin_sender_main(void* arg) {
     // Transport death (Step 17d resilience): respawn the worker (bounded) and restart the session
     // with the current MRL instead of disabling captions for the rest of playback.
     if (atomic_load(&sys->worker_dead)) {
-      if (!vw_plugin_respawn_worker(sys, paused)) {
+      if (!vw_plugin_respawn_worker(sys, paused, true)) {
         break;
       }
       continue;
