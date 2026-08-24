@@ -55,11 +55,16 @@ local model_path_map = {
   [7] = "models/ggml-large.bin",
 }
 -- Reverse lookup: path -> id (for preselection from current model-path).
-local model_path_to_id = {}
-for _id, _path in pairs(model_path_map) do
-  model_path_to_id[_path] = _id
-  -- Also accept bare filename or absolute variants: match suffix.
-end
+-- Explicit table avoids `pairs` at top-level load (VLC 3.0 extension sandbox has no `pairs` global — spike had no top-level pairs).
+local model_path_to_id = {
+  ["models/ggml-tiny.en.bin"] = 1,
+  ["models/ggml-tiny.bin"] = 2,
+  ["models/ggml-base.en.bin"] = 3,
+  ["models/ggml-base.bin"] = 4,
+  ["models/ggml-small.bin"] = 5,
+  ["models/ggml-medium.bin"] = 6,
+  ["models/ggml-large.bin"] = 7,
+}
 
 -- Language dropdown: concrete codes ONLY -- no "auto" entry.
 -- tiny.en default model is English-only; vendored whisper auto-detect on
@@ -92,15 +97,17 @@ local function resolve_model_id_from_path(path)
   if model_path_to_id[path] ~= nil then return model_path_to_id[path] end
   -- Suffix match: handles absolute or bare filename forms (e.g. installed
   -- location "C:\\...\\models\\ggml-tiny.en.bin" or just filename).
-  for _id, _rel in pairs(model_path_map) do
+  for _id = 1, 7 do
+    local _rel = model_path_map[_id]
     local fname = _rel:match("([^/\\]+)$")
     if fname and path:find(fname, 1, true) then
       return _id
     end
   end
   -- Fallback: try label substring (e.g. "tiny.en" in a custom path).
-  for _id, _label in pairs(model_map) do
-    if path:find(_label, 1, true) then
+  for _id = 1, 7 do
+    local _label = model_map[_id]
+    if _label and path:find(_label, 1, true) then
       return _id
     end
   end
