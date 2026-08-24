@@ -26,13 +26,20 @@ typedef struct vw_whisper_engine {
   struct whisper_context* ctx;  // Opaque whisper.cpp context
   char* last_text;              // Concatenated UTF-8 output of last transcribe run
   size_t last_text_bytes;       // Capacity of last_text buffer
+  char language[16];            // Concrete whisper language code (e.g. "en"), NUL-terminated
+  int n_threads;                // CPU threads for inference (1..16, clamped)
 } vw_whisper_engine_t;
 
 // Initializes whisper.cpp engine instance from the specified model file path (ADR-015: model-once lifetime).
 // backend selects inference: AUTO/GPU set use_gpu=true (whisper picks the first GPU/IGPU device and falls
 // back to CPU at runtime when none exists), CPU forces use_gpu=false. gpu_device is the GPU/IGPU ordinal.
+// language selects SOT token (e.g. "en"); NULL or empty defaults to "en". n_threads clamped 1..16 (default 4).
 // Runs a silent warmup inference pass on load. Returns NULL if model file is missing or invalid.
 vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device);
+
+// Optional setters to configure language/threads after init (live-settable, no reinit). Return false on NULL.
+bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* language);
+bool vw_whisper_engine_set_n_threads(vw_whisper_engine_t* engine, int n_threads);
 
 // Safely destroys whisper.cpp engine instance and frees associated model memory.
 void vw_whisper_engine_free(vw_whisper_engine_t* engine);

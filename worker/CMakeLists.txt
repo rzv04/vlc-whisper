@@ -113,10 +113,10 @@ target_compile_options(vlc-whisper-worker PRIVATE
 # the CPU-only build gets a distinct -cpu suffix so both can ship side by side (see plan 17a).
 if(GGML_VULKAN)
     set_target_properties(vlc-whisper-worker PROPERTIES OUTPUT_NAME "vlc-whisper-worker")
+    target_compile_definitions(vlc-whisper-worker PRIVATE VW_HAVE_VULKAN=1)
 else()
     set_target_properties(vlc-whisper-worker PROPERTIES OUTPUT_NAME "vlc-whisper-worker-cpu")
 endif()
-
 target_link_libraries(vlc-whisper-worker PRIVATE
     vw_protocol
     whisper

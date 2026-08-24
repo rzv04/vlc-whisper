@@ -70,13 +70,22 @@ int main(void) {
   EXPECT(vw_protocol_decode_payload(VW_MSG_PAUSE, buffer, written, &decoded_control));
   EXPECT(decoded_control.reason == 42);
 
-  // STATUS
+  // STATUS (v1.3 60B with resolved_backend)
   vw_msg_status_t status = {.state = 1, .queued_audio_us = 500, .inference_us = 100, .dropped_audio_us = 0};
+  memset(status.session_id.bytes, 0xAA, VW_SESSION_ID_BYTES);
+  snprintf(status.resolved_backend, sizeof(status.resolved_backend), "gpu");
   EXPECT(vw_protocol_encode_payload(VW_MSG_STATUS, &status, buffer, sizeof(buffer), &written));
+  EXPECT(written == 60);
   vw_msg_status_t decoded_status = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_STATUS, buffer, written, &decoded_status));
   EXPECT(decoded_status.inference_us == 100);
-
+  EXPECT(decoded_status.state == 1);
+  EXPECT(strcmp(decoded_status.resolved_backend, "gpu") == 0);
+  // Legacy 44B frame decodes with empty backend
+  vw_msg_status_t decoded_legacy = {0};
+  EXPECT(vw_protocol_decode_payload(VW_MSG_STATUS, buffer, 44, &decoded_legacy));
+  EXPECT(decoded_legacy.inference_us == 100);
+  EXPECT(decoded_legacy.resolved_backend[0] == '\0');
   // ERROR
   vw_msg_error_t err = {.error_code = 99, .recoverable = 0};
   strcpy(err.message, "Fail");

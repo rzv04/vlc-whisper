@@ -36,8 +36,11 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
     free(eng);
     return NULL;
   }
+  // Default language/threads (overridable via setters from config). Clamp threads 1..16.
+  snprintf(eng->language, sizeof(eng->language), "en");
+  eng->n_threads = 4;
 
-  // Perform one silent warmup pass on 100ms of zeros
+  // Perform one silent warmup pass on 100ms of zeros (uses configured language/threads)
   float silent[1600] = {0};
   struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   wparams.print_progress = false;
@@ -45,11 +48,27 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   wparams.print_realtime = false;
   wparams.print_timestamps = false;
   wparams.translate = false;
-  wparams.language = "en";
-  wparams.n_threads = 2;
+  wparams.language = eng->language;
+  wparams.n_threads = eng->n_threads;
   whisper_full(eng->ctx, wparams, silent, 1600);
 
   return eng;
+}
+
+bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* language) {
+  if (!engine || !language || language[0] == '\0') return false;
+  if (strcmp(language, "auto") == 0) return false;
+  if (strlen(language) >= sizeof(engine->language)) return false;
+  snprintf(engine->language, sizeof(engine->language), "%s", language);
+  return true;
+}
+
+bool vw_whisper_engine_set_n_threads(vw_whisper_engine_t* engine, int n_threads) {
+  if (!engine) return false;
+  if (n_threads < 1) n_threads = 1;
+  if (n_threads > 16) n_threads = 16;
+  engine->n_threads = n_threads;
+  return true;
 }
 
 void vw_whisper_engine_free(vw_whisper_engine_t* engine) {
@@ -83,12 +102,14 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.max_len = 0;  // Natural transformer acoustic boundaries
   wparams.token_timestamps = false;
   wparams.translate = false;
-  wparams.language = "en";
-  wparams.n_threads = 4;
+  // Use configured language/threads (defaults "en"/4 if not set via setters).
+  wparams.language = (engine->language[0] != '\0') ? engine->language : "en";
+  int thr = engine->n_threads;
+  if (thr < 1) thr = 1;
+  wparams.n_threads = thr;
   wparams.print_progress = false;
   wparams.print_realtime = false;
   wparams.print_timestamps = false;
-
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;
   }

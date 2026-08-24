@@ -195,9 +195,14 @@ int vw_worker_run(const vw_worker_config_t* config) {
   }
 
   vw_whisper_engine_t* engine = vw_whisper_engine_init(config->model_path, config->backend, config->gpu_device);
+  if (engine) {
+    vw_whisper_engine_set_language(engine, config->language);
+    vw_whisper_engine_set_n_threads(engine, config->n_threads);
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE", "engine language=%s threads=%d", engine->language,
+                 engine->n_threads);
+  }
   vw_log_event(engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
                engine ? "whisper engine loaded" : "whisper engine init FAILED (model missing/invalid)");
-
   struct whisper_vad_context* vad_ctx = NULL;
   if (config->vad_model_path[0] != '\0') {
     vad_ctx = vw_vad_init_default(config->vad_model_path);
@@ -474,6 +479,36 @@ int vw_worker_run(const vw_worker_config_t* config) {
           vw_ipc_send(handle, started_hdr_buf, sizeof(started_hdr_buf));
           if (started_written > 0) {
             vw_ipc_send(handle, started_payload_buf, started_written);
+          }
+          // Immediately after STARTED, emit one STATUS with resolved backend truth
+          {
+            vw_msg_status_t st;
+            memset(&st, 0, sizeof(st));
+            memcpy(st.session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
+            st.state = 1;
+            st.queued_audio_us = 0;
+            st.inference_us = 0;
+            st.dropped_audio_us = 0;
+#ifdef VW_HAVE_VULKAN
+            const char* resolved = (config->backend == VW_WORKER_BACKEND_CPU) ? "cpu" : "gpu";
+#else
+            const char* resolved = "cpu";
+#endif
+            snprintf(st.resolved_backend, sizeof(st.resolved_backend), "%s", resolved);
+            uint8_t st_payload[64];
+            size_t st_len = 0;
+            if (vw_protocol_encode_payload(VW_MSG_STATUS, &st, st_payload, sizeof(st_payload), &st_len)) {
+              vw_frame_header_t st_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                          .major = VW_PROTOCOL_VERSION_MAJOR,
+                                          .type = VW_MSG_STATUS,
+                                          .payload_length = (uint32_t)st_len,
+                                          .sequence = ++sequence};
+              uint8_t st_hdr_buf[sizeof(vw_frame_header_t)];
+              vw_protocol_encode_header(&st_hdr, st_hdr_buf, sizeof(st_hdr_buf));
+              vw_ipc_send(handle, st_hdr_buf, sizeof(st_hdr_buf));
+              vw_ipc_send(handle, st_payload, st_len);
+              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_STATUS", "STATUS sent resolved_backend=%s", resolved);
+            }
           }
           break;
         }

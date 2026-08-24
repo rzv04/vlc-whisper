@@ -131,6 +131,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_FIELD(p->queued_audio_us);
       ENC_FIELD(p->inference_us);
       ENC_FIELD(p->dropped_audio_us);
+      ENC_BYTES(p->resolved_backend, 16);
       break;
     }
     case VW_MSG_ERROR: {
@@ -277,11 +278,24 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     }
     case VW_MSG_STATUS: {
       vw_msg_status_t* p = (vw_msg_status_t*)out_payload;
-      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
-      DEC_FIELD(p->state);
-      DEC_FIELD(p->queued_audio_us);
-      DEC_FIELD(p->inference_us);
-      DEC_FIELD(p->dropped_audio_us);
+      if (buffer_size >= 60) {
+        DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+        DEC_FIELD(p->state);
+        DEC_FIELD(p->queued_audio_us);
+        DEC_FIELD(p->inference_us);
+        DEC_FIELD(p->dropped_audio_us);
+        DEC_BYTES(p->resolved_backend, 16);
+        // Ensure NUL termination for string safety (spec: NUL-padded "gpu"|"cpu").
+        p->resolved_backend[15] = '\0';
+      } else {
+        if (buffer_size < 44) return false;
+        DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+        DEC_FIELD(p->state);
+        DEC_FIELD(p->queued_audio_us);
+        DEC_FIELD(p->inference_us);
+        DEC_FIELD(p->dropped_audio_us);
+        memset(p->resolved_backend, 0, 16);
+      }
       break;
     }
     case VW_MSG_ERROR: {

@@ -302,8 +302,69 @@ cpack --config build/windows-x64-release/CPackConfig.cmake
 _Outputs generated in `build/windows-x64-release/`:_
 - `vlc-whisper-0.3.0-win64-setup.exe` (~74 MB standalone setup wizard with embedded Whisper tiny.en + Silero VAD weights)
 - `vlc-whisper-0.3.0-win64.zip` (Portable release archive)
-
 ---
+
+## Step 19b — Settings GUI (Lua extension)
+
+### What it is
+
+A VLC Lua extension dialog (“VLC-Whisper Settings”) hosted inside VLC (`View` > `VLC-Whisper Settings`).
+It exposes four controls that map directly to the plugin’s config namespace:
+
+| Control | Config key | Values / mapping |
+|---------|------------|-------------------|
+| Engine (backend) | `whisper-backend` | `auto` (default) · `gpu` (Vulkan) · `cpu` |
+| Model | `model-path` | dropdown labels map to **relative** paths under `models/`: `tiny.en` → `models/ggml-tiny.en.bin`, `tiny` → `models/ggml-tiny.bin`, `base.en` → `models/ggml-base.en.bin`, `base` → `models/ggml-base.bin`, `small` → `models/ggml-small.bin`, `medium` → `models/ggml-medium.bin`, `large` → `models/ggml-large.bin` (selection allowed even if file absent; missing file disables captions with `E_MODEL_MISSING` until provisioned — see 19c) |
+| Language | `whisper-language` | `en` (default) · `ro` · `tr` · `de` · `fr` · `es` — **no `auto` entry** (the bundled `tiny.en` is English-only; vendored whisper auto-detect on English-only models is meaningless and deliberately omitted) |
+| Threads | `whisper-threads` | integer `1..16`, default `4` (clamped on Apply) |
+| Detected backend (read-only) | `whisper-backend-active` | informational label refreshed on dialog open; shows `gpu` or `cpu` as resolved by the worker (`STATUS` v1.3 `resolved_backend`) after the first session `STARTED` |
+
+The dialog preselects current values on open via `vlc.config.get` (nil-safe defaults `auto` / `models/ggml-tiny.en.bin` / `en` / `4`). `Apply` validates threads (`tonumber` + clamp `1..16`), writes all four keys via `vlc.config.set`, and logs `[VLC-Whisper] applied …` lines (filter `Tools > Messages`).
+
+### How settings apply
+
+- **Backend and model** require a worker respawn (the `whisper_context` is built at init). The plugin’s sender loop polls the four config keys every ~2 s; any diff vs the last-applied snapshot triggers `vw_plugin_respawn_worker()` — mid-play this produces a brief caption gap (~worker restart time) then captions resume on the new epoch (existing `session_id` machinery drops stale segments).
+- **Language and threads** *could* apply per-call (SOT token / `n_threads` are `whisper_full_params` state), but **this iteration applies all four via respawn** as well. Documenting honestly: live per-call apply for language/threads without restart is a future optimization — no behavior difference is observable except the brief gap.
+- The **Detected backend** label appears as `(pending — start playback)` until the first `STATUS` after `STARTED`; after the worker reports `resolved_backend` the plugin mirrors it into `whisper-backend-active` and the label shows `gpu` or `cpu`.
+
+### Windows manual test (verbatim)
+
+1. Install the plugin + worker either by running the installer **or** by manual copy:
+   ```cmd
+   REM manual copy (developer workflow)
+   copy build\windows-x64-release\plugin\libvlc_whisper_plugin.dll "C:\Program Files\VideoLAN\VLC\plugins\audio_filter\libvlc_whisper_plugin.dll"
+   copy build\windows-x64-release\worker\vlc-whisper-worker.exe "C:\Program Files\VideoLAN\VLC\vlc-whisper-worker.exe"
+   copy lua\extensions\vlc_whisper_settings.lua "C:\Program Files\VideoLAN\VLC\lua\extensions\vlc_whisper_settings.lua"
+   REM with installer the lua file is already bundled
+   "C:\Program Files\VideoLAN\VLC\vlc-cache-gen.exe" "C:\Program Files\VideoLAN\VLC\plugins"
+   ```
+   Verify:
+   ```cmd
+   dir "C:\Program Files\VideoLAN\VLC\lua\extensions\vlc_whisper_settings.lua"
+   ```
+
+2. Open `Tools > Messages`, set **Verbosity** to `2` (Debug) — or launch with `vlc.exe -vvv --audio-filter=vlc_whisper`.
+
+3. Play any media. Open `View > VLC-Whisper Settings` (on some skins `Tools > Extensions > VLC-Whisper Settings`). The dialog preselects current values; the **Detected backend** label initially shows `(pending — start playback)` and switches to `gpu` or `cpu` after the first session starts.
+
+4. Change **Language** `en` → `ro`, click **Apply**. Expected within ~2 s (next sender-loop poll):
+   - Log line `[VLC-Whisper] applied whisper-language=ro` (plus the other three `applied …` lines).
+   - Plugin log `PLUGIN_RESPAWN` and worker restart (`worker` process respawn, `STARTED` with new `session_id`).
+   - Captions continue after the brief gap (new epoch).
+
+5. With the **bundled `tiny.en` English-only model**, selecting `ro` does **NOT** translate output — the worker clamps / falls back to `en` and emits a `WARN` log (the model has no multilingual vocab; `ro` is ignored). This is expected until a multilingual model is provisioned (19c).
+
+6. Change **Engine** to `gpu` on a machine without Vulkan support, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` is mirrored into `whisper-backend-active`). Log shows `PLUGIN_RESPAWN` and backend resolution.
+
+7. Close and re-open the dialog — it re-reads `whisper-backend`, `model-path`, `whisper-language`, `whisper-threads` and shows the last applied values.
+
+### What NOT to expect (19b scope)
+
+- **No auto-detect language option** — English-only default model makes it meaningless; deliberately omitted from the Language dropdown (only `en`/`ro`/`tr`/`de`/`fr`/`es`).
+- **No in-app model downloader** — model dropdown selection is allowed even if the file is absent (`E_MODEL_MISSING` disables captions); provisioning/downloading is 19c.
+- **No translation** — language selects the Whisper SOT token only; translation to another language is 21b (opt-in, network).
+- **Settings do NOT persist across VLC restart unless VLC exits cleanly** — `vlcrc` is saved on clean exit (`config_SaveConfigFile`); if VLC is killed, the last `Apply` is lost. Re-apply after a crash or set keys in `vlcrc` manually.
+
 
 ## Manual Plugin Installation (Windows Developer Workflow)
 

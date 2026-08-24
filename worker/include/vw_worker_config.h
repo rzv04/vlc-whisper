@@ -10,7 +10,8 @@
 typedef struct vw_worker_config {
   char model_path[VW_PATH_MAX_BYTES];
   char vad_model_path[VW_PATH_MAX_BYTES];  // Path to Silero VAD GGML model file (--vad-model or auto-discovered)
-  char language[8];
+  char language[16];
+  int n_threads;
   uint32_t sample_rate;
   char pipe_name[256];
   char log_file[512];  // --log-file override; empty = default temp-dir log

@@ -86,6 +86,7 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
   memset(config, 0, sizeof(vw_worker_config_t));
   strncpy(config->model_path, "models/ggml-tiny.en.bin", sizeof(config->model_path) - 1);
   strncpy(config->language, "en", sizeof(config->language) - 1);
+  config->n_threads = 4;
   config->sample_rate = 16000;
   config->backend = VW_WORKER_BACKEND_AUTO;
   config->gpu_device = 0;
@@ -159,6 +160,35 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         return 2;
       }
       config->gpu_device = (int)id;
+    } else if (strcmp(argv[i], "--language") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --language\n");
+        return 2;
+      }
+      const char* lang = argv[++i];
+      if (strcmp(lang, "auto") == 0) {
+        fprintf(stderr, "bad --language: 'auto' not allowed (use concrete code like 'en')\n");
+        return 2;
+      }
+      if (lang[0] == '\0' || strlen(lang) >= sizeof(config->language)) {
+        fprintf(stderr, "bad --language: expected 1..%zu char code, got '%s'\n", sizeof(config->language) - 1, lang);
+        return 2;
+      }
+      snprintf(config->language, sizeof(config->language), "%s", lang);
+    } else if (strcmp(argv[i], "--n-threads") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --n-threads\n");
+        return 2;
+      }
+      char* end = NULL;
+      long n = strtol(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0') {
+        fprintf(stderr, "bad --n-threads: expected integer 1..16\n");
+        return 2;
+      }
+      if (n < 1) n = 1;
+      if (n > 16) n = 16;
+      config->n_threads = (int)n;
     } else {
       fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;
