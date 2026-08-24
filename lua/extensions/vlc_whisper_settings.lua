@@ -55,16 +55,13 @@ local model_path_map = {
   [7] = "models/ggml-large.bin",
 }
 -- Reverse lookup: path -> id (for preselection from current model-path).
--- Explicit table avoids `pairs` at top-level load (VLC 3.0 extension sandbox has no `pairs` global — spike had no top-level pairs).
-local model_path_to_id = {
-  ["models/ggml-tiny.en.bin"] = 1,
-  ["models/ggml-tiny.bin"] = 2,
-  ["models/ggml-base.en.bin"] = 3,
-  ["models/ggml-base.bin"] = 4,
-  ["models/ggml-small.bin"] = 5,
-  ["models/ggml-medium.bin"] = 6,
-  ["models/ggml-large.bin"] = 7,
-}
+-- Derived with a numeric loop: the VLC 3.0 scan pass runs this file in a bare
+-- Lua state with NO standard libraries (no pairs/ipairs), so top-level code
+-- must be library-free. `#` is an operator, not a library call.
+local model_path_to_id = {}
+for _id = 1, #model_path_map do
+  model_path_to_id[model_path_map[_id]] = _id
+end
 
 -- Language dropdown: concrete codes ONLY -- no "auto" entry.
 -- tiny.en default model is English-only; vendored whisper auto-detect on
