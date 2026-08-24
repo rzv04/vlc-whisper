@@ -1,7 +1,7 @@
--- vlc_whisper_settings.lua — VLC-Whisper Settings GUI (Lua extension).
+-- vlc_whisper_settings.lua -- VLC-Whisper Settings GUI (Lua extension).
 -- VLC 3.0.23 Lua 5.1 runtime. Validates with `luac -p` (Lua 5.1).
 -- Wired version: reads/writes plugin config namespace (whisper-backend,
--- model-path, whisper-language, whisper-threads) via vlc.config.get/set.
+-- model-path, whisper-language, whisper-threads) via cfg_get/set.
 -- No translation code. No network. See docs/plans/spike_lua_extension.md
 -- and Step 19b README section for apply/respawn semantics.
 
@@ -11,6 +11,26 @@ local w_model = nil
 local w_language = nil
 local w_threads = nil
 local w_status = nil
+
+-- Robust config bridge: VLC 3.0 Lua exposes config as `config` in some builds
+-- and `vlc.config` in others. Try both so the extension loads on either.
+local function cfg_get(name)
+  local ok, val = pcall(function()
+    if vlc and vlc.config and vlc.config.get then return vlc.config.get(name) end
+    if config and config.get then return config.get(name) end
+    return nil
+  end)
+  if ok then return val end
+  return nil
+end
+local function cfg_set(name, value)
+  local ok = pcall(function()
+    if vlc and vlc.config and vlc.config.set then vlc.config.set(name, value); return true end
+    if config and config.set then config.set(name, value); return true end
+    return false
+  end)
+  return ok
+end
 
 -- id -> string maps for dropdown get_value() results (Lua 5.1-safe).
 local engine_map = { [1] = "auto", [2] = "gpu", [3] = "cpu" }
@@ -24,7 +44,7 @@ local model_map = {
   [7] = "large",
 }
 -- Relative model paths under models/ (selection allowed even if file absent;
--- expected E_MODEL_MISSING disables captions until provisioned — see README).
+-- expected E_MODEL_MISSING disables captions until provisioned -- see README).
 local model_path_map = {
   [1] = "models/ggml-tiny.en.bin",
   [2] = "models/ggml-tiny.bin",
@@ -41,7 +61,7 @@ for _id, _path in pairs(model_path_map) do
   -- Also accept bare filename or absolute variants: match suffix.
 end
 
--- Language dropdown: concrete codes ONLY — no "auto" entry.
+-- Language dropdown: concrete codes ONLY -- no "auto" entry.
 -- tiny.en default model is English-only; vendored whisper auto-detect on
 -- English-only models is meaningless (deliberately omitted).
 local language_map = {
@@ -104,12 +124,12 @@ local function on_apply()
     pcall(function() w_threads:set_text(tostring(threads)) end)
   end
 
-  -- Write via vlc.config.set (Lua bridge to config_PutPsz / config_PutInt).
+  -- Write via cfg_set (Lua bridge to config_PutPsz / config_PutInt).
   -- All four keys are registered by the plugin (add_string / add_integer).
-  pcall(function() vlc.config.set("whisper-backend", engine) end)
-  pcall(function() vlc.config.set("model-path", model_path) end)
-  pcall(function() vlc.config.set("whisper-language", language) end)
-  pcall(function() vlc.config.set("whisper-threads", threads) end)
+  pcall(function() cfg_set("whisper-backend", engine) end)
+  pcall(function() cfg_set("model-path", model_path) end)
+  pcall(function() cfg_set("whisper-language", language) end)
+  pcall(function() cfg_set("whisper-threads", threads) end)
 
   vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. engine)
   vlc.msg.info("[VLC-Whisper] applied model-path=" .. model_path .. " (" .. model_label .. ")")
@@ -120,8 +140,8 @@ local function on_apply()
   -- drain; meaningful after first session STARTED).
   if w_status ~= nil then
     local active = nil
-    pcall(function() active = vlc.config.get("whisper-backend-active") end)
-    if active == nil or active == "" then active = "(pending — start playback)" end
+    pcall(function() active = cfg_get("whisper-backend-active") end)
+    if active == nil or active == "" then active = "(pending -- start playback)" end
     pcall(function() w_status:set_text("Detected backend: " .. tostring(active)) end)
   end
 end
@@ -135,18 +155,18 @@ local function build_dialog()
   local cur_language = nil
   local cur_threads = nil
   local cur_active = nil
-  pcall(function() cur_backend = vlc.config.get("whisper-backend") end)
-  pcall(function() cur_model_path = vlc.config.get("model-path") end)
-  pcall(function() cur_language = vlc.config.get("whisper-language") end)
-  pcall(function() cur_threads = vlc.config.get("whisper-threads") end)
-  pcall(function() cur_active = vlc.config.get("whisper-backend-active") end)
+  pcall(function() cur_backend = cfg_get("whisper-backend") end)
+  pcall(function() cur_model_path = cfg_get("model-path") end)
+  pcall(function() cur_language = cfg_get("whisper-language") end)
+  pcall(function() cur_threads = cfg_get("whisper-threads") end)
+  pcall(function() cur_active = cfg_get("whisper-backend-active") end)
 
   if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
   if cur_model_path == nil or cur_model_path == "" then cur_model_path = "models/ggml-tiny.en.bin" end
   if cur_language == nil or cur_language == "" then cur_language = "en" end
   if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
   cur_threads = tostring(cur_threads)
-  if cur_active == nil or cur_active == "" then cur_active = "(pending — start playback)" end
+  if cur_active == nil or cur_active == "" then cur_active = "(pending -- start playback)" end
 
   local sel_engine = engine_to_id[cur_backend] or 1
   local sel_model = resolve_model_id_from_path(cur_model_path)
@@ -172,7 +192,7 @@ local function build_dialog()
   w_model:add_value("large", 7)
   pcall(function() w_model:set_value(sel_model) end)
 
-  -- Row 3: Language (NO auto entry — English-only default model makes it meaningless)
+  -- Row 3: Language (NO auto entry -- English-only default model makes it meaningless)
   dlg:add_label("Language:", 1, 3, 1, 1)
   w_language = dlg:add_dropdown(2, 3, 2, 1)
   w_language:add_value("English (en)", 1)
@@ -183,7 +203,7 @@ local function build_dialog()
   w_language:add_value("Spanish (es)", 6)
   pcall(function() w_language:set_value(sel_language) end)
 
-  -- Row 4: Threads — text input (VLC Lua has no spinbox widget).
+  -- Row 4: Threads -- text input (VLC Lua has no spinbox widget).
   dlg:add_label("Threads:", 1, 4, 1, 1)
   w_threads = dlg:add_text_input(cur_threads, 2, 4, 2, 1)
 
@@ -206,7 +226,7 @@ function descriptor()
     shortdesc = "VLC-Whisper Settings",
     description = "Settings GUI for VLC-Whisper (Lua extension). "
       .. "Engine/Model/Language dropdowns + Threads input. "
-      .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via vlc.config.set; "
+      .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
       .. "plugin polls and respawns worker mid-play (brief caption gap). "
       .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
       .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent.",
@@ -215,7 +235,7 @@ function descriptor()
 end
 
 function activate()
-  vlc.msg.info("[VLC-Whisper] extension activate — building dialog")
+  vlc.msg.info("[VLC-Whisper] extension activate -- building dialog")
   if dlg ~= nil then
     pcall(function() dlg:hide() end)
     dlg = nil
