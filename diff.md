@@ -418,6 +418,20 @@ Greptile re-reviewed the PR (confidence 3/5) flagging clean-checkout and CPU-onl
 ---
 
 
+### 7.8 Eighth-Pass — Model Provisioning Redesign (2026-08-24)
+
+Two follow-up issues on the §7.7 G1 provisioning design, both **VALID** and fixed:
+
+| # | Issue | Verdict | Resolution |
+|---|---|---|---|
+| P1 | Default packaging omits the model: with `VW_PROVISION_MODELS` off, clean-checkout `--target installer` fails on the mandatory NSIS `File`, and CPack silently produces a captions-incapable ZIP. | **Valid** (default-OFF left the documented release workflow broken) | Fetch moved out of configure into a build-time step: `cmake/vw_provision_model.cmake` runs as the first `COMMAND` of the `installer` target (plus a standalone `provision_models` target), downloading only when the file is absent, pinned to the manifest sha256 via `EXPECTED_HASH`. Clean checkout + documented installer build now succeeds end-to-end; CPack omission is now loudly warned at configure instead of silent. |
+| P2 | Configure-time download breaks offline builds and violates the zero-network invariant when the flag is enabled. | **Valid** against the previous design | Configure no longer performs any network I/O in any mode — the flag was removed entirely. Plain builds, offline builds, and CI configure exactly as before; the download fires only when a user explicitly builds `installer`/`provision_models` AND the model is missing (verified: script invoked with model present + unreachable URL → "already present, skipping", exit 0). |
+
+Net semantics: **no network at configure ever; network only on explicit distributable-building targets, only for missing files, only sha256-pinned.** Live 77 MB fetch not exercised in-gate (bandwidth); integrity is enforced by CMake's `EXPECTED_HASH` mismatch abort.
+
+---
+
+
 ## 8. Windows Sandbox Manual Testing Matrix (E2E with Internet Access)
 
 ### 8.1 Sandbox Prerequisites & Environment Setup
