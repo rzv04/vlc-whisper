@@ -432,6 +432,18 @@ Net semantics: **no network at configure ever; network only on explicit distribu
 ---
 
 
+---
+
+### 7.9 Ninth-Pass — Provisioning Network-Scope Disposition (2026-08-24)
+
+| # | Issue | Verdict | Resolution |
+|---|---|---|---|
+
+| N1 | "Installer provisioning downloads from Hugging Face, violating the repository's zero-network contract and failing offline before makensis." (`vw_provision_model.cmake:18-22`) | **NOT VALID as filed** — the zero-network invariant (architecture.md, source-layout models row, AGENTS.md Rule 5) binds the *shipped product at runtime*; the models/ ownership rule scopes its ban to downloading "at runtime". Build-time fetching of a sha256-pinned dependency by an explicitly requested distributable target is exactly the clean-checkout path review rounds G1/P1 required — rejecting it resurrects the broken-release defect those rounds closed. The offline behavior is likewise correct: a complete installer is impossible without the model, so fail-fast on a genuinely missing mandatory input beats silent omission (rejected as a defect in §7.3/§7.7). Offline users have a first-class escape hatch: placing `models/ggml-tiny.en.bin` manually makes the script exit 0 without any network I/O (proven in-gate with an unreachable URL). | Kernel taken anyway: the download attempt now prints manual-placement guidance up front ("Offline? Place the file manually at this path and re-run"), so the failure path is self-explanatory. |
+
+
+---
+
 ## 8. Windows Sandbox Manual Testing Matrix (E2E with Internet Access)
 
 ### 8.1 Sandbox Prerequisites & Environment Setup

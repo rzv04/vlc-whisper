@@ -14,7 +14,10 @@ endif()
 get_filename_component(_vw_model_dir "${MODEL_PATH}" DIRECTORY)
 file(MAKE_DIRECTORY "${_vw_model_dir}")
 
-message(STATUS "VW: fetching ${MODEL_PATH} (sha256-pinned)")
+message(STATUS
+  "VW: fetching ${MODEL_PATH} (sha256-pinned). "
+  "Offline? Place the file manually at this path and re-run — the download "
+  "is skipped whenever the file exists.")
 file(DOWNLOAD
   "${MODEL_URL}"
   "${MODEL_PATH}"
