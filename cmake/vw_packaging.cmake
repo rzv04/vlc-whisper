@@ -14,7 +14,7 @@ set(VW_MODEL_TINY_EN_URL "https://huggingface.co/ggerganov/whisper.cpp/resolve/m
 set(VW_MODEL_TINY_EN_SHA256 "c78c86576ed16665798939f268b20902c347d21098f98d71be68b3d61e0b0486")
 
 if(NOT EXISTS "${VW_MODEL_TINY_EN}")
-  message(STATUS
+  message(WARNING
     "VW: models/ggml-tiny.en.bin is absent. Building the 'installer' target will "
     "fetch it automatically (sha256-pinned); 'provision_models' fetches it standalone. "
     "CPack ZIP omits it until provisioned.")
