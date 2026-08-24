@@ -286,6 +286,7 @@ typedef struct {
   bool cfg_snapshot_valid;
   _Atomic bool respawn_in_progress;
   int64_t last_config_poll_us;
+  int64_t last_cfg_respawn_attempt_us;  // last failed-config-respawn attempt; paces the 10s retry
 } vw_plugin_sys_t;
 #define VW_MAX_WORKER_RESPAWNS 3
 #define VW_WORKER_RESPAWN_DELAY_MS 1000
@@ -530,7 +531,7 @@ static void* vw_plugin_sender_main(void* arg) {
             // so the same broken settings will not re-trigger. Log and leave the loop alive with
             // a NULL client — the NULL-client guard below idles safely and the next settings
             // change (any config diff) starts a fresh config respawn without touching the
-            // transport-recovery budget.
+            sys->last_cfg_respawn_attempt_us = vw_platform_get_monotonic_time_us();
             if (!vw_plugin_respawn_worker(sys, paused, false)) {
               vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_CONFIG_RESPAWN_FAILED",
                            "new settings could not start a worker; captions idle until the next settings change");
@@ -555,10 +556,22 @@ static void* vw_plugin_sender_main(void* arg) {
     // No worker (failed config respawn, or initial session start rejected): idle safely. All
     // client I/O below requires a client; treating NULL as transport death here would consume
     // the bounded recovery budget for a non-transport failure and could break the loop
-    // permanently. The config-diff block above still runs every 2s, so the next settings
-    // change starts a fresh config respawn; a pending discontinuity stays latched until then.
+    // permanently. A pending discontinuity stays latched until a worker returns.
+    // Reconnect path: the committed snapshot means the same settings never re-diff, so a failed
+    // config respawn would otherwise idle forever (even if the failure was transient — file
+    // lock, AV scan — or the model appears later). Retry the launch every 10s; still a config
+    // respawn, so the transport-recovery budget is never touched. Success re-enters the normal
+    // loop on the next iteration.
     if (!sys->client) {
-      vw_platform_sleep_ms(20);
+      int64_t idle_now_us = vw_platform_get_monotonic_time_us();
+      if (idle_now_us - sys->last_cfg_respawn_attempt_us >= 10000000) {
+        sys->last_cfg_respawn_attempt_us = idle_now_us;
+        vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_CONFIG_RESPAWN_RETRY",
+                     "no worker; retrying launch with current settings");
+        vw_plugin_respawn_worker(sys, paused, false);
+      } else {
+        vw_platform_sleep_ms(20);
+      }
       continue;
     }
     // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
