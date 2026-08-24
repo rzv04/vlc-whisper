@@ -127,16 +127,20 @@ Section "VLC Plugin & AI Engine" SecCore
   File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.en.bin"
   File /nonfatal "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
 
-  ; 4. Install Licenses and Notices
+  ; 4. Install Lua Extension (Settings GUI)
+  SetOutPath "$INSTDIR\lua\extensions"
+  File "@CMAKE_SOURCE_DIR@/lua/extensions/vlc_whisper_settings.lua"
+
+  ; 5. Install Licenses and Notices
   SetOutPath "$INSTDIR"
   File "@CMAKE_SOURCE_DIR@/LICENSE"
   File "@CMAKE_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"
 
-  ; 5. Write Application Registry Metadata (Machine-wide HKLM)
+  ; 6. Write Application Registry Metadata (Machine-wide HKLM)
   WriteRegStr HKLM "Software\VLC-Whisper" "InstallPath" "$INSTDIR"
   WriteRegStr HKLM "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
 
-  ; 6. Register Windows Uninstaller
+  ; 7. Register Windows Uninstaller
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "DisplayName" "VLC-Whisper AI Subtitle Plugin"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "DisplayVersion" "@PROJECT_VERSION@"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "Publisher" "VLC-Whisper Contributors"
@@ -146,7 +150,7 @@ Section "VLC Plugin & AI Engine" SecCore
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper" "NoRepair" 1
   WriteUninstaller "$INSTDIR\uninstall-vlc-whisper.exe"
 
-  ; 7. Create Start Menu & Desktop Shortcuts
+  ; 8. Create Start Menu & Desktop Shortcuts
   CreateDirectory "$SMPROGRAMS\VLC-Whisper"
   CreateShortcut "$SMPROGRAMS\VLC-Whisper\VLC (with AI Whisper Captions).lnk" \
     "$INSTDIR\vlc.exe" '--audio-filter=vlc_whisper' "$INSTDIR\vlc.exe" 0
@@ -155,11 +159,12 @@ Section "VLC Plugin & AI Engine" SecCore
   CreateShortcut "$DESKTOP\VLC (with AI Whisper Captions).lnk" \
     "$INSTDIR\vlc.exe" '--audio-filter=vlc_whisper' "$INSTDIR\vlc.exe" 0
 
-  ; 8. Invalidate VLC Plugin Cache (plugins.dat)
+  ; 9. Invalidate VLC Plugin Cache (plugins.dat)
   ; VLC automatically rescans its plugins and rebuilds plugins.dat on the next
   ; unprivileged launch, so no elevated execution of INSTDIR binaries is needed.
   DetailPrint "Invalidating VLC plugin cache (plugins.dat); VLC rebuilds it automatically on next launch."
   Delete "$INSTDIR\plugins\plugins.dat"
+
 SectionEnd
 
 ; ------------------------------------------------------------------------------
@@ -188,24 +193,28 @@ Section "Uninstall"
   Delete "$INSTDIR\models\manifest.json"
   RMDir "$INSTDIR\models"
 
-  ; 4. Remove Licenses
+  ; 4. Remove Lua Extension (Settings GUI)
+  Delete "$INSTDIR\lua\extensions\vlc_whisper_settings.lua"
+  RMDir "$INSTDIR\lua\extensions"
+  RMDir "$INSTDIR\lua"
+
+  ; 5. Remove Licenses
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
 
-  ; 5. Remove Shortcuts
+  ; 6. Remove Shortcuts
   Delete "$SMPROGRAMS\VLC-Whisper\VLC (with AI Whisper Captions).lnk"
   Delete "$SMPROGRAMS\VLC-Whisper\Uninstall VLC-Whisper.lnk"
   RMDir "$SMPROGRAMS\VLC-Whisper"
   Delete "$DESKTOP\VLC (with AI Whisper Captions).lnk"
 
-  ; 6. Remove Uninstaller & Registry Entries (Machine-wide HKLM)
+  ; 7. Remove Uninstaller & Registry Entries (Machine-wide HKLM)
   Delete "$INSTDIR\uninstall-vlc-whisper.exe"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper"
   DeleteRegKey HKLM "Software\VLC-Whisper"
 
-  ; 7. Invalidate VLC Plugin Cache without the plugin
+  ; 8. Invalidate VLC Plugin Cache without the plugin
   ; VLC rebuilds its plugin cache automatically on the next unprivileged launch.
   DetailPrint "Invalidating VLC plugin cache; VLC rebuilds it automatically on next launch."
-  Delete "$INSTDIR\plugins\plugins.dat"
 SectionEnd
 

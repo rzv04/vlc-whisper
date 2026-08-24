@@ -23,10 +23,10 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 2U
-#define VW_CLIENT_VERSION "1.2.0"
+#define VW_PROTOCOL_VERSION_MINOR 3U
+#define VW_CLIENT_VERSION "1.3.0"
 #define VW_CLIENT_VERSION_LENGTH 5U
-#define VW_WORKER_VERSION "1.2.0"
+#define VW_WORKER_VERSION "1.3.0"
 #define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
@@ -180,6 +180,7 @@ typedef struct vw_msg_status {
   int64_t queued_audio_us;
   int64_t inference_us;
   int64_t dropped_audio_us;
+  char resolved_backend[16];  // "gpu" | "cpu", NUL-padded
 } vw_msg_status_t;
 
 typedef struct vw_msg_error {

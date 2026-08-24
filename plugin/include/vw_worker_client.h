@@ -32,6 +32,14 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                         const char* model_path);
 
+// Extended launch that forwards 19b config keys to the worker argv:
+// --backend <backend> (auto|gpu|cpu), --language <code>, --n-threads <int>, --gpu-device <id> if >=0.
+// NULL/empty backend/language fall back to "auto"/"en"; n_threads <=0 defaults to 4; gpu_device <0 omits the flag.
+vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
+                                                           const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                           const char* model_path, const char* backend,
+                                                           const char* language, int n_threads, int gpu_device);
+
 // Starts a new captioning session by transmitting a START frame with media origin and optional source URL over
 // IPC, waiting for confirmation from worker.
 bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,

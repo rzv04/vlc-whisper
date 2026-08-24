@@ -20,6 +20,9 @@ mdate
 var_Inherit
 var_Get
 config_GetPsz
+config_GetInt
+config_PutPsz
+config_FindConfig
 input_Control
 input_GetItem
 input_item_GetURI

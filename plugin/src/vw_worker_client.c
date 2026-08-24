@@ -66,9 +66,10 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
   }
 }
 
-vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
-                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
-                                                        const char* model_path) {
+vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
+                                                           const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                           const char* model_path, const char* backend,
+                                                           const char* language, int n_threads, int gpu_device) {
   if (!endpoint_name || !auth_token) {
     return NULL;
   }
@@ -78,9 +79,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
   if (executable_path) {
     char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
     token_to_hex(auth_token, token_hex);
-    // Exactly two argv shapes: with and without --model. NULL model_path omits the flag so the
-    // worker's CWD-relative default stays the fallback.
-    const char* argv[8];
+    // 19b: argv grows from 8 to 16 to carry --backend/--gpu-device/--language/--n-threads
+    const char* argv[16];
     size_t argc = 0;
     argv[argc++] = executable_path;
     argv[argc++] = "--pipe";
@@ -91,6 +91,25 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
       argv[argc++] = "--model";
       argv[argc++] = model_path;
     }
+    // 19b worker CLI additions — always forward backend/language/threads; gpu-device only if >=0
+    const char* eff_backend = (backend && backend[0]) ? backend : "auto";
+    argv[argc++] = "--backend";
+    argv[argc++] = eff_backend;
+    if (gpu_device >= 0) {
+      static char gpu_buf[16];
+      snprintf(gpu_buf, sizeof(gpu_buf), "%d", gpu_device);
+      argv[argc++] = "--gpu-device";
+      argv[argc++] = gpu_buf;
+    }
+    const char* eff_language = (language && language[0]) ? language : "en";
+    argv[argc++] = "--language";
+    argv[argc++] = eff_language;
+    char threads_buf[16];
+    int eff_threads = n_threads;
+    if (eff_threads < 1 || eff_threads > 16) eff_threads = 4;
+    snprintf(threads_buf, sizeof(threads_buf), "%d", eff_threads);
+    argv[argc++] = "--n-threads";
+    argv[argc++] = threads_buf;
     argv[argc] = NULL;
     if (!vw_platform_spawn_process(executable_path, argv, &worker_process)) {
       return NULL;
@@ -203,6 +222,14 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
 fail:
   vw_worker_client_disconnect(client);
   return NULL;
+}
+
+vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,
+                                                        const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                        const char* model_path) {
+  // Wrapper preserving legacy 4-arg ABI for tests; forwards defaults (auto/en/4, no gpu-device)
+  return vw_worker_client_launch_and_connect_ex(executable_path, endpoint_name, auth_token, model_path, "auto", "en", 4,
+                                                -1);
 }
 
 void vw_worker_client_disconnect(vw_worker_client_t* client) {

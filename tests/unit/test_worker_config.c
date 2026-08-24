@@ -159,6 +159,52 @@ int main(void) {
     EXPECT_EQ_STR(cfg.vad_model_path, "models/custom-vad.bin");
   }
 
+  // --- success: --language and --n-threads parse (step 19b) ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    EXPECT_EQ_STR(cfg.language, "en");
+    EXPECT(cfg.n_threads == 4);
+    char* argv_lang[] = {"vlc-whisper-worker", "--language", "ro", "--n-threads", "8", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 5, argv_lang) == 0);
+    EXPECT_EQ_STR(cfg.language, "ro");
+    EXPECT(cfg.n_threads == 8);
+  }
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_clamp_low[] = {"vlc-whisper-worker", "--n-threads", "0", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_low) == 0);
+    EXPECT(cfg.n_threads == 1);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_clamp_high[] = {"vlc-whisper-worker", "--n-threads", "32", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_high) == 0);
+    EXPECT(cfg.n_threads == 16);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_clamp_mid[] = {"vlc-whisper-worker", "--n-threads", "16", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_mid) == 0);
+    EXPECT(cfg.n_threads == 16);
+  }
+  // --- failure: --language auto rejected, empty, too long, dangling ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_auto[] = {"vlc-whisper-worker", "--language", "auto", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 2);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_long[] = {"vlc-whisper-worker", "--language", "this_is_way_too_long_for_lang", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_long) == 2);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_dangling_lang[] = {"vlc-whisper-worker", "--language", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_lang) == 2);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_dangling_thr[] = {"vlc-whisper-worker", "--n-threads", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_thr) == 2);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_bad_thr[] = {"vlc-whisper-worker", "--n-threads", "abc", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_bad_thr) == 2);
+  }
+
   // --- failure: NULL config ---
   EXPECT(vw_worker_config_parse_args(NULL, 1, NULL) == 2);
 

@@ -4,7 +4,7 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=2` (Protocol v1.2); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=3` (Protocol v1.3); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
@@ -102,9 +102,13 @@ Plugin to worker. Payload: session ID, `u16 reason`.
 
 Plugin to worker. Payload: Empty (header only). Instructs worker to close transport handles and exit process cleanly with code `0`.
 
-### STATUS
+### STATUS (v1.3)
 
-Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`. Emitted periodically for performance monitoring.
+Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`, `char resolved_backend[16]` — 60 bytes on the wire in v1.3.
+
+- `resolved_backend`: NUL-padded `"gpu"` or `"cpu"` — the backend **actually used for inference**, not the requested one. A Vulkan-enabled worker in `auto`/`gpu` mode without a usable GPU/IGPU device transparently falls back to CPU at runtime (whisper.cpp behavior) and MUST report `"cpu"`. The plugin mirrors this value into the read-only `whisper-backend-active` config var, which the settings GUI displays.
+- Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted periodically for performance monitoring.
+- Compatibility: v1.2 (44-byte) STATUS payloads remain decodable — a v1.3 decoder zero-fills the missing tail, yielding an empty `resolved_backend`; a v1.3 encoder always writes the full 60-byte payload. Same major version, so no capability flag is required (both peers ship together).
 
 ### ERROR
 

@@ -1,23 +1,36 @@
--- vlc_whisper_settings.lua — feasibility spike for VLC Lua extension settings GUI.
--- Scope: mechanism proof only. No wiring to the whisper plugin/worker, no network I/O.
+-- vlc_whisper_settings.lua -- VLC-Whisper Settings GUI (Lua extension).
 -- VLC 3.0.23 Lua 5.1 runtime. Validates with `luac -p` (Lua 5.1).
--- Invariants preserved: never touches audio callbacks; zero network; C17/no-C++ not
--- applicable to this Lua file but the future C bridge will obey AGENTS.md rules.
+-- Wired version: reads/writes plugin config namespace (whisper-backend,
+-- model-path, whisper-language, whisper-threads) via cfg_get/set.
+-- No translation code. No network. See docs/plans/spike_lua_extension.md
+-- and Step 19b README section for apply/respawn semantics.
 
 local dlg = nil
 local w_engine = nil
 local w_model = nil
 local w_language = nil
 local w_threads = nil
+local w_status = nil
 
--- In-memory spike state. Apply stores here; real GUI would persist via
--- config_Put* on the vlc-whisper plugin vars (see docs/plans/spike_lua_extension.md).
-local spike_state = {
-  engine = "auto",
-  model = "tiny.en",
-  language = "en",
-  threads = "4",
-}
+-- Robust config bridge: VLC 3.0 Lua exposes config as `config` in some builds
+-- and `vlc.config` in others. Try both so the extension loads on either.
+local function cfg_get(name)
+  local ok, val = pcall(function()
+    if vlc and vlc.config and vlc.config.get then return vlc.config.get(name) end
+    if config and config.get then return config.get(name) end
+    return nil
+  end)
+  if ok then return val end
+  return nil
+end
+local function cfg_set(name, value)
+  local ok = pcall(function()
+    if vlc and vlc.config and vlc.config.set then vlc.config.set(name, value); return true end
+    if config and config.set then config.set(name, value); return true end
+    return false
+  end)
+  return ok
+end
 
 -- id -> string maps for dropdown get_value() results (Lua 5.1-safe).
 local engine_map = { [1] = "auto", [2] = "gpu", [3] = "cpu" }
@@ -30,45 +43,138 @@ local model_map = {
   [6] = "medium",
   [7] = "large",
 }
+-- Relative model paths under models/ (selection allowed even if file absent;
+-- expected E_MODEL_MISSING disables captions until provisioned -- see README).
+local model_path_map = {
+  [1] = "models/ggml-tiny.en.bin",
+  [2] = "models/ggml-tiny.bin",
+  [3] = "models/ggml-base.en.bin",
+  [4] = "models/ggml-base.bin",
+  [5] = "models/ggml-small.bin",
+  [6] = "models/ggml-medium.bin",
+  [7] = "models/ggml-large.bin",
+}
+-- Reverse lookup: path -> id (for preselection from current model-path).
+-- Derived with a numeric loop: the VLC 3.0 scan pass runs this file in a bare
+-- Lua state with NO standard libraries (no pairs/ipairs), so top-level code
+-- must be library-free. `#` is an operator, not a library call.
+local model_path_to_id = {}
+for _id = 1, #model_path_map do
+  model_path_to_id[model_path_map[_id]] = _id
+end
+
+-- Language dropdown: concrete codes ONLY -- no "auto" entry.
+-- tiny.en default model is English-only; vendored whisper auto-detect on
+-- English-only models is meaningless (deliberately omitted).
 local language_map = {
-  [1] = "auto",
-  [2] = "en",
-  [3] = "ro",
-  [4] = "tr",
-  [5] = "de",
-  [6] = "fr",
-  [7] = "es",
+  [1] = "en",
+  [2] = "ro",
+  [3] = "tr",
+  [4] = "de",
+  [5] = "fr",
+  [6] = "es",
 }
 
+-- Reverse lookups for preselection.
+local engine_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
+local language_to_id = { ["en"] = 1, ["ro"] = 2, ["tr"] = 3, ["de"] = 4, ["fr"] = 5, ["es"] = 6 }
+
+local function clamp_threads(v)
+  local n = tonumber(v)
+  if n == nil then n = 4 end
+  n = math.floor(n)
+  if n < 1 then n = 1 end
+  if n > 16 then n = 16 end
+  return n
+end
+
+local function resolve_model_id_from_path(path)
+  if path == nil or path == "" then return 1 end
+  -- Direct hit (relative path as stored).
+  if model_path_to_id[path] ~= nil then return model_path_to_id[path] end
+  -- Suffix match: handles absolute or bare filename forms (e.g. installed
+  -- location "C:\\...\\models\\ggml-tiny.en.bin" or just filename).
+  for _id = 1, 7 do
+    local _rel = model_path_map[_id]
+    local fname = _rel:match("([^/\\]+)$")
+    if fname and path:find(fname, 1, true) then
+      return _id
+    end
+  end
+  -- Fallback: try label substring (e.g. "tiny.en" in a custom path).
+  for _id = 1, 7 do
+    local _label = model_map[_id]
+    if _label and path:find(_label, 1, true) then
+      return _id
+    end
+  end
+  return 1
+end
+
 local function on_apply()
-  -- Read dropdown selections (get_value returns the id passed to add_value).
   local eng_id = w_engine and w_engine:get_value() or 1
   local mod_id = w_model and w_model:get_value() or 1
-  local lang_id = w_language and w_language:get_value() or 2
+  local lang_id = w_language and w_language:get_value() or 1
   local thr_text = w_threads and w_threads:get_text() or "4"
 
-  spike_state.engine = engine_map[eng_id] or "auto"
-  spike_state.model = model_map[mod_id] or "tiny.en"
-  spike_state.language = language_map[lang_id] or "en"
-  -- Keep threads as string; real bridge would tonumber + clamp to [1..16].
-  -- Documented spinner gap: VLC Lua has no spinbox widget; text_input is used.
-  spike_state.threads = thr_text
+  local engine = engine_map[eng_id] or "auto"
+  local model_label = model_map[mod_id] or "tiny.en"
+  local model_path = model_path_map[mod_id] or "models/ggml-tiny.en.bin"
+  local language = language_map[lang_id] or "en"
+  local threads = clamp_threads(thr_text)
 
-  -- SPIKE logging — filterable with Tools > Messages verbosity 2.
-  vlc.msg.info("[VLC-Whisper][SPIKE] Apply engine=" .. spike_state.engine
-    .. " model=" .. spike_state.model
-    .. " language=" .. spike_state.language
-    .. " threads=" .. spike_state.threads)
+  -- Reflect clamped value back into the text input when possible.
+  if w_threads ~= nil then
+    pcall(function() w_threads:set_text(tostring(threads)) end)
+  end
 
-  -- Also log the stored table for programmatic verification.
-  vlc.msg.info("[VLC-Whisper][SPIKE] state stored local table (no config write in spike)")
+  -- Write via cfg_set (Lua bridge to config_PutPsz / config_PutInt).
+  -- All four keys are registered by the plugin (add_string / add_integer).
+  pcall(function() cfg_set("whisper-backend", engine) end)
+  pcall(function() cfg_set("model-path", model_path) end)
+  pcall(function() cfg_set("whisper-language", language) end)
+  pcall(function() cfg_set("whisper-threads", threads) end)
 
-  -- Optional user feedback inside the dialog (if label widget exists, update it).
-  -- No-op if extension already hides dialog; never blocks.
+  vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. engine)
+  vlc.msg.info("[VLC-Whisper] applied model-path=" .. model_path .. " (" .. model_label .. ")")
+  vlc.msg.info("[VLC-Whisper] applied whisper-language=" .. language)
+  vlc.msg.info("[VLC-Whisper] applied whisper-threads=" .. tostring(threads))
+
+  -- Refresh detected-backend status label if present (reflects last STATUS
+  -- drain; meaningful after first session STARTED).
+  if w_status ~= nil then
+    local active = nil
+    pcall(function() active = cfg_get("whisper-backend-active") end)
+    if active == nil or active == "" then active = "(pending -- start playback)" end
+    pcall(function() w_status:set_text("Detected backend: " .. tostring(active)) end)
+  end
 end
 
 local function build_dialog()
-  dlg = vlc.dialog("VLC-Whisper Settings (Spike)")
+  dlg = vlc.dialog("VLC-Whisper Settings")
+
+  -- Read current config values (nil-safe defaults).
+  local cur_backend = nil
+  local cur_model_path = nil
+  local cur_language = nil
+  local cur_threads = nil
+  local cur_active = nil
+  pcall(function() cur_backend = cfg_get("whisper-backend") end)
+  pcall(function() cur_model_path = cfg_get("model-path") end)
+  pcall(function() cur_language = cfg_get("whisper-language") end)
+  pcall(function() cur_threads = cfg_get("whisper-threads") end)
+  pcall(function() cur_active = cfg_get("whisper-backend-active") end)
+
+  if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
+  if cur_model_path == nil or cur_model_path == "" then cur_model_path = "models/ggml-tiny.en.bin" end
+  if cur_language == nil or cur_language == "" then cur_language = "en" end
+  if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
+  cur_threads = tostring(cur_threads)
+  if cur_active == nil or cur_active == "" then cur_active = "(pending -- start playback)" end
+
+  local sel_engine = engine_to_id[cur_backend] or 1
+  local sel_model = resolve_model_id_from_path(cur_model_path)
+  local sel_language = language_to_id[cur_language] or 1
 
   -- Row 1: Engine
   dlg:add_label("Engine:", 1, 1, 1, 1)
@@ -76,8 +182,9 @@ local function build_dialog()
   w_engine:add_value("auto (default)", 1)
   w_engine:add_value("GPU (Vulkan)", 2)
   w_engine:add_value("CPU only", 3)
+  pcall(function() w_engine:set_value(sel_engine) end)
 
-  -- Row 2: Model
+  -- Row 2: Model (labels map to models/<name>.bin relative paths)
   dlg:add_label("Model:", 1, 2, 1, 1)
   w_model = dlg:add_dropdown(2, 2, 2, 1)
   w_model:add_value("tiny.en (default)", 1)
@@ -87,52 +194,53 @@ local function build_dialog()
   w_model:add_value("small", 5)
   w_model:add_value("medium", 6)
   w_model:add_value("large", 7)
+  pcall(function() w_model:set_value(sel_model) end)
 
-  -- Row 3: Language
+  -- Row 3: Language (NO auto entry -- English-only default model makes it meaningless)
   dlg:add_label("Language:", 1, 3, 1, 1)
   w_language = dlg:add_dropdown(2, 3, 2, 1)
-  w_language:add_value("auto (detect)", 1)
-  w_language:add_value("English (en)", 2)
-  w_language:add_value("Romanian (ro)", 3)
-  w_language:add_value("Turkish (tr)", 4)
-  w_language:add_value("German (de)", 5)
-  w_language:add_value("French (fr)", 6)
-  w_language:add_value("Spanish (es)", 7)
+  w_language:add_value("English (en)", 1)
+  w_language:add_value("Romanian (ro)", 2)
+  w_language:add_value("Turkish (tr)", 3)
+  w_language:add_value("German (de)", 4)
+  w_language:add_value("French (fr)", 5)
+  w_language:add_value("Spanish (es)", 6)
+  pcall(function() w_language:set_value(sel_language) end)
 
-  -- Row 4: Threads — spinner gap: VLC Lua extension toolkit has no
-  -- EXTENSION_WIDGET_SPIN_ICON input / spinbox widget. Text input is the
-  -- closest available control; PotPlayer's thread-count spinner is emulated
-  -- as a plain text field with default "4". Real GUI outside VLC (standalone
-  -- exe) would use a native spinner.
+  -- Row 4: Threads -- text input (VLC Lua has no spinbox widget).
   dlg:add_label("Threads:", 1, 4, 1, 1)
-  w_threads = dlg:add_text_input("4", 2, 4, 2, 1)
+  w_threads = dlg:add_text_input(cur_threads, 2, 4, 2, 1)
 
   -- Row 5: Apply
   dlg:add_button("Apply", on_apply, 1, 5, 4, 1)
 
-  -- Row 6: Hint / spike banner
-  dlg:add_label("Spike: Apply logs with [SPIKE] prefix; no config written.", 1, 6, 4, 1)
+  -- Row 6: Detected backend status (informational, mirrors whisper-backend-active)
+  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 6, 4, 1)
+
+  -- Row 7: Hint
+  dlg:add_label("Model selection allowed even if file absent (E_MODEL_MISSING disables captions).", 1, 7, 4, 1)
 end
 
 function descriptor()
   return {
-    title = "VLC-Whisper Settings (Spike)",
-    version = "0.1.0",
+    title = "VLC-Whisper Settings",
+    version = "0.2.0",
     author = "vlc-whisper",
     url = "https://github.com/rzv04/vlc-whisper",
-    shortdesc = "VLC-Whisper Settings (Spike)",
-    description = "Feasibility spike for VLC-Whisper settings GUI via Lua extension. "
-      .. "Provides Engine/Model/Language dropdowns + Threads text input. "
-      .. "Apply logs values with [SPIKE] prefix and stores in a local Lua table. "
-      .. "No config writes, no worker wiring, no network.",
+    shortdesc = "VLC-Whisper Settings",
+    description = "Settings GUI for VLC-Whisper (Lua extension). "
+      .. "Engine/Model/Language dropdowns + Threads input. "
+      .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
+      .. "plugin polls and respawns worker mid-play (brief caption gap). "
+      .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
+      .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent.",
     capabilities = { "menu" },
   }
 end
 
 function activate()
-  vlc.msg.info("[VLC-Whisper][SPIKE] extension activate — building dialog")
+  vlc.msg.info("[VLC-Whisper] extension activate -- building dialog")
   if dlg ~= nil then
-    -- Recreate if VLC re-activates without a deactivate.
     pcall(function() dlg:hide() end)
     dlg = nil
   end
@@ -140,14 +248,15 @@ function activate()
   w_model = nil
   w_language = nil
   w_threads = nil
+  w_status = nil
   build_dialog()
   dlg:show()
-  vlc.msg.info("[VLC-Whisper][SPIKE] dialog shown (Engine/Model/Language dropdowns + Threads default=4)")
+  vlc.msg.info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads)")
   return true
 end
 
 function deactivate()
-  vlc.msg.info("[VLC-Whisper][SPIKE] extension deactivate")
+  vlc.msg.info("[VLC-Whisper] extension deactivate")
   if dlg ~= nil then
     pcall(function() dlg:hide() end)
     dlg = nil
@@ -156,24 +265,23 @@ function deactivate()
   w_model = nil
   w_language = nil
   w_threads = nil
+  w_status = nil
 end
 
 function close()
-  vlc.msg.info("[VLC-Whisper][SPIKE] extension close (user closed dialog)")
-  vlc.deactivate()
+  vlc.msg.info("[VLC-Whisper] extension close (user closed dialog)")
+  pcall(function() vlc.deactivate() end)
 end
 
 function menu()
-  -- Single menu entry under View > Extensions (or Tools > Extensions on some skins).
-  return { "VLC-Whisper Settings (Spike)" }
+  return { "VLC-Whisper Settings" }
 end
 
 function trigger_menu(id)
-  -- id == 1 for the single entry; ensure dialog is visible.
-  vlc.msg.info("[VLC-Whisper][SPIKE] trigger_menu id=" .. tostring(id))
+  vlc.msg.info("[VLC-Whisper] trigger_menu id=" .. tostring(id))
   if dlg == nil then
     activate()
   else
-    dlg:show()
+    pcall(function() dlg:show() end)
   end
 end
