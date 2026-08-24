@@ -519,7 +519,15 @@ static void* vw_plugin_sender_main(void* arg) {
                 sys->model_path[0] = '\0';
               }
             }
-            vw_plugin_respawn_worker(sys, paused, false);
+            // Config respawn failure is NOT a transport death: the snapshot is already committed,
+            // so the same broken settings will not re-trigger. Log and leave the loop alive with
+            // a NULL client — the NULL-client guard below idles safely and the next settings
+            // change (any config diff) starts a fresh config respawn without touching the
+            // transport-recovery budget.
+            if (!vw_plugin_respawn_worker(sys, paused, false)) {
+              vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_CONFIG_RESPAWN_FAILED",
+                           "new settings could not start a worker; captions idle until the next settings change");
+            }
             atomic_store(&sys->respawn_in_progress, false);
           }
         }
@@ -535,6 +543,15 @@ static void* vw_plugin_sender_main(void* arg) {
       if (!vw_plugin_respawn_worker(sys, paused, true)) {
         break;
       }
+      continue;
+    }
+    // No worker (failed config respawn, or initial session start rejected): idle safely. All
+    // client I/O below requires a client; treating NULL as transport death here would consume
+    // the bounded recovery budget for a non-transport failure and could break the loop
+    // permanently. The config-diff block above still runs every 2s, so the next settings
+    // change starts a fresh config respawn; a pending discontinuity stays latched until then.
+    if (!sys->client) {
+      vw_platform_sleep_ms(20);
       continue;
     }
     // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
