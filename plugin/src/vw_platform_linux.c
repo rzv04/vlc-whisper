@@ -1,6 +1,7 @@
 #if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdlib.h>
@@ -20,12 +21,13 @@
 #define VW_MAX_UNREAPED_PIDS 16
 static pid_t vw_unreaped_pids[VW_MAX_UNREAPED_PIDS];
 static size_t vw_unreaped_count = 0;
+static pthread_mutex_t vw_unreaped_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Reap any previously-unkillable children that have since become waitable.
-// Called from every process entry point; WNOHANG never blocks, and the plugin
-// is single-threaded so no locking is required. ECHILD (reaped elsewhere, e.g.
-// a SIGCHLD handler) also removes the entry.
+// Called from every process entry point; WNOHANG never blocks.
+// Protected by vw_unreaped_mutex against concurrent thread access.
 static void vw_platform_reap_unreaped(void) {
+  pthread_mutex_lock(&vw_unreaped_mutex);
   size_t i = 0;
   while (i < vw_unreaped_count) {
     int status;
@@ -37,6 +39,7 @@ static void vw_platform_reap_unreaped(void) {
       i++;
     }
   }
+  pthread_mutex_unlock(&vw_unreaped_mutex);
 }
 
 bool vw_platform_get_random_bytes(void* buffer, size_t size) {
@@ -137,9 +140,11 @@ void vw_platform_terminate_process(vw_process_t process) {
     // it registered so vw_platform_reap_unreaped reaps it once it becomes
     // waitable (a pending SIGKILL kills it as soon as it leaves D-state).
     if (!vw_platform_wait_process(process, 1000)) {
+      pthread_mutex_lock(&vw_unreaped_mutex);
       if (vw_unreaped_count < VW_MAX_UNREAPED_PIDS) {
         vw_unreaped_pids[vw_unreaped_count++] = pid;
       }
+      pthread_mutex_unlock(&vw_unreaped_mutex);
     }
   }
 }

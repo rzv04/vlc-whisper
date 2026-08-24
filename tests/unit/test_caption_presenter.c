@@ -354,6 +354,8 @@ int main(void) {
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 100000000LL + 1000000LL);  // Clamped to 1.0s minimum floor (101.0s)
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);
+  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_subtitle == false);
 
   // Test 16: Adjacent cue clipping preventing SPU presentation interval overlap
   vw_caption_segment_t cueA = {.start_pts_us = 10000000LL,  // 10.0s
@@ -377,6 +379,8 @@ int main(void) {
   int64_t cueA_stop = g_last_subpic_stop;
   assert(cueA_start == 100000000LL);
   assert(cueA_stop == 100000000LL + 600000LL);  // Clipped to 10.6s (600ms duration)
+  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_subtitle == false);
 
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
   assert(g_put_subpicture_calls == 2);  // cueB dispatched with full 1.0s floor
@@ -384,6 +388,8 @@ int main(void) {
   int64_t cueB_stop = g_last_subpic_stop;
   assert(cueB_start == 100000000LL + 600000LL);
   assert(cueB_stop == 100000000LL + 1600000LL);  // 1.0s floor
+  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_subtitle == false);
 
   // Verify zero overlap between cueA stop and cueB start
   assert(cueA_stop == cueB_start);
@@ -396,6 +402,8 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
+  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_subtitle == false);
 
   // At 0.5x rate: 200ms raw acoustic duration -> clamped to 0.5s media floor -> 1.0s wall-clock duration
   g_mock_rate = 0.5f;
@@ -404,6 +412,8 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
+  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_subtitle == false);
 
   // Test 18: Long duration preserved (3.5s speech utterance at 1.0x rate)
   vw_caption_segment_t long_cue = {.start_pts_us = 10000000LL,  // 10.0s
@@ -417,6 +427,8 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 3500000LL);  // Full 3.5s duration preserved
+  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_subtitle == false);
 
   (void)segment;
   (void)sys_segment;

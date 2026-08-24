@@ -429,6 +429,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
               current_playback_pts_us = payload_decoded.start.timeline_origin_pts_us;
               last_playback_pts_us = current_playback_pts_us;
               decoded_pts_us = current_playback_pts_us;
+              if (current_playback_pts_us > 0) {
+                vw_source_decoder_seek(source_decoder, current_playback_pts_us);
+              }
               source_eof = false;
               eof_retry_count = 0;
               vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SOURCE",

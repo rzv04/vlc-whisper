@@ -126,12 +126,16 @@ vlc-whisper/
 │   └── snippets/                              # Standalone C17 sample code files
 │       └── vw_sample_whisper_pcm.c            # 16kHz WAV reader, float resampler & Whisper runner
 ├── cmake/                                     # Build system configurations & toolchains
+│   ├── vw_packaging.cmake                     # CPack release archive & NSIS installer target definitions
+│   ├── vw_installer.nsi.in                   # Templated NSIS script for standalone Windows installer
 │   └── toolchains/
 │       └── windows-x64-mingw.cmake            # MinGW cross-compilation CMake toolchain configuration
 ├── docs/                                      # Project specifications, ADRs & architectural design docs
 ├── ai/                                        # Internal AI/agent workspace context & logs
 ├── CMakeLists.txt                             # Root CMake build configuration
 ├── CMakePresets.json                          # Native and cross-compilation build presets
+├── LICENSE                                    # Root MIT License
+├── THIRD_PARTY_NOTICES.md                     # Legal notices and third-party open-source attributions
 ├── AGENTS.md                                  # Coding standards, architectural invariants & privacy rules
 └── README.md                                  # Project overview, build instructions & developer guide
 ```

@@ -1,5 +1,5 @@
 // Copyright 2026 VLC-Whisper Contributors. All rights reserved.
-// Use of this source code is governed by a BSD-style license.
+// Use of this source code is governed by the MIT License that can be found in the LICENSE file.
 
 #include <assert.h>
 #include <math.h>
@@ -139,11 +139,11 @@ static void vw_test_vad_silero_model(void) {
   struct whisper_vad_context* vctx = vw_vad_init_default(vad_path);
   assert(vctx != NULL);
 
-  // 1. Full 8.0s silence window (128,000 samples)
-  float silence[128000] = {0};
-  assert(!vw_vad_detect_speech(silence, 128000, vctx));
+  // 1. 1.0s silence window (16,000 samples)
+  float silence[16000] = {0};
+  assert(!vw_vad_detect_speech(silence, 16000, vctx));
 
-  // 2. Real speech test fixture (16kHz mono jfk.wav from whisper.cpp)
+  // 2. Real speech test fixture (16kHz mono jfk.wav from whisper.cpp, 2.0s sample)
   const char* speech_fixtures[] = {"worker/third_party/whisper.cpp/samples/jfk.wav",
                                    "../worker/third_party/whisper.cpp/samples/jfk.wav",
                                    "../../worker/third_party/whisper.cpp/samples/jfk.wav",
@@ -159,9 +159,9 @@ static void vw_test_vad_silero_model(void) {
   }
 
   if (speech_path) {
-    float speech_buf[128000] = {0};
+    float speech_buf[16000] = {0};
     size_t samples_read = 0;
-    if (load_wav_pcm32(speech_path, speech_buf, 128000, &samples_read) && samples_read >= 16000) {
+    if (load_wav_pcm32(speech_path, speech_buf, 16000, &samples_read) && samples_read >= 16000) {
       assert(vw_vad_detect_speech(speech_buf, samples_read, vctx));
     }
   }
@@ -229,13 +229,16 @@ static void vw_test_vad_find_chunk_boundary_silero(void) {
   size_t cut_samples = 0;
   size_t silence_drain = 0;
 
-  // 1. Pure silence at min chunk size -> progressive silence drain without Whisper inference (M1)
-  float silence[VW_CHUNK_MIN_SAMPLES] = {0};
-  assert(vw_vad_find_chunk_boundary(silence, VW_CHUNK_MIN_SAMPLES, vctx, false, &cut_samples, &silence_drain));
-  assert(silence_drain == VW_CHUNK_MIN_SAMPLES - VW_CHUNK_PAD_SAMPLES);
+  // 1. Partial silence with is_eof=false waits for minimum chunk accumulation
+  float silence[16000] = {0};
+  assert(!vw_vad_find_chunk_boundary(silence, 16000, vctx, false, &cut_samples, &silence_drain));
+
+  // 2. Pure silence at EOF -> progressive silence drain without Whisper inference (M1)
+  assert(vw_vad_find_chunk_boundary(silence, 16000, vctx, true, &cut_samples, &silence_drain));
+  assert(silence_drain == 16000);
   assert(cut_samples == 0);
 
-  // 2. JFK speech audio fixture
+  // 3. JFK speech audio fixture (EOF partial chunk evaluation)
   const char* speech_fixtures[] = {"worker/third_party/whisper.cpp/samples/jfk.wav",
                                    "../worker/third_party/whisper.cpp/samples/jfk.wav",
                                    "../../worker/third_party/whisper.cpp/samples/jfk.wav",
@@ -251,40 +254,51 @@ static void vw_test_vad_find_chunk_boundary_silero(void) {
   }
 
   if (speech_path) {
-    float speech_buf[VW_CHUNK_MAX_SAMPLES] = {0};
+    float speech_buf[16000] = {0};
     size_t samples_read = 0;
-    if (load_wav_pcm32(speech_path, speech_buf, VW_CHUNK_MAX_SAMPLES, &samples_read) && samples_read >= 96000) {
+    if (load_wav_pcm32(speech_path, speech_buf, 16000, &samples_read) && samples_read >= 16000) {
       cut_samples = 0;
       silence_drain = 0;
-      bool res = vw_vad_find_chunk_boundary(speech_buf, samples_read, vctx, false, &cut_samples, &silence_drain);
+      bool res = vw_vad_find_chunk_boundary(speech_buf, samples_read, vctx, true, &cut_samples, &silence_drain);
       if (res) {
         assert(cut_samples > 0 || silence_drain > 0);
       }
     }
   }
 
-  // 3. Multi-chunk streaming simulation across iterations (Finding L4)
-  size_t stream_pos = 0;
-  float stream_audio[VW_CHUNK_MAX_SAMPLES * 2] = {0};
-  // Populate first half with simulated tone and second half with silence
+  // 4. Multi-chunk streaming simulation across iterations (Finding L4, restored with
+  //    16000-sample buffers). A lone sub-min-chunk (16000 < VW_CHUNK_MIN_SAMPLES=96000)
+  //    with is_eof=false must wait (return false); once the window crosses the minimum
+  //    chunk size with an EOF tail the API must emit a cut for the tone region and then
+  //    drain trailing silence on the following iteration.
+  float lone_tone[16000];
+  for (size_t i = 0; i < 16000; i++) {
+    lone_tone[i] = 0.35f * sinf(2.0f * 3.14159f * 300.0f * (float)i / 16000.0f);
+  }
+  cut_samples = 0;
+  silence_drain = 0;
+  assert(!vw_vad_find_chunk_boundary(lone_tone, 16000, vctx, false, &cut_samples, &silence_drain));
+
+  // Accumulate 6 chunks (96000 samples = VW_CHUNK_MIN_SAMPLES) of tone, then mark EOF so
+  // the speech/tone path must yield a boundary instead of buffering indefinitely.
+  float acc[VW_CHUNK_MIN_SAMPLES + 16000] = {0};
   for (size_t i = 0; i < VW_CHUNK_MIN_SAMPLES; i++) {
-    stream_audio[i] = 0.35f * sinf(2.0f * 3.14159f * 300.0f * (float)i / 16000.0f);
+    acc[i] = 0.35f * sinf(2.0f * 3.14159f * 300.0f * (float)i / 16000.0f);
   }
-  // Iteration 1: detect speech cut
   cut_samples = 0;
   silence_drain = 0;
-  bool s1 = vw_vad_find_chunk_boundary(stream_audio, VW_CHUNK_MIN_SAMPLES, vctx, false, &cut_samples, &silence_drain);
-  if (s1) {
-    stream_pos += (cut_samples > 0) ? cut_samples : silence_drain;
-  }
-  // Iteration 2: pure silence trailing
+  bool s1 = vw_vad_find_chunk_boundary(acc, VW_CHUNK_MIN_SAMPLES, vctx, true, &cut_samples, &silence_drain);
+  assert(s1);
+  assert(cut_samples > 0 || silence_drain > 0);
+
+  // Iteration 2: trailing 16000-sample silence chunk with EOF -> progressive silence drain.
+  float trail_silence[16000] = {0};
   cut_samples = 0;
   silence_drain = 0;
-  bool s2 = vw_vad_find_chunk_boundary(stream_audio + VW_CHUNK_MIN_SAMPLES, VW_CHUNK_MIN_SAMPLES, vctx, false,
-                                       &cut_samples, &silence_drain);
-  if (s2) {
-    assert(silence_drain == VW_CHUNK_MIN_SAMPLES - VW_CHUNK_PAD_SAMPLES);
-  }
+  bool s2 = vw_vad_find_chunk_boundary(trail_silence, 16000, vctx, true, &cut_samples, &silence_drain);
+  assert(s2);
+  assert(silence_drain == 16000);
+  assert(cut_samples == 0);
 
   vw_vad_reset_state(vctx);
   vw_vad_free(vctx);

@@ -1,6 +1,8 @@
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(WHISPER_INSTALL OFF CACHE BOOL "" FORCE)
+set(GGML_INSTALL OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 # ggml's OpenMP (default ON) links OpenMP::OpenMP_CXX, which resolves to the explicit path
@@ -52,6 +54,16 @@ find_package(Threads REQUIRED)
 find_package(OpenMP)
 
 add_subdirectory(third_party/whisper.cpp)
+
+# Optimize third-party tensor compute kernels (ggml & whisper) so VAD and Whisper unit tests
+# run in milliseconds rather than suffering unvectorized -O0 CPU slowdowns during debug runs.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    foreach(t whisper ggml ggml-base ggml-cpu)
+        if(TARGET ${t})
+            target_compile_options(${t} PRIVATE -O3)
+        endif()
+    endforeach()
+endif()
 
 if(WIN32)
     set(VW_SOURCE_DECODER_SRCS src/vw_source_decoder_mf.c)

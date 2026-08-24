@@ -197,3 +197,7 @@ opencode.json
 
 graphify-out/
 .graphifyignore
+
+# Packaging artifacts
+_CPack_Packages/
+*.zip

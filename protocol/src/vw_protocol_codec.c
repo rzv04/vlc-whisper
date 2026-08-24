@@ -40,7 +40,7 @@ bool vw_protocol_decode_header(const uint8_t* buffer, size_t buffer_size, vw_fra
 bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uint8_t* buffer, size_t buffer_size,
                                 size_t* out_written) {
   if (!buffer || !out_written) return false;
-  if (!payload && type != VW_MSG_SHUTDOWN && type != VW_MSG_STARTED) return false;
+  if (!payload && type != VW_MSG_SHUTDOWN) return false;
   size_t written = 0;
   switch (type) {
     case VW_MSG_HELLO: {
@@ -114,6 +114,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_CAPTION_SEGMENT: {
       const vw_caption_segment_t* p = (const vw_caption_segment_t*)payload;
+      if (p->text_bytes > 0 && !p->text_utf8) return false;
       ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->segment_id);
       ENC_FIELD(p->start_pts_us);
@@ -137,6 +138,12 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->error_code);
       ENC_FIELD(p->recoverable);
+      // Reject messages that cannot carry their own NUL terminator within the buffer.
+      // Enforcing strlen < VW_MAX_ERROR_MSG_BYTES guarantees every encoded message is
+      // NUL-terminated, so the decoder can preserve it byte-for-byte (see decode path).
+      if (strnlen(p->message, VW_MAX_ERROR_MSG_BYTES) >= VW_MAX_ERROR_MSG_BYTES) {
+        return false;
+      }
       ENC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
       break;
     }
@@ -177,7 +184,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
 
 bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, size_t buffer_size, void* out_payload) {
   if (!buffer) return false;
-  if (!out_payload && type != VW_MSG_SHUTDOWN && type != VW_MSG_STARTED) return false;
+  if (!out_payload && type != VW_MSG_SHUTDOWN) return false;
   size_t read_pos = 0;
   switch (type) {
     case VW_MSG_HELLO: {
@@ -283,6 +290,12 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       DEC_FIELD(p->error_code);
       DEC_FIELD(p->recoverable);
       DEC_BYTES(p->message, VW_MAX_ERROR_MSG_BYTES);
+      // Preserve contract-conforming messages byte-for-byte: they carry their own NUL
+      // terminator, so leave the buffer untouched. Only force-terminate hostile or
+      // truncated payloads that contain no NUL anywhere in the fixed-size field.
+      if (!memchr(p->message, '\0', VW_MAX_ERROR_MSG_BYTES)) {
+        p->message[VW_MAX_ERROR_MSG_BYTES - 1] = '\0';
+      }
       break;
     }
     case VW_MSG_STARTED: {

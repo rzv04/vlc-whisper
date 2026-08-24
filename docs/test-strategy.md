@@ -76,6 +76,7 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/test_worker_config.c` (17e.1): `--vad-model <path>` CLI option parsing, unknown option rejection, and `vw_worker_config_autodiscover_vad` searching alongside `--model` and worker binary.
 - `tests/unit/test_caption_presenter.c` (17e.2): `VW_CAPTION_MIN_DISPLAY_DURATION_US` (1.0s) display floor enforcement on sub-second cues, wall-clock floor scaling across variable playback rates ($0.5\times$, $1.0\times$, $2.0\times$), long speech duration preservation ($> 1.0\text{s}$), and OSD fallback minimum floor.
 - `tests/unit/test_whisper_engine.c` (17e.2): deterministic greedy decoding verification (identical PCM buffer transcribes to identical segment counts, timestamps, and UTF-8 text on repeat passes) and bounded decoding parameters (`temperature = 0.0f`, `temperature_inc = 0.2f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`).
+- `cmake/vw_packaging.cmake` & `cmake/vw_installer.nsi.in` (18): Standalone Windows NSIS setup installer compilation (`makensis`), 64-bit VLC auto-discovery (`HKLM\Software\VideoLAN\VLC`), automated plugin deployment (`<VLC>\plugins\audio_filter\`), worker/models deployment, automatic `vlc-cache-gen.exe` cache regeneration, uninstaller clean state rollback, CPack release ZIP generation, and end-to-end acceptance testing covering local media (.mp4, .mkv, .mp3, .flac) and live network streams.
 
 ## Performance contract
 

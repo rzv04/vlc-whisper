@@ -168,3 +168,13 @@ Transcribed segments carry:
 - Audio buffer limit: plugin drops audio chunks when the queue reaches 16 chunks (8 s capacity) rather than consuming unbounded memory.
 - Input bounds: header payload length strictly capped at 1 MB. Malformed UTF-8 text or impossible PTS values are rejected.
 - Caption queueing: plugin maintains no internal caption queue (ADR-016). Timed subpictures are submitted directly to VLC's native SPU pipeline (`vout_PutSubpicture`), which manages PTS display scheduling.
+
+## Deployment & Packaging
+
+- **Windows Installer (NSIS)**: Standalone installer (`vlc-whisper-win64-setup.exe`) auto-detects VLC 64-bit installation paths from `HKLM\Software\VideoLAN\VLC`, installs the plugin DLL to `<VLC>\plugins\audio_filter\`, worker executable and models to `<VLC>\`, regenerates VLC's plugin cache (`vlc-cache-gen.exe`), registers an uninstaller, and creates shortcuts (`vlc.exe --audio-filter=vlc_whisper`).
+- **Path Resolution Hierarchy**:
+  1. Plugin DLL directory ancestors (`plugins/audio_filter` $\to$ `plugins` $\to$ `<VLC_ROOT>`).
+  2. VLC process executable directory (`GetModuleFileNameA(NULL)`).
+  3. Windows Registry keys `HKCU\Software\VLC-Whisper\InstallPath` and `HKLM\Software\VLC-Whisper\InstallPath`.
+  4. Environment paths `%LOCALAPPDATA%\vlc-whisper\` and `%PROGRAMFILES%\vlc-whisper\`.
+- **Licensing & Offline Discipline**: Root permissive MIT License with full third-party attributions (`THIRD_PARTY_NOTICES.md`). Completely zero network connectivity or cloud APIs.

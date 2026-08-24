@@ -124,6 +124,50 @@ static bool vw_plugin_probe_ancestors(const char* file_path, int max_up, const c
   return false;
 }
 
+#ifdef _WIN32
+// Probes Windows registry and environment paths for worker or model files.
+static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_count, char* out, size_t out_size) {
+  char candidate[VW_PATH_MAX_BYTES];
+  // 1. Probe HKCU and HKLM \Software\VLC-Whisper\InstallPath
+  const HKEY roots[] = {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+  for (int i = 0; i < 2; i++) {
+    HKEY hkey = NULL;
+    if (RegOpenKeyExA(roots[i], "Software\\VLC-Whisper", 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
+      char val[MAX_PATH];
+      DWORD len = sizeof(val);
+      DWORD type = 0;
+      if (RegQueryValueExA(hkey, "InstallPath", NULL, &type, (LPBYTE)val, &len) == ERROR_SUCCESS && type == REG_SZ &&
+          len > 0) {
+        RegCloseKey(hkey);
+        size_t vlen = (len < sizeof(val)) ? len : sizeof(val) - 1;
+        val[vlen] = '\0';
+        snprintf(candidate, sizeof(candidate), "%s\\.vw_probe", val);
+        if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+      } else {
+        RegCloseKey(hkey);
+      }
+    }
+  }
+
+  // 2. Probe %LOCALAPPDATA%/vlc-whisper
+  char local_app_data[MAX_PATH];
+  DWORD llen = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, sizeof(local_app_data));
+  if (llen > 0 && llen < sizeof(local_app_data)) {
+    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", local_app_data);
+    if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+  }
+
+  // 3. Probe %PROGRAMFILES%/vlc-whisper
+  char prog_files[MAX_PATH];
+  DWORD plen = GetEnvironmentVariableA("PROGRAMFILES", prog_files, sizeof(prog_files));
+  if (plen > 0 && plen < sizeof(prog_files)) {
+    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", prog_files);
+    if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+  }
+  return false;
+}
+#endif
+
 // Resolves the vlc-whisper-worker executable path: plugin dir ancestors, then the exe dir.
 // Probes the GPU worker ("vlc-whisper-worker") first, then falls back to the CPU worker
 // ("vlc-whisper-worker-cpu") if only a CPU-preset binary was built/installed.
@@ -133,7 +177,7 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
   char plugin_path[MAX_PATH];
   HMODULE hmod = NULL;
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)(void*)vw_plugin_open, &hmod) &&
+                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
       hmod) {
     DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
     if (len > 0 && len < sizeof(plugin_path)) {
@@ -145,6 +189,7 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
   if (elen > 0 && elen < sizeof(exe_path)) {
     if (vw_plugin_probe_ancestors(exe_path, 0, worker_names, 2, out, out_size)) return true;
   }
+  if (vw_plugin_probe_windows_paths(worker_names, 2, out, out_size)) return true;
   return false;
 #else
   const char* worker_names[] = {"vlc-whisper-worker", "vlc-whisper-worker-cpu"};
@@ -172,7 +217,7 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
   char plugin_path[MAX_PATH];
   HMODULE hmod = NULL;
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)(void*)vw_plugin_open, &hmod) &&
+                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
       hmod) {
     DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
     if (len > 0 && len < sizeof(plugin_path)) {
@@ -184,6 +229,7 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
   if (elen > 0 && elen < sizeof(exe_path)) {
     if (vw_plugin_probe_ancestors(exe_path, 0, model_names, 2, out, out_size)) return true;
   }
+  if (vw_plugin_probe_windows_paths(model_names, 2, out, out_size)) return true;
   return false;
 #else
   Dl_info info;
@@ -274,15 +320,17 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
   // worker without SOURCE_MODE must not be handed a URI it will reject.
   char* source_url = NULL;
   input_thread_t* input = vw_plugin_find_input((filter_t*)sys->presenter.p_filter_ctx);
-  if (input && (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE)) {
-    input_item_t* item = input_GetItem(input);
-    if (item) {
-      char* uri = input_item_GetURI(item);
-      if (uri &&
-          (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' || (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
-        source_url = uri;
-      } else {
-        free(uri);
+  if (input) {
+    if (sys->client->worker_capabilities & VW_CAPABILITY_SOURCE_MODE) {
+      input_item_t* item = input_GetItem(input);
+      if (item) {
+        char* uri = input_item_GetURI(item);
+        if (uri && (strncmp(uri, "file://", 7) == 0 || uri[0] == '/' ||
+                    (uri[1] == ':' && (uri[2] == '\\' || uri[2] == '/')))) {
+          source_url = uri;
+        } else {
+          free(uri);
+        }
       }
     }
     vlc_object_release(VLC_OBJECT(input));
@@ -503,7 +551,7 @@ static void* vw_plugin_sender_main(void* arg) {
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek/discontinuity at %lldus; blanking presenter",
                    (long long)seek_target_us);
       vw_caption_presenter_blank(&sys->presenter);  // erase captions on seek
-      if (seek_target_us > 0) {
+      if (seek_target_us >= 0) {
         if (!vw_worker_client_send_position(sys->client, seek_target_us, seek_target_us, 1.0f,
                                             (paused ? VW_POSITION_FLAG_PAUSED : 0) | VW_POSITION_FLAG_SEEK)) {
           atomic_store(&sys->worker_dead, true);
@@ -825,7 +873,11 @@ static int vw_plugin_open(vlc_object_t* obj) {
     atomic_init(&sys->sender_running, true);
     atomic_init(&sys->worker_dead, false);
     atomic_init(&sys->discontinuity_pending, false);
-    atomic_init(&sys->resume_pts_us, 0);
+    // Initialize to -1 (not 0) so "no known media position" is representable.
+    // Poll detectors overwrite this with a real (>=0) media position on discontinuity;
+    // when neither a polled position nor a stored target exists, the -1 sentinel lets the
+    // PLUGIN_SEEK_TARGET_MISSING branch fire instead of emitting a spurious seek to 0.
+    atomic_init(&sys->resume_pts_us, -1);
     if (vw_platform_thread_create(&sys->sender_thread, vw_plugin_sender_main, sys)) {
       sys->sender_started = true;
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER_START", "sender thread started (5/20 ms cadence)");
