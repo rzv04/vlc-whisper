@@ -305,3 +305,74 @@ to REVISE already-emitted subtitles.
 - **No Cue Collisions**: Cues display sequentially without visual overlap in VLC's SPU subpicture pipeline.
 - **Deterministic Latency**: Greedy decoding ensures bounded, single-pass inference without search latency spikes.
 - **Overlap prevention mechanism (verified 2026-08-20)**: the presenter posts every cue with `b_ephemer = true` (`vw_caption_presenter.c`), so VLC's SPU keeps only the newest same-channel ephemeral subpicture (`vlc_subpicture.h`: "displayed until the next one appear"). A successor cue therefore auto-evicts its predecessor regardless of the predecessor's posted `i_stop` — the 1s reading floor may leave two cues' *intervals* overlapping in the SPU chain, but only one is ever *rendered*. Interval clipping in `show_segment` is the lookahead precision layer (successor known in advance); ephemeral eviction is the safety net for the live-PCM path (successor not yet knowable at flush time). Static interval-overlap analysis that ignores `b_ephemer` is not a visible defect. This is a regression-tested invariant (`test_caption_presenter.c` asserts `b_ephemer == true` on every posted subpicture).
+## ADR-022: Settings GUI via VLC Lua Extension (Spike, Non-Bundled Concept)
+
+**Status:** Accepted (Spike).
+
+**Context.** Step 19a required a feasibility spike for the settings/control GUI that will expose engine
+backend (auto / Vulkan GPU / CPU), model (tiny / base / large), language (auto / en / ro / tr / …),
+and CPU thread count (default 4). Three integration routes were evaluated against VLC 3.0.23 headers
+and the existing ensemble boundaries: (a) standalone `vlc-whisper-settings.exe` per ADR-011, (b) native
+C interface module (`set_capability("interface", N)` in the same plugin DLL), and (c) VLC Lua extension
+(`lua/extensions/*.lua`, `vlc_extensions.h` / `vlc.dialog`). The research dossier
+(`docs/plans/step19a_research_dossier.md`) and the Lua-extension feasibility record
+(`docs/plans/step19a_lua_route_feasibility.md`) proved that an `audio_filter` module cannot inject
+a Tools-menu item (`vlc_actions.h` ACTIONIDs are not a third-party menu API), while the worker IPC pipe
+is strictly single-listener (`listen(,1)` / `nMaxInstances=1`) and cannot be reused as a GUI→plugin
+channel.
+
+**Decision.**
+
+1. **GUI host: VLC Lua extension (primary), standalone exe retained as rich-panel tier.**
+   - The spike extension `lua/extensions/vlc_whisper_settings.lua` (Lua 5.1-era, `luac -p` clean) owns the
+     single Extensions-menu entry `View → VLC-Whisper Settings (Spike)` via `capabilities = {"menu"}` /
+     `EXTENSION_HAS_MENU` / `EXTENSION_TRIGGER_MENU` and renders the four PotPlayer-parity controls with
+     `vlc.dialog` widgets (dropdowns for engine / model / language, text_input default "4" for threads —
+     the documented spinner gap: `EXTENSION_WIDGET_SPIN_ICON` is a static animation, not an input).
+     On Apply the spike stores selections in a local `spike_state` table and logs
+     `[VLC-Whisper][SPIKE]` lines; it never writes config or touches the network.
+   - `vlc-whisper-settings.exe` (ADR-011) is retained as the optional out-of-process rich panel that a
+     future Lua dialog can delegate to (e.g. an "Open advanced settings…" button spawning it via a tiny
+     C `extension` helper). This preserves crash isolation without requiring a forked VLC build (ADR-012).
+
+2. **Non-bundled concept scope.** The spike extension and its `lua/README_SPIKE.md` manual-test instructions
+   are committed on branch `gemini/milestone-4-step-19a` as a feasibility artifact and are explicitly
+   **excluded from CMake install / CPack / NSIS packaging**. The installer continues to deploy only
+   `libvlc_whisper_plugin.dll`, the worker, and the sha256-pinned models (existing `install(TARGETS …)`
+   rules); the Lua spike requires manual copy to `<VLC>\lua\extensions\` for manual testing and will not
+   ship until a follow-up ADR promotes it to a bundled component.
+
+3. **Wire-up feasibility for the real GUI (roadmap 19c).** The spike proves the bridge exists even though
+   it is not wired: the Lua extension reaches the plugin through the shared VLC config namespace
+   (`vlc.config.set` → `config_PutPsz` / `config_PutInt` on four proposed keys
+   `whisper-backend` / `model-path` / `whisper-language` / `whisper-threads`, declared in
+   `vlc_module_begin()` alongside the existing `worker-path`/`model-path` `add_loadfile` vars).  
+   Per-setting apply costs (from `worker/third_party/whisper.cpp` and our wrappers):
+   `whisper-language` and `whisper-threads` are `whisper_full_params` per-call state → live-settable
+   once engine setters are wired; `model-path` and `whisper-backend` are `whisper_context_params` @ init →
+   worker respawn via `vw_plugin_respawn_worker` (existing epoch machinery). Full mapping and
+   language-list sourcing (`whisper_lang_max_id` / `whisper_lang_str`) in the spike report and dossier.
+
+4. **Amendment to ADR-011.** ADR-011's `Tools → VLC-Whisper Settings…` claim is superseded:
+   the blessed third-party menu surface is the **Extensions menu** (`View → …` after activation), not Tools.
+   ADR-011's crash-isolation and Start-Menu launch properties remain true for the retained exe tier.
+
+**Consequences.**
+
+- Seamless in-VLC menu integration **without distributing a recompiled VLC build**; single text-file distribution,
+  no ABI coupling to the pinned VLC build, `luac -p` gate, no C++.
+- Lua runs cooperatively on VLC's UI thread: any heavy work stalls the whole UI. The phase-1 rule is strict:
+  Apply handlers stay O(small) (config writes only); future translation (19b) must not HTTP inside a Lua callback.
+- Widget toolkit is basic (no spinner; fixed layout); a rich panel remains a future exe.
+- Installer/uninstaller integration is trivial when promoted (`File → lua\extensions\…` + `Delete`/`RMDir`; no
+  `plugins.dat` regeneration needed — Lua is not a cached binary module).
+
+**Rejected alternatives.**
+
+- **Native C interface module in the same plugin DLL** — proven feasible (spike `gemini/milestone-4-step-19a-c-interface`
+  @ `3697286`, heartbeat + `vw_platform_spawn_process` probe, Windows-verified, both presets build), but
+  requires launch via `vlc --extraintf=vwsettingsintf` rather than a native menu entry and offers no toolkit
+  advantage until the standalone exe is spawned anyway. Parked as the fallback if Lua is rejected post-testing.
+- **In-DLL Qt dialog from the audio filter** — infeasible: `audio_filter` cannot own UI; Qt loop belongs to VLC's
+  main thread.
+
