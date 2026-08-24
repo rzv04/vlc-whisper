@@ -108,7 +108,7 @@ Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 
 
 ### ERROR
 
-Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_code`, `u8 recoverable`, `char message[256]` (safe redacted UTF-8 message).
+Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_code`, `u8 recoverable`, `char message[256]` (safe redacted UTF-8 message). The message content is at most 255 bytes and MUST carry its own NUL terminator within the fixed-size field: the encoder rejects unterminated strings, and the decoder force-terminates only payloads that contain no NUL anywhere (defensive; never emitted by a conforming peer).
 
 - If `recoverable == 0`: Fatal failure. Plugin disables captions for item, closes transport; VLC media playback continues uninterrupted.
 - If `recoverable == 1`: Non-fatal warning (e.g. `E_BACKPRESSURE`, `E_SOURCE_OPEN`); plugin logs diagnostic, session continues.

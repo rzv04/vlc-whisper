@@ -114,6 +114,12 @@ Section "VLC Plugin & AI Engine" SecCore
   SetOutPath "$INSTDIR"
   File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
   File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker-cpu.exe"
+  ; Fail loudly rather than shipping a workerless installer (both File lines
+  ; above are /nonfatal so a misconfigured build would otherwise pass silently).
+  ${IfNot} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe"
+  ${AndIfNot} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe"
+    Abort "Packaging error: no vlc-whisper-worker binary was included. Rebuild with a valid worker preset."
+  ${EndIf}
 
   ; 3. Install AI Models into <VLC>/models
   SetOutPath "$INSTDIR\models"

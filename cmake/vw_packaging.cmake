@@ -1,6 +1,28 @@
 # ==============================================================================
 # Packaging Configuration for VLC-Whisper (CPack & NSIS)
 # ==============================================================================
+# ------------------------------------------------------------------------------
+# Clean-checkout model provisioning (opt-in).
+# models/*.bin are gitignored; the NSIS installer requires ggml-tiny.en.bin.
+# Pass -DVW_PROVISION_MODELS=ON to fetch it at configure time, pinned to the
+# sha256 recorded in models/manifest.json (integrity verified by CMake).
+# ------------------------------------------------------------------------------
+option(VW_PROVISION_MODELS "Fetch mandatory Whisper model (ggml-tiny.en.bin) at configure time" OFF)
+set(VW_MODEL_TINY_EN "${CMAKE_CURRENT_SOURCE_DIR}/models/ggml-tiny.en.bin")
+if(NOT EXISTS "${VW_MODEL_TINY_EN}")
+  if(VW_PROVISION_MODELS)
+    message(STATUS "VW: fetching models/ggml-tiny.en.bin (sha256-pinned per models/manifest.json)")
+    file(DOWNLOAD
+      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+      "${VW_MODEL_TINY_EN}"
+      EXPECTED_HASH SHA256=c78c86576ed16665798939f268b20902c347d21098f98d71be68b3d61e0b0486
+      SHOW_PROGRESS)
+  else()
+    message(STATUS
+      "VW: models/ggml-tiny.en.bin is absent. The 'installer' target needs it: "
+      "download it manually or re-configure with -DVW_PROVISION_MODELS=ON.")
+  endif()
+endif()
 
 if(WIN32)
   find_program(MAKENSIS_EXECUTABLE makensis)
