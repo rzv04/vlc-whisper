@@ -277,12 +277,12 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   dl->hSession = hSession;
   pthread_mutex_unlock(&dl->lock);
   if (atomic_load(&dl->abort_requested)) {
-    WinHttpCloseHandle(hSession);
+    vw_winhttp_close_stored(dl);
     return false;
   }
   HINTERNET hConnect = WinHttpConnect(hSession, wHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
   if (!hConnect) {
-    WinHttpCloseHandle(hSession);
+    vw_winhttp_close_stored(dl);
     return false;
   }
   pthread_mutex_lock(&dl->lock);
@@ -291,8 +291,7 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wPath, NULL, WINHTTP_NO_REFERER,
                                           WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
   if (!hRequest) {
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    vw_winhttp_close_stored(dl);
     return false;
   }
   pthread_mutex_lock(&dl->lock);
@@ -300,22 +299,16 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   pthread_mutex_unlock(&dl->lock);
   BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
   if (!sent) {
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    vw_winhttp_close_stored(dl);
     return false;
   }
   if (!WinHttpReceiveResponse(hRequest, NULL)) {
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    vw_winhttp_close_stored(dl);
     return false;
   }
   FILE* out = fopen(dl->part_path, "wb");
   if (!out) {
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    vw_winhttp_close_stored(dl);
     return false;
   }
   uint64_t total_written = 0;
@@ -344,14 +337,8 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
     pthread_mutex_unlock(&dl->lock);
   }
   fclose(out);
-  // Cleanup handles.
-  WinHttpCloseHandle(hRequest);
-  WinHttpCloseHandle(hConnect);
-  WinHttpCloseHandle(hSession);
-  pthread_mutex_lock(&dl->lock);
-  dl->hRequest = NULL;
-  dl->hConnect = NULL;
-  dl->hSession = NULL;
+  // Cleanup handles (single ownership point; abort() may have closed already).
+  vw_winhttp_close_stored(dl);
   // Ensure final progress reflects written size.
   uint64_t sz = vw_file_size(dl->part_path);
   uint8_t pct = vw_model_download_pct(sz, dl->entry.bytes);
@@ -360,6 +347,26 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   pthread_mutex_unlock(&dl->lock);
   if (atomic_load(&dl->abort_requested)) return false;
   return ok;
+}
+#endif
+
+#ifdef _WIN32
+// Closes whatever WinHTTP handles are currently stored in dl and clears the
+// struct fields under the lock, so abort() and the download thread can never
+// double-close the same handle regardless of interleaving.
+static void vw_winhttp_close_stored(vw_model_download_t* dl) {
+  if (!dl) return;
+  pthread_mutex_lock(&dl->lock);
+  HINTERNET r = dl->hRequest;
+  HINTERNET c = dl->hConnect;
+  HINTERNET s = dl->hSession;
+  dl->hRequest = NULL;
+  dl->hConnect = NULL;
+  dl->hSession = NULL;
+  pthread_mutex_unlock(&dl->lock);
+  if (r) WinHttpCloseHandle(r);
+  if (c) WinHttpCloseHandle(c);
+  if (s) WinHttpCloseHandle(s);
 }
 #endif
 
@@ -545,6 +552,7 @@ void vw_model_download_abort(vw_model_download_t* dl) {
 #else
   pthread_mutex_lock(&dl->lock);
   HINTERNET hReq = dl->hRequest;
+  dl->hRequest = NULL;  // ownership transferred here; thread cleanup skips it
   pthread_mutex_unlock(&dl->lock);
   if (hReq) WinHttpCloseHandle(hReq);
 #endif

@@ -162,6 +162,7 @@ end
 
 local function on_abort_download()
   pcall(function() cfg_set("whisper-model-download", "abort") end)
+  pcall(function() cfg_set("whisper-model-status", "aborting") end)
   vlc.msg.info("[VLC-Whisper] abort requested")
   pcall(function()
     if w_status ~= nil then
@@ -187,6 +188,11 @@ local function on_download()
   -- Map to catalog id (plugin expects these exact strings).
   local catalog_id = catalog_id_map[sel_id] or "tiny"
   pcall(function() cfg_set("whisper-model-download", catalog_id) end)
+  -- Prime the mirrors synchronously: the plugin relays at its next 2s poll, and
+  -- a PREVIOUS download's terminal status ("done:..."/"failed:...") would
+  -- otherwise break this loop before the first fresh progress frame arrives.
+  pcall(function() cfg_set("whisper-model-status", "downloading") end)
+  pcall(function() cfg_set("whisper-model-progress", 0) end)
   vlc.msg.info("[VLC-Whisper] download requested " .. tostring(catalog_id))
   -- Bounded poll loop ~1800 ticks at ~2 Hz (approx 15 min).
   for _tick = 1, 1800 do
