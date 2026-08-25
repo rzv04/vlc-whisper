@@ -185,15 +185,23 @@ int main(void) {
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_mid) == 0);
     EXPECT(cfg.n_threads == 16);
   }
-  // --- failure: --language auto rejected, empty, too long, dangling ---
+  // --- success: --language auto accepted (19c), length still enforced ---
   {
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_auto[] = {"vlc-whisper-worker", "--language", "auto", NULL};
-    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 2);
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 0);
+    EXPECT_EQ_STR(cfg.language, "auto");
+  }
+  // --- failure: --language empty, too long, dangling ---
+  {
+    vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_long[] = {"vlc-whisper-worker", "--language", "this_is_way_too_long_for_lang", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_long) == 2);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_empty[] = {"vlc-whisper-worker", "--language", "", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_empty) == 2);
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_dangling_lang[] = {"vlc-whisper-worker", "--language", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_lang) == 2);
@@ -203,6 +211,36 @@ int main(void) {
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_bad_thr[] = {"vlc-whisper-worker", "--n-threads", "abc", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_bad_thr) == 2);
+  }
+
+  // --- success: --model-dir accepted (roundtrip) ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    EXPECT(cfg.model_dir[0] == '\0');
+    char* argv_dir[] = {"vlc-whisper-worker", "--model-dir", "/tmp/vlc-whisper/models", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_dir) == 0);
+    EXPECT_EQ_STR(cfg.model_dir, "/tmp/vlc-whisper/models");
+  }
+  // --- failure: --model-dir oversize, missing arg ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    // Build an oversize path >= VW_PATH_MAX_BYTES
+    char oversize[VW_PATH_MAX_BYTES + 16];
+    memset(oversize, 'a', sizeof(oversize) - 1);
+    oversize[sizeof(oversize) - 1] = '\0';
+    oversize[0] = '/';
+    char* argv_oversize[] = {"vlc-whisper-worker", "--model-dir", oversize, NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_oversize) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_dangling[] = {"vlc-whisper-worker", "--model-dir", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_oversize_model[] = {"vlc-whisper-worker", "--model", oversize, NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_oversize_model) == 2);
   }
 
   // --- failure: NULL config ---

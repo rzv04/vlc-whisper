@@ -119,7 +119,23 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "missing value for --model\n");
         return 2;
       }
-      snprintf(config->model_path, sizeof(config->model_path), "%s", argv[++i]);
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->model_path)) {
+        fprintf(stderr, "bad --model: too long (max %zu)\n", sizeof(config->model_path) - 1);
+        return 2;
+      }
+      snprintf(config->model_path, sizeof(config->model_path), "%s", v);
+    } else if (strcmp(argv[i], "--model-dir") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --model-dir\n");
+        return 2;
+      }
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->model_dir)) {
+        fprintf(stderr, "bad --model-dir: too long (max %zu)\n", sizeof(config->model_dir) - 1);
+        return 2;
+      }
+      snprintf(config->model_dir, sizeof(config->model_dir), "%s", v);
     } else if (strcmp(argv[i], "--vad-model") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --vad-model\n");
@@ -166,10 +182,6 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         return 2;
       }
       const char* lang = argv[++i];
-      if (strcmp(lang, "auto") == 0) {
-        fprintf(stderr, "bad --language: 'auto' not allowed (use concrete code like 'en')\n");
-        return 2;
-      }
       if (lang[0] == '\0' || strlen(lang) >= sizeof(config->language)) {
         fprintf(stderr, "bad --language: expected 1..%zu char code, got '%s'\n", sizeof(config->language) - 1, lang);
         return 2;

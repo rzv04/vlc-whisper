@@ -6,19 +6,15 @@
 #include <stdint.h>
 
 #include "vw_model_catalog.h"
+#include "vw_protocol_types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Download stage constants mirror protocol VW_MODEL_STAGE_* values (0..5) but
-// are defined here to keep worker independent from protocol headers on Windows.
-#define VW_MODEL_STAGE_IDLE 0
-#define VW_MODEL_STAGE_DOWNLOADING 1
-#define VW_MODEL_STAGE_VERIFYING 2
-#define VW_MODEL_STAGE_DONE 3
-#define VW_MODEL_STAGE_FAILED 4
-#define VW_MODEL_STAGE_ABORTING 5
+// Download stage constants are the protocol's wire values -- defined once in
+// vw_protocol_types.h (VW_MODEL_STAGE_*, 0..5) and reused here so the engine,
+// worker, and codec can never drift (duplicate defines warned on inclusion).
 
 // Snapshot of current download progress guarded by internal mutex; model_id is
 // NUL-terminated catalog identifier copied from the catalog entry at start.

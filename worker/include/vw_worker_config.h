@@ -9,6 +9,7 @@
 
 typedef struct vw_worker_config {
   char model_path[VW_PATH_MAX_BYTES];
+  char model_dir[VW_PATH_MAX_BYTES];  // Per-user model directory override (--model-dir), empty = default per-user dir
   char vad_model_path[VW_PATH_MAX_BYTES];  // Path to Silero VAD GGML model file (--vad-model or auto-discovered)
   char language[16];
   int n_threads;

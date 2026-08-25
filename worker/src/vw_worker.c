@@ -7,6 +7,8 @@
 
 #include "vw_ipc_transport.h"
 #include "vw_log.h"
+#include "vw_model_catalog.h"
+#include "vw_model_download.h"
 #include "vw_platform.h"
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
@@ -218,6 +220,18 @@ int vw_worker_run(const vw_worker_config_t* config) {
                  "Silero VAD model not specified; operating on zero-config RMS Energy fallback");
   }
 
+  // Model download state: per-user directory resolved once, stale .part files cleaned before the loop.
+  vw_model_download_t* model_dl = NULL;
+  char dl_dir[VW_PATH_MAX_BYTES];
+  if (config->model_dir[0] != '\0') {
+    snprintf(dl_dir, sizeof(dl_dir), "%s", config->model_dir);
+  } else {
+    vw_model_download_default_dir(dl_dir, sizeof(dl_dir));
+  }
+  vw_model_download_cleanup_partial(dl_dir);
+  int last_stage = -1;
+  int64_t last_progress_send_us = 0;
+
   vw_audio_buffer_t* audio_buf = vw_audio_buffer_create(VW_LOOKAHEAD_BUFFER_SAMPLES);  // 60s at 16kHz
   vw_segment_builder_t* builder = vw_segment_builder_create();
   if (!audio_buf || !builder) {
@@ -225,6 +239,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
     if (builder) vw_segment_builder_free(builder);
     if (engine) vw_whisper_engine_free(engine);
     if (vad_ctx) vw_vad_free(vad_ctx);
+    if (model_dl) {
+      vw_model_download_abort(model_dl);
+      vw_model_download_free(model_dl);
+    }
     free(window_samples);
     vw_ipc_close(handle);
 #ifdef _WIN32
@@ -255,6 +273,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
     if (builder) vw_segment_builder_free(builder);
     if (engine) vw_whisper_engine_free(engine);
     if (vad_ctx) vw_vad_free(vad_ctx);
+    if (model_dl) {
+      vw_model_download_abort(model_dl);
+      vw_model_download_free(model_dl);
+    }
     vw_ipc_close(handle);
 #ifdef _WIN32
     MFShutdown();
@@ -273,6 +295,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
     if (builder) vw_segment_builder_free(builder);
     if (engine) vw_whisper_engine_free(engine);
     if (vad_ctx) vw_vad_free(vad_ctx);
+    if (model_dl) {
+      vw_model_download_abort(model_dl);
+      vw_model_download_free(model_dl);
+    }
     vw_ipc_close(handle);
 #ifdef _WIN32
     MFShutdown();
@@ -309,6 +335,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
         vw_msg_control_t control;
         vw_msg_status_t status;
         vw_msg_position_t position;
+        vw_msg_model_ctrl_t model_ctrl;
       } payload_decoded;
 
       memset(&payload_decoded, 0, sizeof(payload_decoded));
@@ -662,6 +689,120 @@ int vw_worker_run(const vw_worker_config_t* config) {
           break;
         }
 
+        case VW_MSG_MODEL_CTRL: {
+          uint8_t action = payload_decoded.model_ctrl.action;
+          const char* req_id = payload_decoded.model_ctrl.model_id;
+          if (action == VW_MODEL_ACTION_DOWNLOAD) {
+            const vw_model_catalog_entry_t* entry = vw_model_catalog_find(req_id);
+            if (!entry) {
+              vw_msg_model_progress_t prog;
+              memset(&prog, 0, sizeof(prog));
+              if (session_active) {
+                memcpy(prog.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
+              }
+              prog.stage = VW_MODEL_STAGE_FAILED;
+              prog.pct = 0;
+              prog.bytes_done = 0;
+              prog.bytes_total = 0;
+              snprintf(prog.model_id, sizeof(prog.model_id), "%s", req_id);
+              uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+              size_t prog_len = 0;
+              if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, prog_payload, sizeof(prog_payload),
+                                             &prog_len)) {
+                vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                                              .type = VW_MSG_MODEL_PROGRESS,
+                                              .payload_length = (uint32_t)prog_len,
+                                              .sequence = ++sequence};
+                uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
+                vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
+                vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
+                vw_ipc_send(handle, prog_payload, prog_len);
+              }
+            } else {
+              bool is_active = false;
+              vw_download_progress_t cur;
+              if (model_dl && vw_model_download_poll(model_dl, &cur)) {
+                if (cur.stage == VW_MODEL_STAGE_DOWNLOADING || cur.stage == VW_MODEL_STAGE_VERIFYING ||
+                    cur.stage == VW_MODEL_STAGE_ABORTING) {
+                  is_active = true;
+                }
+              }
+              if (is_active) {
+                vw_download_progress_t snap;
+                if (vw_model_download_poll(model_dl, &snap)) {
+                  vw_msg_model_progress_t prog;
+                  memset(&prog, 0, sizeof(prog));
+                  if (session_active) {
+                    memcpy(prog.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
+                  } else {
+                    memcpy(prog.session_id.bytes, payload_decoded.model_ctrl.session_id.bytes, VW_SESSION_ID_BYTES);
+                  }
+                  prog.stage = (uint8_t)snap.stage;
+                  prog.pct = (uint8_t)snap.pct;
+                  prog.bytes_done = snap.bytes_done;
+                  prog.bytes_total = snap.bytes_total;
+                  snprintf(prog.model_id, sizeof(prog.model_id), "%s", snap.model_id);
+                  uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+                  size_t prog_len = 0;
+                  if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, prog_payload, sizeof(prog_payload),
+                                                 &prog_len)) {
+                    vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                                  .major = VW_PROTOCOL_VERSION_MAJOR,
+                                                  .type = VW_MSG_MODEL_PROGRESS,
+                                                  .payload_length = (uint32_t)prog_len,
+                                                  .sequence = ++sequence};
+                    uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
+                    vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
+                    vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
+                    vw_ipc_send(handle, prog_payload, prog_len);
+                  }
+                }
+              } else {
+                if (model_dl) {
+                  vw_model_download_free(model_dl);
+                  model_dl = NULL;
+                  last_stage = -1;
+                }
+                model_dl = vw_model_download_start(entry, dl_dir);
+                if (!model_dl) {
+                  vw_msg_model_progress_t prog;
+                  memset(&prog, 0, sizeof(prog));
+                  if (session_active) {
+                    memcpy(prog.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
+                  } else {
+                    memcpy(prog.session_id.bytes, payload_decoded.model_ctrl.session_id.bytes, VW_SESSION_ID_BYTES);
+                  }
+                  prog.stage = VW_MODEL_STAGE_FAILED;
+                  prog.pct = 0;
+                  prog.bytes_done = 0;
+                  prog.bytes_total = 0;
+                  snprintf(prog.model_id, sizeof(prog.model_id), "%s", entry->id);
+                  uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+                  size_t prog_len = 0;
+                  if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, prog_payload, sizeof(prog_payload),
+                                                 &prog_len)) {
+                    vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                                  .major = VW_PROTOCOL_VERSION_MAJOR,
+                                                  .type = VW_MSG_MODEL_PROGRESS,
+                                                  .payload_length = (uint32_t)prog_len,
+                                                  .sequence = ++sequence};
+                    uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
+                    vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
+                    vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
+                    vw_ipc_send(handle, prog_payload, prog_len);
+                  }
+                }
+              }
+            }
+          } else if (action == VW_MODEL_ACTION_ABORT) {
+            if (model_dl) {
+              vw_model_download_abort(model_dl);
+            }
+          }
+          break;
+        }
+
         case VW_MSG_SHUTDOWN:
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "shutdown requested; exiting");
           if (source_decoder) {
@@ -677,6 +818,61 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
 
       free(frame.payload);
+    }
+
+    // Model download progress emission: 1 Hz while downloading, immediate on stage transitions.
+    if (model_dl) {
+      vw_download_progress_t prog;
+      if (vw_model_download_poll(model_dl, &prog)) {
+        int64_t now_us = vw_platform_get_monotonic_time_us();
+        int prev_stage = last_stage;
+        bool should_send = false;
+        if ((int)prog.stage != prev_stage) {
+          should_send = true;
+        } else if (prog.stage == VW_MODEL_STAGE_DOWNLOADING && now_us - last_progress_send_us >= 1000000) {
+          should_send = true;
+        }
+        if (should_send) {
+          vw_msg_model_progress_t msg;
+          memset(&msg, 0, sizeof(msg));
+          if (session_active) {
+            memcpy(msg.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
+          }
+          msg.stage = (uint8_t)prog.stage;
+          msg.pct = (uint8_t)prog.pct;
+          msg.bytes_done = prog.bytes_done;
+          msg.bytes_total = prog.bytes_total;
+          snprintf(msg.model_id, sizeof(msg.model_id), "%s", prog.model_id);
+          uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+          size_t prog_len = 0;
+          if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &msg, prog_payload, sizeof(prog_payload), &prog_len)) {
+            vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                          .major = VW_PROTOCOL_VERSION_MAJOR,
+                                          .type = VW_MSG_MODEL_PROGRESS,
+                                          .payload_length = (uint32_t)prog_len,
+                                          .sequence = ++sequence};
+            uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
+            vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
+            vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
+            vw_ipc_send(handle, prog_payload, prog_len);
+          }
+          last_stage = (int)prog.stage;
+          last_progress_send_us = now_us;
+          if (prog.stage == VW_MODEL_STAGE_DONE) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL", "model %s downloaded+verified", prog.model_id);
+          }
+        }
+        // Terminal stages: free handle after emitting final frame.
+        bool is_done = (prog.stage == VW_MODEL_STAGE_DONE || prog.stage == VW_MODEL_STAGE_FAILED);
+        bool is_abort_idle = (prog.stage == VW_MODEL_STAGE_IDLE && prev_stage == VW_MODEL_STAGE_ABORTING);
+        bool is_fast_abort_idle = (prog.stage == VW_MODEL_STAGE_IDLE && (prev_stage == VW_MODEL_STAGE_DOWNLOADING ||
+                                                                         prev_stage == VW_MODEL_STAGE_VERIFYING));
+        if (is_done || is_abort_idle || is_fast_abort_idle) {
+          vw_model_download_free(model_dl);
+          model_dl = NULL;
+          last_stage = -1;
+        }
+      }
     }
 
     // Ahead-of-Time Look-Ahead Decoding Step
@@ -826,6 +1022,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
   if (source_decoder) {
     vw_source_decoder_close(source_decoder);
     source_decoder = NULL;
+  }
+
+  if (model_dl) {
+    vw_model_download_abort(model_dl);
+    vw_model_download_free(model_dl);
+    model_dl = NULL;
   }
 
   free(window_samples);
