@@ -15,15 +15,11 @@ local w_status = nil
 -- Robust config bridge: VLC 3.0 Lua exposes config as `config` in some builds
 -- and `vlc.config` in others. Try both so the extension loads on either.
 local function cfg_get(name)
-  local ok, val = pcall(function()
-    if vlc and vlc.config and vlc.config.get then return vlc.config.get(name) end
-    if config and config.get then return config.get(name) end
-    return nil
-  end)
-  if ok then return val end
-  return nil
-end
-local function cfg_set(name, value)
+local ok,
+    val = pcall(function() if vlc and vlc.config and vlc.config.get then return vlc.config.get(name) end if config and
+                config.get then return config.get(name)
+                    end return nil end) if ok then return val end return nil end local function
+    cfg_set(name, value)
   local ok = pcall(function()
     if vlc and vlc.config and vlc.config.set then vlc.config.set(name, value); return true end
     if config and config.set then config.set(name, value); return true end
@@ -43,6 +39,16 @@ local model_map = {
   [6] = "medium",
   [7] = "large",
 }
+-- Catalog ids mirror model_map labels (plugin catalog ids are these strings).
+local catalog_id_map = {
+  [1] = "tiny.en",
+  [2] = "tiny",
+  [3] = "base.en",
+  [4] = "base",
+  [5] = "small",
+  [6] = "medium",
+  [7] = "large",
+}
 -- Relative model paths under models/ (selection allowed even if file absent;
 -- expected E_MODEL_MISSING disables captions until provisioned -- see README).
 local model_path_map = {
@@ -52,7 +58,7 @@ local model_path_map = {
   [4] = "models/ggml-base.bin",
   [5] = "models/ggml-small.bin",
   [6] = "models/ggml-medium.bin",
-  [7] = "models/ggml-large.bin",
+  [7] = "models/ggml-large-v3.bin",
 }
 -- Reverse lookup: path -> id (for preselection from current model-path).
 -- Derived with a numeric loop: the VLC 3.0 scan pass runs this file in a bare
@@ -89,7 +95,7 @@ local function clamp_threads(v)
 end
 
 local function resolve_model_id_from_path(path)
-  if path == nil or path == "" then return 1 end
+  if path == nil or path == "" then return 2 end
   -- Direct hit (relative path as stored).
   if model_path_to_id[path] ~= nil then return model_path_to_id[path] end
   -- Suffix match: handles absolute or bare filename forms (e.g. installed
@@ -108,7 +114,7 @@ local function resolve_model_id_from_path(path)
       return _id
     end
   end
-  return 1
+  return 2
 end
 
 local function on_apply()
@@ -119,7 +125,7 @@ local function on_apply()
 
   local engine = engine_map[eng_id] or "auto"
   local model_label = model_map[mod_id] or "tiny.en"
-  local model_path = model_path_map[mod_id] or "models/ggml-tiny.en.bin"
+  local model_path = model_path_map[mod_id] or "models/ggml-tiny.bin"
   local language = language_map[lang_id] or "en"
   local threads = clamp_threads(thr_text)
 
@@ -150,6 +156,83 @@ local function on_apply()
   end
 end
 
+local function on_abort_download()
+  pcall(function() cfg_set("whisper-model-download", "abort") end)
+  vlc.msg.info("[VLC-Whisper] abort requested")
+  pcall(function()
+    if w_status ~= nil then
+      w_status:set_text("Model download: aborting...")
+    end
+  end)
+  pcall(function()
+    if dlg ~= nil then dlg:update() end
+  end)
+end
+
+local function on_download()
+  -- Determine selected model id: w_model:get_value() if dialog open, else resolve from cfg.
+  local sel_id = nil
+  pcall(function()
+    if w_model ~= nil then sel_id = w_model:get_value() end
+  end)
+  if sel_id == nil then
+    local cur_path = nil
+    pcall(function() cur_path = cfg_get("model-path") end)
+    sel_id = resolve_model_id_from_path(cur_path)
+  end
+  -- Map to catalog id (plugin expects these exact strings).
+  local catalog_id = catalog_id_map[sel_id] or "tiny"
+  pcall(function() cfg_set("whisper-model-download", catalog_id) end)
+  vlc.msg.info("[VLC-Whisper] download requested " .. tostring(catalog_id))
+  -- Bounded poll loop ~1800 ticks at ~2 Hz (approx 15 min).
+  for _tick = 1, 1800 do
+    local status_text = nil
+    local pct = nil
+    pcall(function() status_text = cfg_get("whisper-model-status") end)
+    pcall(function() pct = cfg_get("whisper-model-progress") end)
+    if status_text == nil then status_text = "" end
+    if pct == nil then pct = 0 end
+    -- Update status label if dialog present; skip when w_model nil (dialog closed).
+    if w_status ~= nil then
+      pcall(function()
+        w_status:set_text("Model " .. tostring(catalog_id) .. ": " .. tostring(status_text) .. " (" .. tostring(pct) .. "%)")
+      end)
+    end
+    local ok_update = pcall(function()
+      if dlg ~= nil then dlg:update() end
+    end)
+    -- Break when dialog was closed (dlg:update pcall failed).
+    if not ok_update then break end
+    -- Check stage prefix: done / failed / idle.
+    local done = false
+    pcall(function()
+      local s = tostring(status_text)
+      if s:sub(1, 4) == "done" then done = true end
+      if s:sub(1, 6) == "failed" then done = true end
+      if s:sub(1, 4) == "idle" then done = true end
+    end)
+    if done then break end
+    -- Pace ~2 Hz with busy-wait (allowed inside function).
+    local t0 = os.clock()
+    while os.clock() - t0 < 0.5 do end
+  end
+  -- One final status refresh after loop end.
+  pcall(function()
+    local status_text = nil
+    local pct = nil
+    pcall(function() status_text = cfg_get("whisper-model-status") end)
+    pcall(function() pct = cfg_get("whisper-model-progress") end)
+    if status_text == nil then status_text = "" end
+    if pct == nil then pct = 0 end
+    if w_status ~= nil then
+      -- Re-resolve catalog_id for final label (keep same).
+      local final_id = catalog_id
+      w_status:set_text("Model " .. tostring(final_id) .. ": " .. tostring(status_text) .. " (" .. tostring(pct) .. "%)")
+    end
+    if dlg ~= nil then dlg:update() end
+  end)
+end
+
 local function build_dialog()
   dlg = vlc.dialog("VLC-Whisper Settings")
 
@@ -166,7 +249,7 @@ local function build_dialog()
   pcall(function() cur_active = cfg_get("whisper-backend-active") end)
 
   if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
-  if cur_model_path == nil or cur_model_path == "" then cur_model_path = "models/ggml-tiny.en.bin" end
+  if cur_model_path == nil or cur_model_path == "" then cur_model_path = "models/ggml-tiny.bin" end
   if cur_language == nil or cur_language == "" then cur_language = "en" end
   if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
   cur_threads = tostring(cur_threads)
@@ -224,7 +307,7 @@ end
 function descriptor()
   return {
     title = "VLC-Whisper Settings",
-    version = "0.2.0",
+    version = "0.3.0",
     author = "vlc-whisper",
     url = "https://github.com/rzv04/vlc-whisper",
     shortdesc = "VLC-Whisper Settings",
@@ -233,7 +316,8 @@ function descriptor()
       .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
       .. "plugin polls and respawns worker mid-play (brief caption gap). "
       .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
-      .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent.",
+      .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent. "
+      .. "Menu entries: VLC-Whisper Settings, Download selected model, Abort model download.",
     capabilities = { "menu" },
   }
 end
@@ -272,13 +356,20 @@ function close()
   vlc.msg.info("[VLC-Whisper] extension close (user closed dialog)")
   pcall(function() vlc.deactivate() end)
 end
-
 function menu()
-  return { "VLC-Whisper Settings" }
+  return { "VLC-Whisper Settings", "Download selected model", "Abort model download" }
 end
 
 function trigger_menu(id)
   vlc.msg.info("[VLC-Whisper] trigger_menu id=" .. tostring(id))
+  if id == 2 then
+    on_download()
+    return
+  end
+  if id == 3 then
+    on_abort_download()
+    return
+  end
   if dlg == nil then
     activate()
   else
