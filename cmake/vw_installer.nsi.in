@@ -124,7 +124,7 @@ Section "VLC Plugin & AI Engine" SecCore
   ; 3. Install AI Models into <VLC>/models
   SetOutPath "$INSTDIR\models"
   File "@CMAKE_SOURCE_DIR@/models/manifest.json"
-  File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.en.bin"
+  File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.bin"
   File /nonfatal "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
 
   ; 4. Install Lua Extension (Settings GUI)
@@ -188,6 +188,7 @@ Section "Uninstall"
   Delete "$INSTDIR\vlc-whisper-worker-cpu.exe"
 
   ; 3. Remove Models
+  Delete "$INSTDIR\models\ggml-tiny.bin"
   Delete "$INSTDIR\models\ggml-tiny.en.bin"
   Delete "$INSTDIR\models\ggml-silero-vad.bin"
   Delete "$INSTDIR\models\manifest.json"
