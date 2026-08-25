@@ -146,6 +146,230 @@ int main(void) {
   EXPECT(vw_protocol_encode_payload(VW_MSG_SHUTDOWN, NULL, buffer, sizeof(buffer), &written));
   EXPECT(written == 0);
 
+  // ---- v1.4 MODEL_CTRL / MODEL_PROGRESS ----
+  _Static_assert(VW_PROTOCOL_VERSION_MINOR == 4U, "protocol v1.4 minor must be 4");
+  EXPECT(VW_PROTOCOL_VERSION_MINOR == 4U);
+  EXPECT(VW_MSG_MODEL_CTRL_PAYLOAD_BYTES == 49U);
+  EXPECT(VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES == 66U);
+
+  // MODEL_CTRL golden bytes (little-endian, fixed layout: 16 session + 1 action + 32 model_id)
+  {
+    vw_msg_model_ctrl_t ctrl = {0};
+    for (size_t i = 0; i < VW_SESSION_ID_BYTES; i++) ctrl.session_id.bytes[i] = (uint8_t)(i + 1);
+    ctrl.action = VW_MODEL_ACTION_DOWNLOAD;
+    memset(ctrl.model_id, 0, 32);
+    memcpy(ctrl.model_id, "tiny", 4);
+    EXPECT(vw_protocol_encode_payload(VW_MSG_MODEL_CTRL, &ctrl, buffer, sizeof(buffer), &written));
+    EXPECT(written == VW_MSG_MODEL_CTRL_PAYLOAD_BYTES);
+    uint8_t expected_ctrl[VW_MSG_MODEL_CTRL_PAYLOAD_BYTES] = {0};
+    for (size_t i = 0; i < 16; i++) expected_ctrl[i] = (uint8_t)(i + 1);
+    expected_ctrl[16] = VW_MODEL_ACTION_DOWNLOAD;
+    memcpy(expected_ctrl + 17, "tiny", 4);
+    // remaining 28 bytes are zero already
+    EXPECT(memcmp(buffer, expected_ctrl, VW_MSG_MODEL_CTRL_PAYLOAD_BYTES) == 0);
+    vw_msg_model_ctrl_t decoded_ctrl = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, buffer, written, &decoded_ctrl));
+    EXPECT(decoded_ctrl.action == VW_MODEL_ACTION_DOWNLOAD);
+    EXPECT(memcmp(decoded_ctrl.session_id.bytes, ctrl.session_id.bytes, VW_SESSION_ID_BYTES) == 0);
+    EXPECT(strcmp(decoded_ctrl.model_id, "tiny") == 0);
+    // NUL-padding preserved
+    EXPECT(decoded_ctrl.model_id[4] == '\0');
+    for (size_t i = 5; i < 32; i++) EXPECT(decoded_ctrl.model_id[i] == '\0');
+  }
+
+  // MODEL_PROGRESS golden bytes (16 session +1 stage +1 pct +8 done +8 total +32 model_id)
+  {
+    vw_msg_model_progress_t prog = {0};
+    for (size_t i = 0; i < VW_SESSION_ID_BYTES; i++) prog.session_id.bytes[i] = (uint8_t)(0x11 + i);
+    prog.stage = VW_MODEL_STAGE_DOWNLOADING;
+    prog.pct = 42;
+    prog.bytes_done = 0x0102030405060708ULL;
+    prog.bytes_total = 0x1122334455667788ULL;
+    memset(prog.model_id, 0, 32);
+    memcpy(prog.model_id, "medium", 6);
+    EXPECT(vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, buffer, sizeof(buffer), &written));
+    EXPECT(written == VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES);
+    uint8_t expected_prog[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES] = {0};
+    for (size_t i = 0; i < 16; i++) expected_prog[i] = (uint8_t)(0x11 + i);
+    expected_prog[16] = VW_MODEL_STAGE_DOWNLOADING;
+    expected_prog[17] = 42;
+    // bytes_done LE
+    expected_prog[18] = 0x08;
+    expected_prog[19] = 0x07;
+    expected_prog[20] = 0x06;
+    expected_prog[21] = 0x05;
+    expected_prog[22] = 0x04;
+    expected_prog[23] = 0x03;
+    expected_prog[24] = 0x02;
+    expected_prog[25] = 0x01;
+    // bytes_total LE
+    expected_prog[26] = 0x88;
+    expected_prog[27] = 0x77;
+    expected_prog[28] = 0x66;
+    expected_prog[29] = 0x55;
+    expected_prog[30] = 0x44;
+    expected_prog[31] = 0x33;
+    expected_prog[32] = 0x22;
+    expected_prog[33] = 0x11;
+    memcpy(expected_prog + 34, "medium", 6);
+    EXPECT(memcmp(buffer, expected_prog, VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES) == 0);
+    vw_msg_model_progress_t decoded_prog = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, buffer, written, &decoded_prog));
+    EXPECT(decoded_prog.stage == VW_MODEL_STAGE_DOWNLOADING);
+    EXPECT(decoded_prog.pct == 42);
+    EXPECT(decoded_prog.bytes_done == 0x0102030405060708ULL);
+    EXPECT(decoded_prog.bytes_total == 0x1122334455667788ULL);
+    EXPECT(strcmp(decoded_prog.model_id, "medium") == 0);
+  }
+
+  // Roundtrip: every stage 0..5 and both actions
+  for (uint8_t stage = VW_MODEL_STAGE_IDLE; stage <= VW_MODEL_STAGE_ABORTING; stage++) {
+    vw_msg_model_progress_t prog = {0};
+    memset(prog.session_id.bytes, 0x55, VW_SESSION_ID_BYTES);
+    prog.stage = stage;
+    prog.pct = (stage == VW_MODEL_STAGE_DONE) ? 100 : (uint8_t)(stage * 20);
+    prog.bytes_done = (uint64_t)stage * 1000;
+    prog.bytes_total = 5000;
+    snprintf(prog.model_id, sizeof(prog.model_id), "stage-%u", stage);
+    EXPECT(vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, buffer, sizeof(buffer), &written));
+    EXPECT(written == VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES);
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &prog));
+    vw_msg_model_progress_t dec = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, buffer, written, &dec));
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &dec));
+    EXPECT(dec.stage == stage);
+    EXPECT(dec.pct == prog.pct);
+    EXPECT(dec.bytes_done == prog.bytes_done);
+    EXPECT(dec.bytes_total == prog.bytes_total);
+    EXPECT(strcmp(dec.model_id, prog.model_id) == 0);
+  }
+  for (uint8_t act = VW_MODEL_ACTION_DOWNLOAD; act <= VW_MODEL_ACTION_ABORT; act++) {
+    vw_msg_model_ctrl_t ctrl = {0};
+    memset(ctrl.session_id.bytes, 0x33, VW_SESSION_ID_BYTES);
+    ctrl.action = act;
+    snprintf(ctrl.model_id, sizeof(ctrl.model_id), "small");
+    EXPECT(vw_protocol_encode_payload(VW_MSG_MODEL_CTRL, &ctrl, buffer, sizeof(buffer), &written));
+    EXPECT(written == VW_MSG_MODEL_CTRL_PAYLOAD_BYTES);
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &ctrl));
+    vw_msg_model_ctrl_t dec = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, buffer, written, &dec));
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &dec));
+    EXPECT(dec.action == act);
+    EXPECT(strcmp(dec.model_id, "small") == 0);
+  }
+
+  // Rejection: wrong payload sizes must fail decode
+  {
+    vw_msg_model_ctrl_t ctrl = {0};
+    memset(ctrl.session_id.bytes, 0xAA, VW_SESSION_ID_BYTES);
+    ctrl.action = VW_MODEL_ACTION_DOWNLOAD;
+    snprintf(ctrl.model_id, sizeof(ctrl.model_id), "base");
+    EXPECT(vw_protocol_encode_payload(VW_MSG_MODEL_CTRL, &ctrl, buffer, sizeof(buffer), &written));
+    EXPECT(written == 49);
+    vw_msg_model_ctrl_t dec = {0};
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, buffer, 48, &dec));
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, buffer, 50, &dec));
+    // also validate that truncated buffer is rejected even if we pad buffer to 50
+    uint8_t padded[50] = {0};
+    memcpy(padded, buffer, 49);
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, padded, 48, &dec));
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, padded, 50, &dec));
+  }
+  {
+    vw_msg_model_progress_t prog = {0};
+    memset(prog.session_id.bytes, 0xBB, VW_SESSION_ID_BYTES);
+    prog.stage = VW_MODEL_STAGE_VERIFYING;
+    prog.pct = 50;
+    prog.bytes_done = 100;
+    prog.bytes_total = 200;
+    snprintf(prog.model_id, sizeof(prog.model_id), "tiny");
+    EXPECT(vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, buffer, sizeof(buffer), &written));
+    EXPECT(written == 66);
+    vw_msg_model_progress_t dec = {0};
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, buffer, 65, &dec));
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, buffer, 67, &dec));
+    uint8_t padded[67] = {0};
+    memcpy(padded, buffer, 66);
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, padded, 65, &dec));
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, padded, 67, &dec));
+  }
+
+  // Rejection: invalid enum values must fail validation
+  {
+    vw_msg_model_ctrl_t bad = {0};
+    memset(bad.session_id.bytes, 1, VW_SESSION_ID_BYTES);
+    snprintf(bad.model_id, sizeof(bad.model_id), "tiny");
+    bad.action = 0;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &bad));
+    bad.action = 3;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &bad));
+    bad.action = 255;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &bad));
+    // valid actions must pass
+    bad.action = VW_MODEL_ACTION_DOWNLOAD;
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &bad));
+    bad.action = VW_MODEL_ACTION_ABORT;
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_CTRL, &bad));
+  }
+  {
+    vw_msg_model_progress_t bad = {0};
+    memset(bad.session_id.bytes, 1, VW_SESSION_ID_BYTES);
+    snprintf(bad.model_id, sizeof(bad.model_id), "small");
+    bad.bytes_total = 1000;
+    bad.stage = 6;
+    bad.pct = 50;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    bad.stage = 255;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    bad.stage = VW_MODEL_STAGE_DONE;
+    bad.pct = 101;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    bad.pct = 255;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    // bytes_total ==0 only allowed for IDLE
+    bad.stage = VW_MODEL_STAGE_DOWNLOADING;
+    bad.pct = 50;
+    bad.bytes_total = 0;
+    EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    // valid must pass
+    bad.stage = VW_MODEL_STAGE_IDLE;
+    bad.pct = 0;
+    bad.bytes_total = 0;
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    bad.stage = VW_MODEL_STAGE_DONE;
+    bad.pct = 100;
+    bad.bytes_total = 1000;
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+  }
+
+  // Defensive NUL-termination: decoder force-terminates model_id[31] even if wire has no NUL
+  {
+    uint8_t raw_ctrl[VW_MSG_MODEL_CTRL_PAYLOAD_BYTES] = {0};
+    memset(raw_ctrl, 0x41, sizeof(raw_ctrl));  // fill with 'A', no NUL
+    // keep session_id as 'A's, action 1, but last byte should be forced to NUL after decode
+    raw_ctrl[16] = VW_MODEL_ACTION_DOWNLOAD;
+    vw_msg_model_ctrl_t dec = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, raw_ctrl, sizeof(raw_ctrl), &dec));
+    EXPECT(dec.model_id[31] == '\0');
+    // ensure string is NUL-terminated (strlen <32 because [31] forced NUL)
+    EXPECT(strlen(dec.model_id) < 32);
+    uint8_t raw_prog[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES] = {0};
+    memset(raw_prog, 0x42, sizeof(raw_prog));
+    raw_prog[16] = VW_MODEL_STAGE_DOWNLOADING;
+    raw_prog[17] = 50;
+    vw_msg_model_progress_t decp = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, raw_prog, sizeof(raw_prog), &decp));
+    EXPECT(decp.model_id[31] == '\0');
+    EXPECT(strlen(decp.model_id) < 32);
+  }
+
+  // Unknown type still rejected
+  {
+    EXPECT(!vw_protocol_encode_payload((vw_message_type_t)99, &header, buffer, sizeof(buffer), &written));
+    EXPECT(!vw_protocol_decode_payload((vw_message_type_t)99, buffer, 10, &header));
+    EXPECT(!vw_protocol_validate_payload((vw_message_type_t)99, &header));
+  }
+
   printf("test_protocol_codec PASSED\n");
   return 0;
 }

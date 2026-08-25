@@ -136,6 +136,18 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       }
       return true;
     }
+    case VW_MSG_MODEL_CTRL: {
+      const vw_msg_model_ctrl_t* p = (const vw_msg_model_ctrl_t*)payload;
+      if (p->action != VW_MODEL_ACTION_DOWNLOAD && p->action != VW_MODEL_ACTION_ABORT) return false;
+      return true;
+    }
+    case VW_MSG_MODEL_PROGRESS: {
+      const vw_msg_model_progress_t* p = (const vw_msg_model_progress_t*)payload;
+      if (p->stage > VW_MODEL_STAGE_ABORTING) return false;
+      if (p->pct > 100) return false;
+      if (p->bytes_total == 0 && p->stage != VW_MODEL_STAGE_IDLE) return false;
+      return true;
+    }
     default:
       return false;
   }
