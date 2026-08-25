@@ -15,11 +15,15 @@ local w_status = nil
 -- Robust config bridge: VLC 3.0 Lua exposes config as `config` in some builds
 -- and `vlc.config` in others. Try both so the extension loads on either.
 local function cfg_get(name)
-local ok,
-    val = pcall(function() if vlc and vlc.config and vlc.config.get then return vlc.config.get(name) end if config and
-                config.get then return config.get(name)
-                    end return nil end) if ok then return val end return nil end local function
-    cfg_set(name, value)
+  local ok, val = pcall(function()
+    if vlc and vlc.config and vlc.config.get then return vlc.config.get(name) end
+    if config and config.get then return config.get(name) end
+    return nil
+  end)
+  if ok then return val end
+  return nil
+end
+local function cfg_set(name, value)
   local ok = pcall(function()
     if vlc and vlc.config and vlc.config.set then vlc.config.set(name, value); return true end
     if config and config.set then config.set(name, value); return true end
@@ -356,6 +360,7 @@ function close()
   vlc.msg.info("[VLC-Whisper] extension close (user closed dialog)")
   pcall(function() vlc.deactivate() end)
 end
+
 function menu()
   return { "VLC-Whisper Settings", "Download selected model", "Abort model download" }
 end

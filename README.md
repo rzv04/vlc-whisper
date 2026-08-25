@@ -81,7 +81,10 @@ Requires `libvulkan-dev` and `glslc`.
 
 ```bash
 cmake --preset linux-x64-debug
-cmake --build --preset linux-x64-debug -j4
+# NOTE: the Vulkan-enabled linux-x64-debug preset MUST build with -j1 on
+# 8 GB-RAM machines: ggml-vulkan's mul_mm.comp.cpp alone can consume most of
+# the memory and parallel cc1plus instances get OOM-killed (silent build fail).
+cmake --build --preset linux-x64-debug -j1
 ctest --preset linux-x64-debug --output-on-failure
 ```
 

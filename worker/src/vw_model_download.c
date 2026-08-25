@@ -180,9 +180,11 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
   if (pid < 0) return false;
   if (pid == 0) {
     // Child: exec curl -fsSL -o <part> <url>
-    execlp("curl", "curl", "-fsSL", "-o", dl->part_path, dl->entry.url, (char*)NULL);
+    execlp("curl", "curl", "-fsSL", "--connect-timeout", "15", "--speed-limit", "10240", "--speed-time", "60", "-o",
+           dl->part_path, dl->entry.url, (char*)NULL);
     // Also try /usr/bin/curl if execlp fails
-    execl("/usr/bin/curl", "curl", "-fsSL", "-o", dl->part_path, dl->entry.url, (char*)NULL);
+    execl("/usr/bin/curl", "curl", "-fsSL", "--connect-timeout", "15", "--speed-limit", "10240", "--speed-time", "60",
+          "-o", dl->part_path, dl->entry.url, (char*)NULL);
     _exit(127);
   }
   // Parent: track child pid for abort.
@@ -269,6 +271,7 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
 
   HINTERNET hSession = WinHttpOpen(L"vlc-whisper/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                    WINHTTP_NO_PROXY_BYPASS, 0);
+  WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);  // resolve/connect/send/receive; stalled socket aborts
   if (!hSession) return false;
   pthread_mutex_lock(&dl->lock);
   dl->hSession = hSession;

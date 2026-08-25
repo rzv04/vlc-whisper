@@ -610,8 +610,19 @@ static void* vw_plugin_sender_main(void* arg) {
             if (!vw_worker_client_send_model_ctrl(sys->client, action, mid)) {
               atomic_store(&sys->worker_dead, true);
             }
+            // Edge-triggered control: clear the var and snapshot so re-issuing the SAME request
+            // (e.g. re-downloading a deleted model) diffs again instead of being swallowed as
+            // no-change. Lua polls status/progress mirrors, not this var. Prime the status
+            // mirror too, so the GUI loop never reads the PREVIOUS download's terminal status
+            // for this request.
+            config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-download", "");
+            config_PutInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-progress", 0);
+            config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status",
+                          action == VW_MODEL_ACTION_ABORT ? "aborting" : "downloading");
+            snprintf(sys->cfg_model_download, sizeof(sys->cfg_model_download), "%s", "");
+          } else {
+            snprintf(sys->cfg_model_download, sizeof(sys->cfg_model_download), "%s", dl_cmp);
           }
-          snprintf(sys->cfg_model_download, sizeof(sys->cfg_model_download), "%s", dl_cmp);
         }
         if (diff) {
           bool expected = false;
