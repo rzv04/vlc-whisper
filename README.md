@@ -366,6 +366,27 @@ The dialog preselects current values on open via `vlc.config.get` (nil-safe defa
 - **Settings do NOT persist across VLC restart unless VLC exits cleanly** — `vlcrc` is saved on clean exit (`config_SaveConfigFile`); if VLC is killed, the last `Apply` is lost. Re-apply after a crash or set keys in `vlcrc` manually.
 
 
+### Downloading additional models
+
+The installer bundles the universal multilingual `ggml-tiny.bin` as the default model — offline
+captions work immediately with no download. Additional models (`tiny.en`, `base.en`, `base`,
+`small`, `medium`, `large`) are lazy-downloaded on demand, sha256-pinned against the committed
+catalog (`worker/include/vw_model_catalog.h` / `models/manifest.json`).
+
+To download: select the desired model in the **Model** dropdown, then open the extension menu
+(`Tools` > `Extensions` > `VLC-Whisper Settings` > menu) and choose **Download selected model**.
+Live progress (stage, percent, bytes) appears in the dialog status row (`w:set_text` + `d:update()`
+polling loop, `add_spin_icon`); the worker executes the transfer on a dedicated thread (WinHTTP on
+Windows, `curl` on Linux), streaming sha256 while writing `<model>.part` and atomically renaming on
+verified success. **Abort** is available via the same menu (`Abort model download`) — the `.part`
+file is removed and the status returns to `idle`.
+
+Models are stored per-user (`%LOCALAPPDATA%\vlc-whisper\models` on Windows,
+`$XDG_DATA_HOME/vlc-whisper/models` on Linux; `--model-dir` override), so MS Store installs and
+restricted Program Files locations remain supported. Resolve order: explicit `model-path` → install
+`models/` → per-user dir. All downloads are explicit and worker-only (see ADR-023); offline use
+stays fully functional with the bundled `ggml-tiny.bin`.
+
 ## Manual Plugin Installation (Windows Developer Workflow)
 
 To install and verify the VLC plugin manually during development:

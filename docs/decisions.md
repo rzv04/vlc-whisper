@@ -376,3 +376,52 @@ channel.
 - **In-DLL Qt dialog from the audio filter** — infeasible: `audio_filter` cannot own UI; Qt loop belongs to VLC's
   main thread.
 
+
+## ADR-023: User-Initiated Model Download via Worker (Network Egress Carve-Out)
+
+**Status:** Accepted.
+
+**Context.** The privacy boundary (AGENTS.md Rule 5, ADR-004) forbids network I/O, cloud fallback,
+telemetry, and auto-download. Lazy provisioning of the remaining `models/manifest.json` models
+(`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`) requires network egress, but the
+installer must stay offline and Program Files/WindowsApps must never be written (MS Store installs).
+The question is where and under what conditions that egress is permitted.
+
+**Decision.**
+
+1. **Egress is worker-only, explicit, pinned, and verified.** Network access occurs **ONLY** inside
+   the `vlc-whisper-worker` process, **ONLY** on an explicit user action in the settings GUI
+   (`Download selected model` menu entry), relayed over the existing authenticated local IPC
+   (`MODEL_CTRL` → `MODEL_PROGRESS`, Protocol v1.4), **ONLY** to sha256-pinned Hugging Face URLs
+   (`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/<filename>`) from the committed catalog
+   (`worker/include/vw_model_catalog.h`, mirrored in `models/manifest.json`), and is **ALWAYS**
+   sha256-verified before use (stream hash while writing `.part` → compare → atomic rename).
+2. **Never automatic, never at playback start, never elsewhere.** No background fetch, no start-up
+   prefetch, no retry polling, and no request to any other host. Transcripts and PCM are never
+   persisted or transmitted.
+3. **Plugin stays network-free.** `libvlc_whisper_plugin.dll` performs zero network I/O; it only sends
+   `MODEL_CTRL` and mirrors `MODEL_PROGRESS` into the read-only config vars
+   `whisper-model-progress`/`whisper-model-status`.
+4. **Per-user model directory.** Downloaded models go to a per-user directory
+   (`%LOCALAPPDATA%\vlc-whisper\models` on Windows, `${XDG_DATA_HOME:-$HOME/.local/share}/vlc-whisper/models`
+   on Linux; `--model-dir` override), created on demand. Stale `*.part` files are deleted at worker start;
+   downloads write to `<dest>/<filename>.part` and are atomically renamed on success. Resolve order:
+   explicit `model-path` → install `models/` → per-user dir.
+
+**Consequences.**
+
+- Privacy boundary is preserved with a narrow, auditable carve-out: the only egress is user-initiated,
+  worker-confined, URL-pinned, and hash-gated. Offline playback remains fully functional with the bundled
+  universal `ggml-tiny.bin` (multilingual); downloads are strictly opt-in.
+- Failure is safe: `FAILED`/`ABORTING` → `IDLE` is mirrored to `whisper-model-status`; captions may stop
+  (`E_MODEL_MISSING` semantics on next respawn) while VLC playback continues uninterrupted.
+- Single-flight semantics (second `DOWNLOAD` while active → immediate `FAILED`) keep behavior deterministic.
+
+**Rejected alternatives.**
+
+- **Plugin-side download** — violates the plugin network-free invariant and would block the VLC UI thread;
+  rejected.
+- **Installer-only provisioning** — no in-product recovery when a user selects a not-yet-bundled model
+  mid-session and no MS Store support (cannot write Program Files/WindowsApps); rejected.
+- **Helper scripts only (`vw_download_*`)** — poor UX, requires manual file placement and offers no live
+  progress in the settings dialog; retained only as a developer fallback, not the product path.

@@ -4,7 +4,7 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=3` (Protocol v1.3); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=4` (Protocol v1.4); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
@@ -109,6 +109,22 @@ Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 
 - `resolved_backend`: NUL-padded `"gpu"` or `"cpu"` — the backend **actually used for inference**, not the requested one. A Vulkan-enabled worker in `auto`/`gpu` mode without a usable GPU/IGPU device transparently falls back to CPU at runtime (whisper.cpp behavior) and MUST report `"cpu"`. The plugin mirrors this value into the read-only `whisper-backend-active` config var, which the settings GUI displays.
 - Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted periodically for performance monitoring.
 - Compatibility: v1.2 (44-byte) STATUS payloads remain decodable — a v1.3 decoder zero-fills the missing tail, yielding an empty `resolved_backend`; a v1.3 encoder always writes the full 60-byte payload. Same major version, so no capability flag is required (both peers ship together).
+
+### MODEL_CTRL (v1.4)
+
+Plugin to worker. Payload 49 bytes: session ID, `u8 action` (`DOWNLOAD=1`, `ABORT=2`), `char model_id[32]` (NUL-padded catalog id: `tiny.en|tiny|base.en|base|small|medium|large`; ignored for `ABORT`) — 49 bytes on the wire.
+
+- Semantics: user-initiated model fetch. Worker downloads the requested catalog model to the per-user directory, streaming sha256 verification against the committed catalog (`worker/include/vw_model_catalog.h`), writing to `.part` and atomically renaming on success. Single-flight: a second `DOWNLOAD` while active yields an immediate `MODEL_PROGRESS` `FAILED` response. Unknown `model_id` → `MODEL_PROGRESS` `FAILED`.
+
+### MODEL_PROGRESS (v1.4)
+
+Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADING=1`, `VERIFYING=2`, `DONE=3`, `FAILED=4`, `ABORTING=5`), `u8 pct` (0–100), `u64 bytes_done`, `u64 bytes_total`, `char model_id[32]` (NUL-padded) — 66 bytes on the wire.
+
+- Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) for the settings GUI.
+
+### Model storage
+
+Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. Privacy carve-out: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
 
 ### ERROR
 

@@ -54,7 +54,10 @@ vlc-whisper/
 │   │   ├── vw_hallucination_filter.h          # Non-speech sound tag and isolated punctuation filter
 │   │   ├── vw_segment_builder.h               # Final-subtitles dedup (no expansion/revision), timed segments
 │   │   ├── vw_audio_buffer.h                  # Rolling PCM ring buffer & window extraction
-│   │   └── vw_worker_config.h                 # Model path validation, --vad-model CLI & auto-discovery
+│   │   ├── vw_worker_config.h                 # Model path validation, --vad-model CLI & auto-discovery
+│   │   ├── vw_sha256.h                        # Streaming SHA-256 for download verification
+│   │   ├── vw_model_catalog.h                 # Committed catalog (7 models, pinned sha256/bytes)
+│   │   └── vw_model_download.h                # Download engine: thread, single-flight, abort, progress
 │   ├── src/
 │   │   ├── main.c                             # Worker executable entry point: CLI parsing & signal handling
 │   │   ├── vw_worker.c                        # Worker IPC state machine, look-ahead decoding & message loop
@@ -66,7 +69,9 @@ vlc-whisper/
 │   │   ├── vw_hallucination_filter.c          # Sound descriptor tag stripping and isolated punctuation filter
 │   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
-│   │   └── vw_worker_config.c                 # Configuration setup, --vad-model parsing and auto-discovery
+│   │   ├── vw_worker_config.c                 # Configuration setup, --vad-model parsing and auto-discovery
+│   │   ├── vw_sha256.c                        # Streaming SHA-256 implementation
+│   │   └── vw_model_download.c                # WinHTTP/curl download, .part → verify → atomic rename
 │   └── third_party/                           # Pinned external C/C++ dependencies
 │       ├── vlc-3.0.23/                        # Pinned VLC header SDK headers
 │       └── whisper.cpp/                       # Pinned whisper.cpp C/C++ inference engine
@@ -111,7 +116,8 @@ vlc-whisper/
 │   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
-│   │   └── test_worker_config.c               # Worker CLI config (--token/--pipe/--model/--vad-model) parsing tests
+│   │   ├── test_worker_config.c               # Worker CLI config (--token/--pipe/--model/--vad-model) parsing tests
+│   │   └── test_model_download.c              # Model download: sha256 vectors, catalog, progress, retry tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test
 │   │   └── test_worker_lifecycle.c            # Worker startup, crash recovery & shutdown test
@@ -176,6 +182,12 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
 | `vw_segment_builder.c` | Ordered timed segments, final-subtitles dedup, dynamic queue growth |
 | `vw_worker_config.c`   | Validate model path, initial `en` language, and safe defaults      |
+| `vw_sha256.h`          | Streaming SHA-256 computation for model download verification      |
+| `vw_sha256.c`          | Incremental SHA-256 implementation, streaming hash while writing .part |
+| `vw_model_catalog.h`   | Committed model catalog (7 models, pinned sha256/bytes, Hugging Face URLs) |
+| `vw_model_download.h`  | Download engine interface: dedicated thread, single-flight, abort, progress snapshot |
+| `vw_model_download.c`  | WinHTTP/curl download, .part → sha256 verify → atomic rename into per-user dir |
+| `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, retry-then-fail (unit test) |
 
 The builder exposes `vw_segment_builder_push_hypothesis` (whole-phrase final-subtitles dedup: exact,
 fragment, and expanded superstring hypotheses are dropped; queue grows dynamically; history commits after a
