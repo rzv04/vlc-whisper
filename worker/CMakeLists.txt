@@ -85,6 +85,8 @@ add_executable(vlc-whisper-worker
     src/vw_audio_buffer.c
     src/vw_worker_config.c
     src/vw_worker_queue.c
+    src/vw_sha256.c
+    src/vw_model_download.c
     ${VW_SOURCE_DECODER_SRCS}
     ../plugin/src/vw_platform_linux.c
     ../plugin/src/vw_platform_win32.c
@@ -126,7 +128,7 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 
 if(WIN32)
     # Windows Media Foundation and BCrypt libraries
-    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
+    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp)
 endif()
 
 if(OpenMP_CXX_FOUND AND NOT WIN32)
