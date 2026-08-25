@@ -69,7 +69,8 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
-                                                           const char* language, int n_threads, int gpu_device) {
+                                                           const char* language, int n_threads, int gpu_device,
+                                                           const char* model_dir) {
   if (!endpoint_name || !auth_token) {
     return NULL;
   }
@@ -80,7 +81,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
     token_to_hex(auth_token, token_hex);
     // 19b: argv grows from 8 to 16 to carry --backend/--gpu-device/--language/--n-threads
-    const char* argv[16];
+    const char* argv[20];
     size_t argc = 0;
     argv[argc++] = executable_path;
     argv[argc++] = "--pipe";
@@ -110,6 +111,10 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     snprintf(threads_buf, sizeof(threads_buf), "%d", eff_threads);
     argv[argc++] = "--n-threads";
     argv[argc++] = threads_buf;
+    if (model_dir && model_dir[0]) {
+      argv[argc++] = "--model-dir";
+      argv[argc++] = model_dir;
+    }
     argv[argc] = NULL;
     if (!vw_platform_spawn_process(executable_path, argv, &worker_process)) {
       return NULL;
@@ -229,7 +234,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const char* model_path) {
   // Wrapper preserving legacy 4-arg ABI for tests; forwards defaults (auto/en/4, no gpu-device)
   return vw_worker_client_launch_and_connect_ex(executable_path, endpoint_name, auth_token, model_path, "auto", "en", 4,
-                                                -1);
+                                                -1, NULL);
 }
 
 void vw_worker_client_disconnect(vw_worker_client_t* client) {
@@ -447,6 +452,33 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
   return true;
 }
 
+bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action, const char* model_id) {
+  if (!client || !client->pipe_handle || !client->session_active) return false;
+  vw_msg_model_ctrl_t msg;
+  memset(&msg, 0, sizeof(msg));
+  msg.action = action;
+  if (model_id) {
+    snprintf(msg.model_id, sizeof(msg.model_id), "%s", model_id);
+  }
+  uint8_t payload_buf[128];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_MODEL_CTRL, &msg, payload_buf, sizeof(payload_buf), &payload_len))
+    return false;
+  vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
+                           .major = VW_PROTOCOL_VERSION_MAJOR,
+                           .type = VW_MSG_MODEL_CTRL,
+                           .payload_length = (uint32_t)payload_len,
+                           .sequence = ++client->sequence};
+  uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
+  if (!vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf)) ||
+      !vw_ipc_send(client->pipe_handle, payload_buf, payload_len)) {
+    vw_worker_client_drop_transport(client);
+    return false;
+  }
+  return true;
+}
+
 // Sends one control frame (PAUSE/RESUME/STOP) stamped with the client's session id and reason.
 // Drops the transport fail-closed on any write failure (the stream is mis-framed or dead — a
 // partial control frame can never be re-synced). Returns true only when the whole frame was sent.
@@ -594,6 +626,13 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
         if (vw_protocol_decode_payload(VW_MSG_ERROR, payload, hdr.payload_length, &out->error) &&
             vw_protocol_validate_payload(VW_MSG_ERROR, &out->error)) {
           out->type = VW_MSG_ERROR;
+          decoded = true;
+        }
+        break;
+      case VW_MSG_MODEL_PROGRESS:
+        if (vw_protocol_decode_payload(VW_MSG_MODEL_PROGRESS, payload, hdr.payload_length, &out->progress) &&
+            vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &out->progress)) {
+          out->type = VW_MSG_MODEL_PROGRESS;
           decoded = true;
         }
         break;
