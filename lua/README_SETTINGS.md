@@ -25,9 +25,20 @@ VLC 3.0's Lua dropdown API has no selection setter: it selects the first value a
 the persisted engine, model, and language choice first, followed by the remaining choices; the order may change after
 each Apply, but `get_value()` still returns the stable numeric choice ID.
 
+English-only models (`tiny.en` and `base.en`) expose only `English (en)` and always write `en` on Apply. VLC 3.0
+also has no dropdown-change callback, so changing Model updates the Language list after Apply or Download (or when the
+dialog is reopened), not while the dropdown is merely open. The same pinned API has no button enabled/disabled method;
+the Download button changes to **Re-download Selected Model** when a file is already present and its callback remains
+safe to invoke.
+
 ## Model download behavior
 
-The existing single dialog and menu expose **Download selected model** and **Abort model download**. Each Lua
+The existing single dialog and menu expose **Download selected model** and **Abort model download**. On dialog open and
+again before a download request, Lua performs bounded existence checks for the selected filename in the bundled
+`<VLC>\models` directory and the worker's per-user model directory (`%LOCALAPPDATA%\vlc-whisper\models` on
+Windows, `$XDG_DATA_HOME/vlc-whisper/models` or `$HOME/.local/share/vlc-whisper/models` on Linux). It does not hash
+large files on VLC's UI thread. The worker remains the authority for SHA-256 verification of downloaded `.part` files.
+Each Lua
 callback only writes `whisper-model-download`, `whisper-model-status`, and `whisper-model-progress` config values,
 updates the current label once, and returns. There is no `os.clock`, `dlg:update`, timer, sleep, polling loop, or
 network call in Lua.
@@ -67,7 +78,7 @@ directory, including incomplete `.part` files.
 
 2. Open `Tools > Messages`, set **Verbosity** to `2` (Debug) — or launch with `vlc.exe -vvv --audio-filter=vlc_whisper`.
 
-3. Play any media. Open `View > VLC-Whisper Settings` (on some skins `Tools > Extensions > VLC-Whisper Settings`). The dialog puts current engine, model, and language values first via `vlc.config.get`; the **Detected backend** label initially shows `(pending — start playback)` and switches to `gpu` or `cpu` after the first session `STARTED` / `STATUS` `resolved_backend`.
+3. Play any media. Open `View > VLC-Whisper Settings` (on some skins `Tools > Extensions > VLC-Whisper Settings`). The dialog puts current engine, model, and language values first via `vlc.config.get`; the **Model availability** row reports bundled, downloaded, or missing; the **Detected backend** label initially shows `(pending — start playback)` and switches to `gpu` or `cpu` after the first session `STARTED` / `STATUS` `resolved_backend`.
 
 4. Change **Language** `en` → `ro`, click **Apply**. Expected within ~2 s (next sender-loop poll):
 
@@ -78,9 +89,11 @@ directory, including incomplete `.part` files.
    With the bundled multilingual `tiny` model, `ro` is a valid transcription language. The dialog still has no
    `auto` entry.
 
-5. Change **Engine** to `gpu` on a machine without Vulkan, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` mirrored into `whisper-backend-active`).
+5. Select `tiny.en` or `base.en`. The Language dropdown contains only `English (en)` after Apply or Download, and Apply writes `whisper-language=en` even if a stale non-English value was previously stored.
 
-6. Close and re-open the dialog — it re-reads `whisper-backend`, `model-path`, `whisper-language`, `whisper-threads` and shows the last applied values.
+6. Change **Engine** to `gpu` on a machine without Vulkan, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` mirrored into `whisper-backend-active`).
+
+7. Close and re-open the dialog — it re-reads `whisper-backend`, `model-path`, `whisper-language`, `whisper-threads` and shows the last applied values.
 
 ## Linux manual test
 

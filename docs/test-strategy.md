@@ -39,6 +39,9 @@ Golden expected text should tolerate model-version variance only through explici
 - Worker absent, wrong version, invalid token, model missing/corrupt, pipe disconnect, bad payload, invalid UTF-8, or worker nonzero exit: safe disable, no playback impact.
 - Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises.
 - Existing subtitle track and VLC-whisper behavior follow the documented coexistence policy.
+- Lua settings acceptance: opening the single dialog reports bundled/per-user model presence; `tiny.en` and `base.en`
+  force `en` after Apply or Download; existing files offer re-download without blocking VLC; language choices persist
+  after closing and reopening the dialog.
 
 ### Automated failure-path coverage
 

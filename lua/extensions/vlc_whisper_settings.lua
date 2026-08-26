@@ -11,6 +11,8 @@ local w_model = nil
 local w_language = nil
 local w_threads = nil
 local w_status = nil
+local w_model_status = nil
+local w_download = nil
 
 -- Robust config bridge: VLC 3.0 Lua exposes config as `config` in some builds
 -- and `vlc.config` in others. Try both so the extension loads on either.
@@ -100,6 +102,85 @@ local language_to_id = { ["en"] = 1, ["ro"] = 2, ["tr"] = 3, ["de"] = 4, ["fr"] 
 local default_model_id = 2
 local default_model_path = model_path_map[default_model_id] or "models/ggml-tiny.bin"
 
+local function model_is_english_only(model_id)
+  return model_id == 1 or model_id == 3
+end
+
+local function env_get(name)
+  local ok, value = pcall(function()
+    if os and os.getenv then return os.getenv(name) end
+    return nil
+  end)
+  if ok then return value end
+  return nil
+end
+
+local function join_path(base, suffix)
+  if base == nil or base == "" then return nil end
+  if base:sub(-1) == "/" or base:sub(-1) == "\\" then return base .. suffix end
+  return base .. "/" .. suffix
+end
+
+local function config_dir(name)
+  local ok, value = pcall(function()
+    if vlc and vlc.config and vlc.config[name] then return vlc.config[name]() end
+    if config and config[name] then return config[name]() end
+    return nil
+  end)
+  if ok then return value end
+  return nil
+end
+
+local function file_exists(path)
+  if path == nil or path == "" then return false end
+  local ok, file = pcall(function()
+    if vlc and vlc.io and vlc.io.open then return vlc.io.open(path, "rb") end
+    return nil
+  end)
+  if not ok or file == nil then return false end
+  pcall(function() file:close() end)
+  return true
+end
+
+local function model_filename(model_id)
+  local relative = model_path_map[model_id]
+  if relative == nil then return nil end
+  return relative:match("([^/\\]+)$")
+end
+
+local function model_candidate_paths(model_id)
+  local filename = model_filename(model_id)
+  if filename == nil then return nil, nil end
+
+  local bundled_dir = join_path(config_dir("datadir"), "models")
+  local local_appdata = env_get("LOCALAPPDATA")
+  if local_appdata == nil or local_appdata == "" then
+    local user_profile = env_get("USERPROFILE")
+    if user_profile ~= nil and user_profile ~= "" then local_appdata = join_path(user_profile, "AppData/Local") end
+  end
+  local data_root = local_appdata or env_get("XDG_DATA_HOME")
+  if data_root == nil or data_root == "" then
+    data_root = join_path(env_get("HOME"), ".local/share")
+  end
+  local user_dir = join_path(join_path(data_root, "vlc-whisper"), "models")
+  return join_path(bundled_dir, filename), join_path(user_dir, filename)
+end
+
+local function model_availability(model_id)
+  local bundled_path, user_path = model_candidate_paths(model_id)
+  return {
+    bundled = file_exists(bundled_path),
+    user = file_exists(user_path),
+  }
+end
+
+local function model_availability_text(availability)
+  if availability.bundled and availability.user then return "Model: available (bundled + downloaded)" end
+  if availability.bundled then return "Model: available (bundled)" end
+  if availability.user then return "Model: available (downloaded)" end
+  return "Model: not installed (download required)"
+end
+
 local function clamp_threads(v)
   local n = tonumber(v)
   if n == nil then n = 4 end
@@ -140,6 +221,29 @@ local function populate_dropdown(widget, labels, selected_id)
   end
 end
 
+local function refresh_language_dropdown(model_id, selected_id)
+  if w_language == nil then return end
+  w_language:clear()
+  if model_is_english_only(model_id) then
+    w_language:add_value(language_labels[1], 1)
+    return
+  end
+  populate_dropdown(w_language, language_labels, selected_id or 1)
+end
+
+local function refresh_model_status(model_id)
+  local availability = model_availability(model_id)
+  if w_model_status ~= nil then
+    pcall(function() w_model_status:set_text(model_availability_text(availability)) end)
+  end
+  if w_download ~= nil then
+    local caption = (availability.bundled or availability.user) and "Re-download Selected Model"
+      or "Download Selected Model"
+    pcall(function() w_download:set_text(caption) end)
+  end
+  return availability
+end
+
 local function on_apply()
   local eng_id = w_engine and w_engine:get_value() or 1
   local mod_id = w_model and w_model:get_value() or default_model_id
@@ -149,8 +253,11 @@ local function on_apply()
   local engine = engine_map[eng_id] or "auto"
   local model_label = model_map[mod_id] or "tiny"
   local model_path = model_path_map[mod_id] or default_model_path
-  local language = language_map[lang_id] or "en"
+  local language = model_is_english_only(mod_id) and "en" or language_map[lang_id] or "en"
   local threads = clamp_threads(thr_text)
+
+  if model_is_english_only(mod_id) then lang_id = 1 end
+  pcall(function() refresh_language_dropdown(mod_id, lang_id) end)
 
   -- Reflect clamped value back into the text input when possible.
   if w_threads ~= nil then
@@ -177,6 +284,7 @@ local function on_apply()
     if active == nil or active == "" then active = "(pending -- start playback)" end
     pcall(function() w_status:set_text("Detected backend: " .. tostring(active)) end)
   end
+  refresh_model_status(mod_id)
 end
 
 local function on_abort_download()
@@ -203,6 +311,16 @@ local function on_download()
   end
   -- Map to catalog id (plugin expects these exact strings).
   local catalog_id = catalog_id_map[sel_id] or "tiny"
+  local selected_language = 1
+  pcall(function()
+    if w_language ~= nil then selected_language = w_language:get_value() end
+  end)
+  if selected_language == nil or selected_language < 1 then selected_language = 1 end
+  pcall(function() refresh_language_dropdown(sel_id, selected_language) end)
+  local availability = refresh_model_status(sel_id)
+  if availability.bundled or availability.user then
+    vlc.msg.info("[VLC-Whisper] model already present; download remains available for refresh: " .. tostring(catalog_id))
+  end
 
   -- Check if playback is active / worker is connected.
   local is_playing = false
@@ -266,6 +384,7 @@ local function build_dialog()
   local sel_engine = engine_to_id[cur_backend] or 1
   local sel_model = resolve_model_id_from_path(cur_model_path)
   local sel_language = language_to_id[cur_language] or 1
+  if model_is_english_only(sel_model) then sel_language = 1 end
 
   -- Row 1: Engine
   dlg:add_label("Engine:", 1, 1, 1, 1)
@@ -291,7 +410,7 @@ local function build_dialog()
   -- Row 3: Language (concrete codes)
   dlg:add_label("Language:", 1, 3, 1, 1)
   w_language = dlg:add_dropdown(2, 3, 3, 1)
-  populate_dropdown(w_language, language_labels, sel_language)
+  refresh_language_dropdown(sel_model, sel_language)
 
   -- Row 4: Threads -- text input (VLC Lua has no spinbox widget).
   dlg:add_label("Threads:", 1, 4, 1, 1)
@@ -299,13 +418,18 @@ local function build_dialog()
 
   -- Row 5: Action Buttons (Apply & Download Selected Model)
   dlg:add_button("Apply", on_apply, 1, 5, 2, 1)
-  dlg:add_button("Download Selected Model", on_download, 3, 5, 2, 1)
+  w_download = dlg:add_button("Download Selected Model", on_download, 3, 5, 2, 1)
+  refresh_model_status(sel_model)
 
   -- Row 6: Detected backend / download status
   w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 6, 4, 1)
 
-  -- Row 7: Hint
-  dlg:add_label("Model selection allowed even if file absent (E_MODEL_MISSING disables captions).", 1, 7, 4, 1)
+  -- Row 7: Model availability
+  w_model_status = dlg:add_label("Model availability: checking...", 1, 7, 4, 1)
+  refresh_model_status(sel_model)
+
+  -- Row 8: Hint
+  dlg:add_label(".en models force English; downloads are hash-checked by the worker.", 1, 8, 4, 1)
 end
 
 function descriptor()
@@ -321,6 +445,7 @@ function descriptor()
       .. "plugin polls config and respawns worker mid-play (brief caption gap); download progress is rendered by C. "
       .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
       .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent. "
+      .. ".en models force English; bundled and per-user model files are checked before download. "
       .. "Menu entries: VLC-Whisper Settings, Download selected model, Abort model download.",
     capabilities = { "menu" },
   }
@@ -337,6 +462,8 @@ function activate()
   w_language = nil
   w_threads = nil
   w_status = nil
+  w_model_status = nil
+  w_download = nil
   build_dialog()
   dlg:show()
   vlc.msg.info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads)")
@@ -354,6 +481,8 @@ function deactivate()
   w_language = nil
   w_threads = nil
   w_status = nil
+  w_model_status = nil
+  w_download = nil
 end
 
 function close()

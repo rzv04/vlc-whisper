@@ -414,6 +414,10 @@ The question is where and under what conditions that egress is permitted.
    The plugin sender thread consumes worker progress and renders it on a dedicated C-managed SPU channel. Caption
    blanking on pause/seek does not flush that channel, so the download continues while media is paused; abort,
    worker disconnect, or shutdown cancels the worker download and clears the overlay.
+6. **Local preflight only.** The Lua dialog may open selected model filenames briefly to distinguish bundled and
+   per-user presence, but never hashes large files on VLC's UI thread; worker downloads remain SHA-256-authoritative.
+   VLC 3.0 exposes no dropdown-change callback or widget enabled/disabled method, so `.en` language restriction and
+   availability captions refresh on dialog construction or bounded Apply/Download callbacks.
 
 **Consequences.**
 
