@@ -25,13 +25,13 @@
 
 ## Live Demo
 
-<br>
-
 <p align="center">
-  <img src="./assets/vlc-whisper-demo.gif" width="900" alt="VLC-Whisper live transcription demo">
+  <video
+    src="https://private-user-images.githubusercontent.com/51057524/641721040-46830024-94fb-4a54-ade1-6f6b374b0598.mp4?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3ODc3NjU0NDUsIm5iZiI6MTc4Nzc2NTE0NSwicGF0aCI6Ii81MTA1NzUyNC82NDE3MjEwNDAtNDY4MzAwMjQtOTRmYi00YTU0LWFkZTEtNmY2YjM3NGIwNTk4Lm1wND9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA4MjYlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwODI2VDE3MjU0NVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWI0NzAxNWI5ZmUxYThlYzM0NGNjZDc4OWU3ZWYyNGJkMjFjMGIyZjUzZTgzNmEwOTBkYzE2ODdhNzc1Y2I0ZjAmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT12aWRlbyUyRm1wNCJ9.Lt0nfQZEP0CS8P5pj3fQ8KTHJjXp4x6fh2xYzQ5WzjM"
+    width="900"
+    controls>
+  </video>
 </p>
-
----
 
 ## Key Highlights
 
