@@ -41,6 +41,9 @@ static bool g_last_subpic_b_subtitle = false;
 static bool g_last_subpic_b_ephemer = false;
 static char g_last_subpic_text[128];
 static int g_flushed_channels[64];
+static int g_operation_sequence = 0;
+static int g_last_put_sequence = 0;
+static int g_last_flush_sequence = 0;
 
 vlc_tick_t mdate(void) { return (vlc_tick_t)g_mock_mdate; }
 
@@ -52,6 +55,7 @@ int vout_RegisterSubpictureChannel(vout_thread_t* vout) {
 
 void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
   (void)vout;
+  g_last_put_sequence = ++g_operation_sequence;
   g_put_subpicture_calls++;
   if (subpic) {
     g_last_subpic_start = subpic->i_start;
@@ -73,6 +77,7 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
 
 void vout_FlushSubpictureChannel(vout_thread_t* vout, int channel) {
   (void)vout;
+  g_last_flush_sequence = ++g_operation_sequence;
   if (g_flush_calls < (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]))) {
     g_flushed_channels[g_flush_calls] = channel;
   }
@@ -210,6 +215,10 @@ int main(void) {
 
   g_register_spu_calls = 0;
   g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
+  g_operation_sequence = 0;
+  g_last_put_sequence = 0;
+  g_last_flush_sequence = 0;
   g_mock_register_channel_return = 42;
   g_mock_mdate = 100000000LL;
 
@@ -223,9 +232,10 @@ int main(void) {
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 102000000LL);
   assert(g_last_subpic_b_subtitle == false);
-  // b_ephemer is the designated overlap-prevention mechanism (ADR-021): VLC keeps only the
-  // newest same-channel ephemeral subpicture, so a successor cue auto-evicts this one. If this
-  // flag ever regresses, adjacent short cues WOULD visibly overlap — the very bug Greptile flags.
+  assert(g_flush_calls == 1);
+  assert(g_flush_channel == 42);
+  assert(g_last_flush_sequence < g_last_put_sequence);
+  // Ephemeral selection remains a secondary VLC cleanup mechanism after the explicit live-channel replacement.
   assert(g_last_subpic_b_ephemer == true);
 
   // Subsequent call reuses already-registered channel
@@ -233,6 +243,8 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 0, false));
   assert(g_register_spu_calls == 1);  // No duplicate registration call
   assert(g_put_subpicture_calls == 2);
+  assert(g_flush_calls == 2);
+  assert(g_last_flush_sequence < g_last_put_sequence);
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 102000000LL);
 
@@ -290,11 +302,13 @@ int main(void) {
                                      .text_bytes = 14,
                                      .is_final = true};
   g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
   g_mock_rate = 1.0f;
   // Current input playhead is 10s -> lead is +5s
   assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 10000000LL, true));
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
+  assert(g_flush_calls == 0);                              // Source look-ahead cues must remain queued on the channel.
   assert(g_last_subpic_start == 100000000LL + 5000000LL);  // mdate (100s) + 5s lead = 105s
   assert(g_last_subpic_stop == 100000000LL + 7000000LL);   // mdate (100s) + 7s lead = 107s
 

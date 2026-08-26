@@ -80,7 +80,7 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
 }
 
 static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id, const char* text, int alignment, int y,
-                                            int64_t start_tick, int64_t stop_tick) {
+                                            int64_t start_tick, int64_t stop_tick, bool replace_existing) {
   if (!vout || !text || channel_id < 0) {
     return false;
   }
@@ -127,6 +127,10 @@ static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id,
   subpic->b_absolute = false;
   subpic->b_fade = true;
 
+  if (replace_existing) {
+    // Both operations enter VLC's ordered vout control queue, so the prior live cue is rejected before replacement.
+    vout_FlushSubpictureChannel(vout, channel_id);
+  }
   vout_PutSubpicture(vout, subpic);
   return true;
 }
@@ -204,7 +208,7 @@ bool vw_caption_presenter_show_model_progress(vw_caption_presenter_t* presenter,
   int64_t start_tick = (int64_t)mdate();
   bool rendered = vw_caption_presenter_render_spu(
       vout, presenter->model_progress_channel_id, progress_text, SUBPICTURE_ALIGN_TOP, 20, start_tick,
-      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US));
+      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US), false);
   vlc_object_release(VLC_OBJECT(vout));
   return rendered;
 }
@@ -327,7 +331,7 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     start_tick = vw_saturating_add_i64(now_tick, lead_us);
     stop_tick = vw_saturating_add_i64(start_tick, dur_wallclock_us);
     rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, segment->text_utf8,
-                                               SUBPICTURE_ALIGN_BOTTOM, 20, start_tick, stop_tick);
+                                               SUBPICTURE_ALIGN_BOTTOM, 20, start_tick, stop_tick, !media_timeline);
   }
 
   // Graceful fallback to OSD if SPU rendering failed or was unregistered

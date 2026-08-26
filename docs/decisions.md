@@ -304,7 +304,8 @@ to REVISE already-emitted subtitles.
 - **Zero Flash Cues**: Every subtitle is displayed with sufficient human reading time ($\ge 1.0\text{s}$ wall clock).
 - **No Cue Collisions**: Cues display sequentially without visual overlap in VLC's SPU subpicture pipeline.
 - **Deterministic Latency**: Greedy decoding ensures bounded, single-pass inference without search latency spikes.
-- **Overlap prevention mechanism (verified 2026-08-20)**: the presenter posts every cue with `b_ephemer = true` (`vw_caption_presenter.c`), so VLC's SPU keeps only the newest same-channel ephemeral subpicture (`vlc_subpicture.h`: "displayed until the next one appear"). A successor cue therefore auto-evicts its predecessor regardless of the predecessor's posted `i_stop` — the 1s reading floor may leave two cues' *intervals* overlapping in the SPU chain, but only one is ever *rendered*. Interval clipping in `show_segment` is the lookahead precision layer (successor known in advance); ephemeral eviction is the safety net for the live-PCM path (successor not yet knowable at flush time). Static interval-overlap analysis that ignores `b_ephemer` is not a visible defect. This is a regression-tested invariant (`test_caption_presenter.c` asserts `b_ephemer == true` on every posted subpicture).
+- **Overlap prevention mechanism (corrected 2026-08-26)**: `b_ephemer = true` remains a secondary SPU selection safeguard, but it does not synchronously replace a queued same-channel subpicture. For live PCM, the presenter explicitly queues `vout_FlushSubpictureChannel()` immediately before `vout_PutSubpicture()`; VLC's FIFO vout control queue rejects the prior live cue before adding its replacement. Look-ahead source cues do not flush the channel: their successor-aware interval clipping remains the precision mechanism that permits multiple future cues to coexist without overlap.
+
 ## ADR-022: Settings GUI via VLC Lua Extension (Spike, Non-Bundled Concept)
 
 **Status:** Accepted (Spike).
