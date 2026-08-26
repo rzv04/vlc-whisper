@@ -15,17 +15,22 @@
 // PIDs of children that were SIGKILLed but did not become waitable within the
 // termination grace period (e.g. stuck in D-state). They are reaped
 // opportunistically at every platform process call once they become waitable.
-// The registry is bounded (VW_MAX_UNREAPED_PIDS): reaching the bound requires
-// 16 concurrent unkillable children, in which case the pid is dropped with no
-// further cleanup path — pathological and intentionally unsupported.
 #define VW_MAX_UNREAPED_PIDS 16
 static pid_t vw_unreaped_pids[VW_MAX_UNREAPED_PIDS];
 static size_t vw_unreaped_count = 0;
 static pthread_mutex_t vw_unreaped_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static void vw_platform_register_unreaped(pid_t pid) {
+  if (pid <= 0) return;
+  pthread_mutex_lock(&vw_unreaped_mutex);
+  if (vw_unreaped_count < VW_MAX_UNREAPED_PIDS) {
+    vw_unreaped_pids[vw_unreaped_count++] = pid;
+  }
+  pthread_mutex_unlock(&vw_unreaped_mutex);
+}
+
 // Reap any previously-unkillable children that have since become waitable.
 // Called from every process entry point; WNOHANG never blocks.
-// Protected by vw_unreaped_mutex against concurrent thread access.
 static void vw_platform_reap_unreaped(void) {
   pthread_mutex_lock(&vw_unreaped_mutex);
   size_t i = 0;
@@ -42,23 +47,52 @@ static void vw_platform_reap_unreaped(void) {
   pthread_mutex_unlock(&vw_unreaped_mutex);
 }
 
+static void* vw_platform_detached_reaper(void* arg) {
+  pid_t pid = *(pid_t*)arg;
+  free(arg);
+  int status;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  return NULL;
+}
+
+static void vw_platform_reap_detached(pid_t pid) {
+  pid_t* arg = (pid_t*)malloc(sizeof(*arg));
+  if (!arg) {
+    vw_platform_register_unreaped(pid);
+    return;
+  }
+  *arg = pid;
+  pthread_t thread;
+  if (pthread_create(&thread, NULL, vw_platform_detached_reaper, arg) != 0) {
+    free(arg);
+    vw_platform_register_unreaped(pid);
+    return;
+  }
+  pthread_detach(thread);
+}
+
 #if defined(__linux__)
 #include <sys/random.h>
 #endif
 #include <fcntl.h>
-#include <stdatomic.h>
 
 extern char** environ;
 
 bool vw_platform_get_random_bytes(void* buffer, size_t size) {
-  if (!buffer || size == 0) {
-    return false;
-  }
+  if (!buffer || size == 0) return false;
 #if defined(__linux__)
-  ssize_t ret = getrandom(buffer, size, 0);
-  if (ret == (ssize_t)size) {
-    return true;
+  size_t total = 0;
+  while (total < size) {
+    ssize_t ret = getrandom((uint8_t*)buffer + total, size - total, 0);
+    if (ret > 0) {
+      total += (size_t)ret;
+      continue;
+    }
+    if (ret < 0 && errno == EINTR) continue;
+    break;
   }
+  if (total == size) return true;
 #endif
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -77,13 +111,8 @@ bool vw_platform_get_random_bytes(void* buffer, size_t size) {
     close(fd);
     if (total == size) return true;
   }
-  static _Atomic unsigned int seed = 0;
-  unsigned int s = atomic_fetch_add(&seed, 1);
-  if (s == 0) s = (unsigned int)time(NULL) ^ (unsigned int)getpid();
-  for (size_t i = 0; i < size; i++) {
-    ((uint8_t*)buffer)[i] = (uint8_t)(rand_r(&s) % 256);
-  }
-  return true;
+  // Authentication tokens must never silently degrade to a predictable PRNG.
+  return false;
 }
 
 int64_t vw_platform_get_time_us(void) {
@@ -99,40 +128,32 @@ int64_t vw_platform_get_monotonic_time_us(void) {
   if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
     return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
   }
-  // clock_gettime(CLOCK_MONOTONIC) is always supported on Linux >= 2.6, so
-  // this path is unreachable in practice. The wall-clock fallback degrades the
-  // monotonic guarantee if it ever triggers (clock adjustments could move the
-  // value backward); kept only to avoid returning garbage.
   return (int64_t)time(NULL) * 1000000LL;
 }
 
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
   vw_platform_reap_unreaped();
-  if (!executable_path || !argv) {
-    return false;
-  }
+  if (!executable_path || !argv) return false;
 
-  // Bare name (no directory) => PATH search. Never gate on CWD; use
-  // posix_spawnp's PATH search semantics directly.
-  if (!strchr(executable_path, '/')) {
-    pid_t pid;
-    int ret = posix_spawnp(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
-    if (ret == 0 && out_process) *out_process = pid;
-    return ret == 0;
-  }
-
-  // Path-form name: validate presence at that location, then spawn.
-  if (access(executable_path, F_OK) != 0) {
-    return false;
-  }
   pid_t pid;
-  int ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
-  if (ret == 0 && out_process) *out_process = pid;
-  return ret == 0;
+  int ret;
+  if (!strchr(executable_path, '/')) {
+    ret = posix_spawnp(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
+  } else {
+    if (access(executable_path, F_OK) != 0) return false;
+    ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
+  }
+  if (ret != 0) return false;
+
+  if (out_process)
+    *out_process = pid;
+  else
+    vw_platform_reap_detached(pid);
+  return true;
 }
 
 bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
-  if (process <= 0) return false;  // waitpid(0) would reap any process-group child
+  if (process <= 0) return false;
   vw_platform_reap_unreaped();
   pid_t pid = process;
   uint32_t elapsed_ms = 0;
@@ -141,11 +162,8 @@ bool vw_platform_wait_process(vw_process_t process, uint32_t timeout_ms) {
   while (elapsed_ms <= timeout_ms) {
     int status;
     pid_t ret = waitpid(pid, &status, WNOHANG);
-    if (ret == pid) {
-      return true;
-    } else if (ret == -1) {
-      if (errno == ECHILD) return true;
-    }
+    if (ret == pid) return true;
+    if (ret == -1 && errno == ECHILD) return true;
 
     if (elapsed_ms >= timeout_ms) break;
     vw_platform_sleep_ms(sleep_ms);
@@ -159,19 +177,7 @@ void vw_platform_terminate_process(vw_process_t process) {
     pid_t pid = (pid_t)process;
     vw_platform_reap_unreaped();
     kill(pid, SIGKILL);
-    // SIGKILL delivery is asynchronous: a single nonblocking waitpid can
-    // observe the child before it becomes waitable and leave a zombie until
-    // the parent exits. Wait (bounded) for the reap; a D-state child may not
-    // die within the grace period. Never discard the pid in that case — keep
-    // it registered so vw_platform_reap_unreaped reaps it once it becomes
-    // waitable (a pending SIGKILL kills it as soon as it leaves D-state).
-    if (!vw_platform_wait_process(process, 1000)) {
-      pthread_mutex_lock(&vw_unreaped_mutex);
-      if (vw_unreaped_count < VW_MAX_UNREAPED_PIDS) {
-        vw_unreaped_pids[vw_unreaped_count++] = pid;
-      }
-      pthread_mutex_unlock(&vw_unreaped_mutex);
-    }
+    if (!vw_platform_wait_process(process, 1000)) vw_platform_register_unreaped(pid);
   }
 }
 
