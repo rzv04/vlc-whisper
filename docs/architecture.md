@@ -131,6 +131,11 @@ The worker manages catalog models. With no explicit user selection, resolution p
 `ggml-tiny.bin`; an explicit `model-path` selection takes precedence. Lazy downloads use the per-user model
 directory, so the plugin never performs network I/O.
 
+`MODEL_PROGRESS(IDLE)` is an initial state snapshot emitted before the worker's asynchronous downloader changes to
+`DOWNLOADING`; it is not a failed or completed command. The plugin sender keeps the pending catalog-id correlation
+through that snapshot and activates the exact verified per-user path only after `DONE`. The worker writes diagnostic
+events to its temp log, while the plugin mirrors bounded progress and lifecycle events to VLC Messages.
+
 Incoming audio frames carry:
 
 - `pcm_data`: Raw sample bytes (S16LE, FL32, or S32LE)

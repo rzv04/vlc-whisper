@@ -24,12 +24,12 @@ local function cfg_get(name)
   return nil
 end
 local function cfg_set(name, value)
-  local ok = pcall(function()
-    if vlc and vlc.config and vlc.config.set then vlc.config.set(name, value); return true end
-    if config and config.set then config.set(name, value); return true end
+  local ok, result = pcall(function()
+    if vlc and vlc.config and vlc.config.set then return vlc.config.set(name, value) ~= false end
+    if config and config.set then return config.set(name, value) ~= false end
     return false
   end)
-  return ok
+  return ok and result == true
 end
 
 -- id -> string maps for dropdown get_value() results (Lua 5.1-safe).
@@ -199,9 +199,23 @@ local function on_download()
 
   -- Trigger download via whisper-model-download control variable without
   -- changing active model-path yet (worker must stay alive on existing model).
-  pcall(function() cfg_set("whisper-model-download", catalog_id) end)
-  pcall(function() cfg_set("whisper-model-status", "downloading") end)
-  pcall(function() cfg_set("whisper-model-progress", 0) end)
+  local control_written = cfg_set("whisper-model-download", catalog_id)
+  local control_visible = nil
+  pcall(function()
+    local pending = cfg_get("whisper-model-download")
+    if pending ~= nil then control_visible = tostring(pending) == catalog_id end
+  end)
+  cfg_set("whisper-model-status", "downloading")
+  cfg_set("whisper-model-progress", 0)
+  -- Some VLC 3.0 builds expose config.set without a useful config.get readback.
+  -- Treat nil as unverifiable, but reject an explicit mismatched value.
+  if not control_written or control_visible == false then
+    vlc.msg.err("[VLC-Whisper] download control was not retained by VLC config: " .. tostring(catalog_id))
+    if w_status ~= nil then
+      pcall(function() w_status:set_text("Model config unavailable; restart VLC and retry") end)
+    end
+    return
+  end
   vlc.msg.info("[VLC-Whisper] download requested " .. tostring(catalog_id))
 
   if w_status ~= nil then

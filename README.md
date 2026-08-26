@@ -394,6 +394,16 @@ restricted Program Files locations remain supported. Resolve order: explicit `mo
 `models/` → per-user dir. All downloads are explicit and worker-only (see ADR-023); offline use
 stays fully functional with the bundled `ggml-tiny.bin`.
 
+#### Download troubleshooting
+
+The worker logs its model path, download destination, HTTP failures, SHA-256 result, and final atomic rename to
+`%TEMP%\vlc-whisper-worker.log` on Windows. In VLC Messages, look for `PLUGIN_MODEL_CTRL` (request relay),
+`PLUGIN_MODEL_PROGRESS` (stage/bytes), `PLUGIN_MODEL_PATH` (selected model and destination), and
+`PLUGIN_MODEL_ACTIVATE` (successful completion/respawn). The first `idle:<model>` progress status is an initial
+worker snapshot; it is not cancellation. A completed file should be under `%LOCALAPPDATA%\vlc-whisper\models\`,
+not the installed VLC `models\` directory. If the Lua dialog reports that the control value was not retained,
+restart VLC and retry after confirming the extension and plugin came from the same build.
+
 ## Manual Plugin Installation (Windows Developer Workflow)
 
 To install and verify the VLC plugin manually during development:

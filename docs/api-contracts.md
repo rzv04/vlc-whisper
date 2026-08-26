@@ -125,11 +125,13 @@ Plugin to worker. Payload 49 bytes: session ID, `u8 action` (`DOWNLOAD=1`, `ABOR
 
 Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADING=1`, `VERIFYING=2`, `DONE=3`, `FAILED=4`, `ABORTING=5`), `u8 pct` (0–100), `u64 bytes_done`, `u64 bytes_total`, `char model_id[32]` (NUL-padded) — 66 bytes on the wire.
 
-- Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) and renders progress through a dedicated C presenter SPU channel. Lua only submits commands; it does not poll, sleep, or refresh the dialog in a loop, so playback pause does not pause downloading.
+- Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). The initial `IDLE` snapshot is informational, not a terminal result: the plugin must retain the matching pending command until `DONE`, `FAILED`, `ABORTING`, worker shutdown, or transport death. Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) and renders progress through a dedicated C presenter SPU channel. Lua only submits commands; it does not poll, sleep, or refresh the dialog in a loop, so playback pause does not pause downloading.
 
 ### Model storage
 
 Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. Privacy carve-out: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
+
+The worker records model-download diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory). The plugin logs `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`, `PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` through VLC Messages. These diagnostics may include bounded local paths and byte counters, but never auth tokens, PCM, transcripts, or network credentials.
 
 ### ERROR
 

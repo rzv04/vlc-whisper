@@ -420,9 +420,13 @@ static bool vw_plugin_send_model_request(vw_plugin_sys_t* sys, const char* reque
 
   uint8_t action = (strcmp(request, "abort") == 0) ? VW_MODEL_ACTION_ABORT : VW_MODEL_ACTION_DOWNLOAD;
   const char* model_id = action == VW_MODEL_ACTION_ABORT ? "" : request;
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "sending %s request for model '%s'",
+               action == VW_MODEL_ACTION_ABORT ? "abort" : "download", model_id[0] ? model_id : "(active)");
   if (!vw_worker_client_send_model_ctrl(sys->client, action, model_id)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_MODEL_CTRL", "MODEL_CTRL send failed for request '%s'", request);
     return false;
   }
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "MODEL_CTRL sent for request '%s'", request);
 
   vlc_object_t* obj = VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx);
   config_PutPsz(obj, "whisper-model-download", "");
@@ -674,6 +678,10 @@ static void* vw_plugin_sender_main(void* arg) {
       sys->cfg_snapshot_valid = true;
       // A request made before media playback is intentionally present in the first snapshot. Relay it now that
       // this filter has spawned a worker; MODEL_CTRL is valid without a caption session.
+      if (sys->cfg_model_download[0]) {
+        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "observed pending request '%s' in initial config snapshot",
+                     sys->cfg_model_download);
+      }
       if (sys->cfg_model_download[0] && !vw_plugin_send_model_request(sys, sys->cfg_model_download)) {
         atomic_store(&sys->worker_dead, true);
         config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status", "failed:worker");
@@ -704,6 +712,7 @@ static void* vw_plugin_sender_main(void* arg) {
           // Normalize empty download request: ignore if empty and not abort. The request is edge-triggered: the
           // helper clears both the config value and the sender snapshot after a successful relay.
           if (dl_cmp[0] || strcmp(dl_cmp, "abort") == 0) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "observed config request '%s'", dl_cmp);
             if (!vw_plugin_send_model_request(sys, dl_cmp)) {
               atomic_store(&sys->worker_dead, true);
               config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status",
@@ -1051,11 +1060,17 @@ static void* vw_plugin_sender_main(void* arg) {
           snprintf(prog_status, sizeof(prog_status), "%s:%s", stage_name, recv.progress.model_id);
           config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status", prog_status);
           if (recv.progress.stage == VW_MODEL_STAGE_IDLE) {
-            sys->model_download_id[0] = '\0';
+            // The worker emits an initial IDLE snapshot before starting the asynchronous download. Keep the
+            // pending correlation id intact so the later DONE frame can activate and respawn the new model.
             vw_caption_presenter_clear_model_progress(&sys->presenter);
           } else {
             vw_caption_presenter_show_model_progress(&sys->presenter, &recv.progress);
           }
+          vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_PROGRESS",
+                       "model '%s' stage=%s pct=%u bytes=%llu/%llu pending='%s'", recv.progress.model_id, stage_name,
+                       (unsigned)recv.progress.pct, (unsigned long long)recv.progress.bytes_done,
+                       (unsigned long long)recv.progress.bytes_total,
+                       sys->model_download_id[0] ? sys->model_download_id : "(none)");
           if (recv.progress.stage == VW_MODEL_STAGE_FAILED) {
             sys->model_download_id[0] = '\0';
           }
@@ -1310,6 +1325,9 @@ static int vw_plugin_open(vlc_object_t* obj) {
     char open_model_dir[VW_PATH_MAX_BYTES];
     open_model_dir[0] = '\0';
     vw_plugin_get_model_dir(open_model_dir, sizeof(open_model_dir));
+    vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_PATH", "worker model='%s' download_dir='%s'",
+                 sys->model_path[0] ? sys->model_path : "(bundled/default)",
+                 open_model_dir[0] ? open_model_dir : "(unavailable)");
     sys->client = vw_worker_client_launch_and_connect_ex(
         sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL, open_be,
         open_lg, (int)open_thr, open_gpu, open_model_dir[0] ? open_model_dir : NULL);

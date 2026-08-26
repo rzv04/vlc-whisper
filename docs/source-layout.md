@@ -71,7 +71,7 @@ vlc-whisper/
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
 │   │   ├── vw_worker_config.c                 # Configuration setup, --vad-model parsing and auto-discovery
 │   │   ├── vw_sha256.c                        # Streaming SHA-256 implementation
-│   │   └── vw_model_download.c                # WinHTTP/curl download, .part → verify → atomic rename
+│   │   └── vw_model_download.c                # WinHTTP/curl download, diagnostics, .part → verify → atomic rename
 │   └── third_party/                           # Pinned external C/C++ dependencies
 │       ├── vlc-3.0.23/                        # Pinned VLC header SDK headers
 │       └── whisper.cpp/                       # Pinned whisper.cpp C/C++ inference engine

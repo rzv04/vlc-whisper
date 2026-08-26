@@ -69,6 +69,10 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/test_caption_presenter.c` (17d): SPU subpicture channel persistence across repeated blanking flushes, rate-scaled lead clamping, and pause transition blanking.
 - `tests/unit/test_caption_presenter.c`: model-download progress uses a separate wall-clock SPU channel, survives caption blanking, and flushes explicitly on abort/teardown.
 - `tests/unit/test_model_download.c`: local-file verified download, SHA-256 vectors, catalog lookup, progress math, abort cleanup, and partial-file removal without external network access.
+- Model-download regression coverage must preserve the pending catalog-id correlation across the worker's initial
+  `MODEL_PROGRESS(IDLE)` snapshot, then accept `DONE` as the activation trigger; `FAILED`, abort, worker death, and
+  transport teardown are the terminal clearing paths. Windows manual coverage additionally checks the per-user final
+  path and the worker temp log because WinHTTP and VLC Lua config timing are unavailable in the native Linux suite.
 - `tests/integration/test_worker_lifecycle.c` (17d): Fire-and-forget `VW_MSG_POSITION` seek repositioning without session teardown, 15-frame rapid scrub burst coalescing (<50ms), and in-session media swap across distinct session IDs.
 - `tests/unit/test_whisper_engine.c` (17d.1): `vw_whisper_segment_t` struct, `vw_whisper_engine_get_segment_count`, `vw_whisper_engine_get_segment` accessor bounds checking (NULL engine, negative index, index overflow, NULL out_seg), microsecond scaling (`10000LL`), and monotonic $t_0 \le t_1$.
 - `tests/unit/test_segment_builder.c` (17d.1): multi-phrase push per window, cross-hop deduplication with committed history ring buffer persistence across `pop()`, silence gap preservation (0.6s), `is_final = true` flag validation, and `vw_segment_builder_clear()` reset.

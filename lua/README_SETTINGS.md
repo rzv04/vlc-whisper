@@ -34,6 +34,12 @@ overlay, so playback and playback pause do not affect the transfer. Abort, worke
 remove the partial file and clear the overlay. A verified model is installed in the per-user model directory and
 the plugin respawns the worker on that model.
 
+For Windows troubleshooting, the final model path is `%LOCALAPPDATA%\vlc-whisper\models\ggml-<catalog-id>.bin`, not
+the install-time `models\` directory. The worker writes transfer, SHA-256, and atomic-rename diagnostics to
+`%TEMP%\vlc-whisper-worker.log`; VLC Messages shows the plugin-side `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`,
+`PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` events. The first `idle:<model>` progress event is only an initial
+snapshot and must not be interpreted as download completion or cancellation.
+
 ## Windows manual test (verbatim)
 
 1. Install plugin + worker either by running the installer **or** by manual copy:

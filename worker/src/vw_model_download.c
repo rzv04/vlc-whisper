@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include "vw_log.h"
 #include "vw_sha256.h"
 
 #ifndef _WIN32
@@ -302,8 +303,11 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
 
   HINTERNET hSession = WinHttpOpen(L"vlc-whisper/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                    WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!hSession) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "WinHttpOpen failed (%lu)", (unsigned long)GetLastError());
+    return false;
+  }
   WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);  // resolve/connect/send/receive; stalled socket aborts
-  if (!hSession) return false;
   pthread_mutex_lock(&dl->lock);
   dl->hSession = hSession;
   pthread_mutex_unlock(&dl->lock);
@@ -334,11 +338,25 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
     return false;
   }
   if (!WinHttpReceiveResponse(hRequest, NULL)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "WinHttpReceiveResponse failed (%lu)",
+                 (unsigned long)GetLastError());
+    vw_winhttp_close_stored(dl);
+    return false;
+  }
+  DWORD status_code = 0;
+  DWORD status_size = sizeof(status_code);
+  if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                           WINHTTP_HEADER_NAME_BY_INDEX, &status_code, &status_size, WINHTTP_NO_HEADER_INDEX) ||
+      status_code < 200 || status_code >= 300) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "HTTP download rejected with status %lu",
+                 (unsigned long)status_code);
     vw_winhttp_close_stored(dl);
     return false;
   }
   FILE* out = fopen(dl->part_path, "wb");
   if (!out) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot open partial model '%s' (errno=%d)", dl->part_path,
+                 errno);
     vw_winhttp_close_stored(dl);
     return false;
   }
@@ -346,7 +364,15 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   uint8_t buf[65536];
   DWORD bytes_read = 0;
   bool ok = true;
-  while (WinHttpReadData(hRequest, buf, sizeof(buf), &bytes_read) && bytes_read > 0) {
+  while (true) {
+    bytes_read = 0;
+    if (!WinHttpReadData(hRequest, buf, sizeof(buf), &bytes_read)) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "WinHttpReadData failed after %llu bytes (%lu)",
+                   (unsigned long long)total_written, (unsigned long)GetLastError());
+      ok = false;
+      break;
+    }
+    if (bytes_read == 0) break;
     if (atomic_load(&dl->abort_requested)) {
       ok = false;
       break;
@@ -384,6 +410,8 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
 
 static void* vw_download_thread(void* arg) {
   vw_model_download_t* dl = (vw_model_download_t*)arg;
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "download thread started model='%s' dest='%s' final='%s'",
+               dl->entry.id, dl->dest_dir, dl->final_path);
   pthread_mutex_lock(&dl->lock);
   dl->progress.stage = VW_MODEL_STAGE_DOWNLOADING;
   dl->progress.pct = 0;
@@ -418,6 +446,8 @@ static void* vw_download_thread(void* arg) {
       return NULL;
     }
     if (!ok) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "download attempt %d failed for model '%s'", attempt + 1,
+                   dl->entry.id);
       unlink(dl->part_path);
 #ifdef _WIN32
       DeleteFileA(dl->part_path);
@@ -447,6 +477,7 @@ static void* vw_download_thread(void* arg) {
     uint8_t hash[32];
     bool hash_ok = vw_sha256_file(dl->part_path, hash);
     if (!hash_ok) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot hash partial model '%s'", dl->part_path);
       unlink(dl->part_path);
 #ifdef _WIN32
       DeleteFileA(dl->part_path);
@@ -467,6 +498,8 @@ static void* vw_download_thread(void* arg) {
     char hex[65];
     vw_sha256_to_hex(hash, hex);
     if (!vw_hex_equal_ci(hex, dl->entry.sha256_hex)) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "sha256 mismatch for '%s' (got=%s expected=%s)", dl->entry.id,
+                   hex, dl->entry.sha256_hex);
       unlink(dl->part_path);
 #ifdef _WIN32
       DeleteFileA(dl->part_path);
@@ -486,6 +519,8 @@ static void* vw_download_thread(void* arg) {
     }
     // Hash matches — atomic rename.
     if (!vw_rename_atomic(dl->part_path, dl->final_path)) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "atomic rename failed '%s' -> '%s' (errno=%d)", dl->part_path,
+                   dl->final_path, errno);
       unlink(dl->part_path);
 #ifdef _WIN32
       DeleteFileA(dl->part_path);
@@ -500,6 +535,8 @@ static void* vw_download_thread(void* arg) {
     dl->progress.pct = 100;
     dl->progress.bytes_done = dl->entry.bytes;
     pthread_mutex_unlock(&dl->lock);
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "verified model '%s' saved as '%s'", dl->entry.id,
+                 dl->final_path);
     return NULL;
   }
   pthread_mutex_lock(&dl->lock);

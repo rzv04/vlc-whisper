@@ -203,8 +203,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
     vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE", "engine language=%s threads=%d", engine->language,
                  engine->n_threads);
   }
-  vw_log_event(engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
-               engine ? "whisper engine loaded" : "whisper engine init FAILED (model missing/invalid)");
+  vw_log_event(
+      engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
+      engine ? "whisper engine loaded from '%s'" : "whisper engine init FAILED for '%s' (model missing/invalid)",
+      config->model_path);
   struct whisper_vad_context* vad_ctx = NULL;
   if (config->vad_model_path[0] != '\0') {
     vad_ctx = vw_vad_init_default(config->vad_model_path);
@@ -223,12 +225,20 @@ int vw_worker_run(const vw_worker_config_t* config) {
   // Model download state: per-user directory resolved once, stale .part files cleaned before the loop.
   vw_model_download_t* model_dl = NULL;
   char dl_dir[VW_PATH_MAX_BYTES];
+  dl_dir[0] = '\0';
+  bool dl_dir_ready = false;
   if (config->model_dir[0] != '\0') {
     snprintf(dl_dir, sizeof(dl_dir), "%s", config->model_dir);
+    dl_dir_ready = true;
   } else {
-    vw_model_download_default_dir(dl_dir, sizeof(dl_dir));
+    dl_dir_ready = vw_model_download_default_dir(dl_dir, sizeof(dl_dir));
   }
-  vw_model_download_cleanup_partial(dl_dir);
+  if (dl_dir_ready) {
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "model download directory '%s'", dl_dir);
+    vw_model_download_cleanup_partial(dl_dir);
+  } else {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "model download directory unavailable");
+  }
   int last_stage = -1;
   int64_t last_progress_send_us = 0;
 
@@ -706,6 +716,27 @@ int vw_worker_run(const vw_worker_config_t* config) {
               prog.pct = 0;
               prog.bytes_done = 0;
               prog.bytes_total = 0;
+              snprintf(prog.model_id, sizeof(prog.model_id), "%s", req_id);
+              uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+              size_t prog_len = 0;
+              if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, prog_payload, sizeof(prog_payload),
+                                             &prog_len)) {
+                vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                                              .type = VW_MSG_MODEL_PROGRESS,
+                                              .payload_length = (uint32_t)prog_len,
+                                              .sequence = ++sequence};
+                uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
+                vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
+                vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
+                vw_ipc_send(handle, prog_payload, prog_len);
+              }
+            } else if (!dl_dir_ready) {
+              vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot download '%s': destination unavailable",
+                           req_id);
+              vw_msg_model_progress_t prog;
+              memset(&prog, 0, sizeof(prog));
+              prog.stage = VW_MODEL_STAGE_FAILED;
               snprintf(prog.model_id, sizeof(prog.model_id), "%s", req_id);
               uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
               size_t prog_len = 0;
