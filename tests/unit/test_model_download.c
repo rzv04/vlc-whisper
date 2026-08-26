@@ -140,6 +140,10 @@ static void test_default_dir(void) {
 }
 
 static void test_poll_and_lifecycle(void) {
+#ifdef _WIN32
+  (void)0;
+  return;  // mkdtemp is POSIX-only; Linux coverage suffices
+#endif
   vw_download_progress_t prog;
   EXPECT(vw_model_download_poll(NULL, &prog) == false);
   vw_model_download_abort(NULL);
@@ -181,6 +185,10 @@ static void test_poll_and_lifecycle(void) {
 }
 
 static void test_cleanup_partial(void) {
+#ifdef _WIN32
+  (void)0;
+  return;  // mkdtemp is POSIX-only; Linux coverage suffices
+#endif
   char tmpl[] = "/tmp/vw_test_cleanup_XXXXXX";
   char* tmpdir = mkdtemp(tmpl);
   EXPECT(tmpdir != NULL);

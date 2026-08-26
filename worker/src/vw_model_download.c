@@ -160,13 +160,6 @@ static bool vw_rename_atomic(const char* src, const char* dst) {
 #endif
 }
 
-static void vw_sleep_ms(unsigned int ms) {
-  struct timespec ts;
-  ts.tv_sec = ms / 1000;
-  ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-  nanosleep(&ts, NULL);
-}
-
 uint8_t vw_model_download_pct(uint64_t bytes_done, uint64_t bytes_total) {
   if (bytes_total == 0) return 0;
   uint64_t pct = bytes_done * 100ULL / bytes_total;
@@ -175,6 +168,13 @@ uint8_t vw_model_download_pct(uint64_t bytes_done, uint64_t bytes_total) {
 }
 
 #ifndef _WIN32
+static void vw_sleep_ms(unsigned int ms) {
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+  nanosleep(&ts, NULL);
+}
+
 static bool vw_download_via_curl(vw_model_download_t* dl) {
   pid_t pid = fork();
   if (pid < 0) return false;
@@ -244,6 +244,26 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
   return false;
 }
 #else
+#ifdef _WIN32
+// Closes whatever WinHTTP handles are currently stored in dl and clears the
+// struct fields under the lock, so abort() and the download thread can never
+// double-close the same handle regardless of interleaving.
+static void vw_winhttp_close_stored(vw_model_download_t* dl) {
+  if (!dl) return;
+  pthread_mutex_lock(&dl->lock);
+  HINTERNET r = dl->hRequest;
+  HINTERNET c = dl->hConnect;
+  HINTERNET s = dl->hSession;
+  dl->hRequest = NULL;
+  dl->hConnect = NULL;
+  dl->hSession = NULL;
+  pthread_mutex_unlock(&dl->lock);
+  if (r) WinHttpCloseHandle(r);
+  if (c) WinHttpCloseHandle(c);
+  if (s) WinHttpCloseHandle(s);
+}
+#endif
+
 static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   // Parse URL into host and path for WinHTTP.
   const char* url = dl->entry.url;
@@ -347,26 +367,6 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   pthread_mutex_unlock(&dl->lock);
   if (atomic_load(&dl->abort_requested)) return false;
   return ok;
-}
-#endif
-
-#ifdef _WIN32
-// Closes whatever WinHTTP handles are currently stored in dl and clears the
-// struct fields under the lock, so abort() and the download thread can never
-// double-close the same handle regardless of interleaving.
-static void vw_winhttp_close_stored(vw_model_download_t* dl) {
-  if (!dl) return;
-  pthread_mutex_lock(&dl->lock);
-  HINTERNET r = dl->hRequest;
-  HINTERNET c = dl->hConnect;
-  HINTERNET s = dl->hSession;
-  dl->hRequest = NULL;
-  dl->hConnect = NULL;
-  dl->hSession = NULL;
-  pthread_mutex_unlock(&dl->lock);
-  if (r) WinHttpCloseHandle(r);
-  if (c) WinHttpCloseHandle(c);
-  if (s) WinHttpCloseHandle(s);
 }
 #endif
 
