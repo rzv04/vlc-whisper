@@ -39,14 +39,14 @@ bool vw_caption_presenter_show_model_progress(vw_caption_presenter_t* presenter,
 // during pause and seek operations without touching active caption cues.
 void vw_caption_presenter_clear_model_progress(vw_caption_presenter_t* presenter);
 
-// Buffers a timed caption segment and dispatches any preceding cue to SPU after clipping
-// its reading floor to the incoming cue start to prevent adjacent interval overlap.
+// Buffers a timed cue and dispatches its predecessor, applying media-position lead only when media_timeline confirms
+// both timestamps share VLC's media clock domain.
 bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
-                                       int64_t input_time_us);
+                                       int64_t input_time_us, bool media_timeline);
 
-// Flushes the buffered pending caption cue to the registered SPU subpicture channel with standard reading
-// floor duration when no subsequent overlapping cue arrives before the start display time.
-bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input_time_us);
+// Flushes the pending cue, using input_time_us for future lead only when media_timeline identifies source-mode media
+// timestamps; live system-date cues render immediately.
+bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input_time_us, bool media_timeline);
 
 // Blanks currently displayed caption overlays by flushing both private SPU and OSD channels while preserving filter
 // context, guaranteeing clean subtitle erasure across seek jumps before upcoming segments arrive.

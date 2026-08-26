@@ -1010,7 +1010,7 @@ static void* vw_plugin_sender_main(void* arg) {
             // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
             // input_time_us is reserved for media-domain scheduling (17c); the presenter renders
             // in the OSD clock domain (mdate), which this VLC build displays reliably.
-            vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us);
+            vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us, is_source_mode);
           } else {
             vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_PAUSED_DROP", "segment id=%llu dropped while paused",
                          (unsigned long long)recv.segment.segment_id);
@@ -1098,11 +1098,12 @@ static void* vw_plugin_sender_main(void* arg) {
       }
     }
 
-    // If a pending caption cue is buffered and media position is approaching its display start PTS,
-    // flush it to SPU so it is rendered on time with its reading floor duration.
+    // Look-ahead cues flush as the media position approaches; live cues flush immediately in the OSD clock domain
+    // because their system-date PTS cannot be compared with INPUT_GET_TIME.
     if (sys->presenter.has_pending && !paused) {
-      if (current_position_us <= 0 || sys->presenter.pending_segment.start_pts_us <= current_position_us + 100000LL) {
-        vw_caption_presenter_flush(&sys->presenter, current_position_us);
+      if (!is_source_mode || current_position_us < 0 ||
+          sys->presenter.pending_segment.start_pts_us <= current_position_us + 100000LL) {
+        vw_caption_presenter_flush(&sys->presenter, current_position_us, is_source_mode);
       }
     }
 

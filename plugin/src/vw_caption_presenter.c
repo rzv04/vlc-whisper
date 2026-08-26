@@ -268,7 +268,7 @@ static float vw_caption_presenter_get_rate(vw_caption_presenter_t* presenter) {
 }
 
 static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
-                                                 int64_t duration_us, int64_t input_time_us) {
+                                                 int64_t duration_us, int64_t input_time_us, bool media_timeline) {
   if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }
@@ -317,7 +317,7 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
   if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
     int64_t now_tick = (int64_t)mdate();
     int64_t lead_us = 0;
-    if (input_time_us > 0 && segment->start_pts_us > input_time_us) {
+    if (media_timeline && input_time_us >= 0 && segment->start_pts_us > input_time_us) {
       int64_t diff = vw_saturating_sub_i64(segment->start_pts_us, input_time_us);
       lead_us = (int64_t)((double)diff / (double)rate);
       if (lead_us > 60000000LL) {
@@ -349,7 +349,7 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
 }
 
 bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
-                                       int64_t input_time_us) {
+                                       int64_t input_time_us, bool media_timeline) {
   if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }
@@ -375,7 +375,8 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
       duration_us = (raw_duration_us > 0) ? raw_duration_us : 2000000LL;
     }
 
-    vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us);
+    vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us,
+                                         media_timeline);
     presenter->has_pending = false;
   }
 
@@ -390,7 +391,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   return true;
 }
 
-bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input_time_us) {
+bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input_time_us, bool media_timeline) {
   if (!presenter || !presenter->has_pending) {
     return false;
   }
@@ -402,8 +403,8 @@ bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input
                         : (raw_duration_us < min_media_floor_us) ? min_media_floor_us
                                                                  : raw_duration_us;
 
-  bool rendered =
-      vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us);
+  bool rendered = vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us,
+                                                       input_time_us, media_timeline);
   presenter->has_pending = false;
   return rendered;
 }

@@ -24,6 +24,7 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 > **Wire `pts_us` domain (v1.1):**
 > - In **Live Streaming Mode** (or live IPTV), AUDIO chunk timestamps are stamped by the plugin from VLC's audio-filter block PTS in the system-date domain.
 > - In **Look-Ahead Source Mode** (v1.1), `start_pts_us` and `end_pts_us` are media-relative PTS timestamps decoded directly by the native demuxer. The plugin translates them to the SPU presentation time using the sampled `input_time_us` from VLC (`start_tick = mdate() + (start_pts_us - input_time_us)`).
+> - The plugin explicitly marks whether a segment uses the media timeline. Live mode anchors finalized cues at `mdate()` and must never subtract `INPUT_GET_TIME` media position from a live system-date segment PTS. In source mode, position zero is valid; only `-1` means unavailable.
 
 ## Envelope
 
