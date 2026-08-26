@@ -633,8 +633,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
             bool forward_past_decoded =
                 (payload_decoded.position.current_pts_us > vw_saturating_add_i64(decoded_pts_us, 1000000LL));
 
-            if ((seek_flag || backward_jump || forward_past_decoded) &&
-                payload_decoded.position.current_pts_us != last_playback_pts_us) {
+            if (seek_flag || ((backward_jump || forward_past_decoded) &&
+                              payload_decoded.position.current_pts_us != last_playback_pts_us)) {
               vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEEK",
                            "re-seeking source decoder to %lldus (flag=%d back=%d fwd=%d)",
                            (long long)payload_decoded.position.current_pts_us, (int)seek_flag, (int)backward_jump,
@@ -955,8 +955,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
         // VAD-Guided Non-Overlapping Audio Chunking (Strategy C)
         while (audio_buf && (vw_audio_buffer_get_count(audio_buf) >= VW_CHUNK_MIN_SAMPLES ||
                              (source_eof && vw_audio_buffer_get_count(audio_buf) > 0))) {
-          int64_t chunk_pts_us = 0;
-          size_t avail = vw_audio_buffer_get_samples(audio_buf, window_samples, VW_CHUNK_MAX_SAMPLES, &chunk_pts_us);
+          int64_t boundary_pts_us = 0;
+          size_t avail = vw_audio_buffer_get_samples(audio_buf, window_samples, VW_CHUNK_MAX_SAMPLES, &boundary_pts_us);
           if (avail == 0) {
             break;
           }
@@ -972,12 +972,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
           if (silence_drain > 0) {
             vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_VAD", "lookahead silence drain %zu samples @%lldus", silence_drain,
-                         (long long)chunk_pts_us);
+                         (long long)boundary_pts_us);
             vw_audio_buffer_drain(audio_buf, silence_drain);
           } else if (cut_samples > 0) {
             vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
                          "lookahead speech chunk %zu samples @%lldus; transcribing", cut_samples,
-                         (long long)chunk_pts_us);
+                         (long long)boundary_pts_us);
             if (engine && vw_whisper_engine_transcribe_pcm(engine, window_samples, cut_samples)) {
               if (builder) {
                 int n_segs = vw_whisper_engine_get_segment_count(engine);
@@ -987,8 +987,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
                     if (seg_info.no_speech_prob >= 0.60f) {
                       continue;
                     }
-                    int64_t seg_start_pts = vw_saturating_add_i64(chunk_pts_us, seg_info.t0_us);
-                    int64_t seg_end_pts = vw_saturating_add_i64(chunk_pts_us, seg_info.t1_us);
+                    int64_t seg_start_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.t0_us);
+                    int64_t seg_end_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.t1_us);
 
                     vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                   }
@@ -1006,8 +1006,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
           source_eof = true;
           // Trailing flush at source EOF (S-03) using Strategy C VAD chunking
           while (audio_buf && vw_audio_buffer_get_count(audio_buf) > 0) {
-            int64_t chunk_pts_us = 0;
-            size_t avail = vw_audio_buffer_get_samples(audio_buf, window_samples, VW_CHUNK_MAX_SAMPLES, &chunk_pts_us);
+            int64_t boundary_pts_us = 0;
+            size_t avail =
+                vw_audio_buffer_get_samples(audio_buf, window_samples, VW_CHUNK_MAX_SAMPLES, &boundary_pts_us);
             if (avail == 0) {
               break;
             }
@@ -1033,8 +1034,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
                       if (seg_info.no_speech_prob >= 0.60f) {
                         continue;
                       }
-                      int64_t seg_start_pts = vw_saturating_add_i64(chunk_pts_us, seg_info.t0_us);
-                      int64_t seg_end_pts = vw_saturating_add_i64(chunk_pts_us, seg_info.t1_us);
+                      int64_t seg_start_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.t0_us);
+                      int64_t seg_end_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.t1_us);
 
                       vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                     }

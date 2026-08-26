@@ -124,6 +124,15 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   dec->audio_stream_idx = audio_idx;
   dec->pkt = av_packet_alloc();
   dec->frame = av_frame_alloc();
+  if (!dec->pkt || !dec->frame) {
+    if (dec->pkt) av_packet_free(&dec->pkt);
+    if (dec->frame) av_frame_free(&dec->frame);
+    swr_free(&swr_ctx);
+    avcodec_free_context(&codec_ctx);
+    avformat_close_input(&fmt_ctx);
+    free(dec);
+    return NULL;
+  }
   dec->duration_us = fmt_ctx->duration > 0 ? (int64_t)av_rescale(fmt_ctx->duration, 1000000, AV_TIME_BASE) : -1;
 
   if (info) {
@@ -145,6 +154,9 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
 
   if (av_seek_frame(decoder->fmt_ctx, decoder->audio_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD) >= 0) {
     avcodec_flush_buffers(decoder->codec_ctx);
+    if (decoder->swr_ctx) {
+      swr_init(decoder->swr_ctx);
+    }
     decoder->current_pts_us = target_pts_us;
     decoder->eof_reached = false;
     decoder->leftover_count = 0;
@@ -234,6 +246,12 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       int ret = av_read_frame(decoder->fmt_ctx, decoder->pkt);
       if (ret < 0) {
         decoder->eof_reached = true;
+        // Flush remaining frames from codec context
+        avcodec_send_packet(decoder->codec_ctx, NULL);
+        while (total_samples < max_samples && decoder->leftover_count == 0 &&
+               avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
+          vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+        }
         break;
       }
     }

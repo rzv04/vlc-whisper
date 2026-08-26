@@ -531,6 +531,11 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
   vw_caption_presenter_blank(&sys->presenter);  // erase stale captions from the dead epoch
   bool started =
       vw_worker_client_start_session(sys->client, 0, vw_plugin_catalog_id_from_path(sys->model_path), source_url);
+  if (source_url) {
+    snprintf(sys->active_source_url, sizeof(sys->active_source_url), "%s", source_url);
+  } else {
+    sys->active_source_url[0] = '\0';
+  }
   free(source_url);
   atomic_store(&sys->session_active, started);
   atomic_store(&sys->source_mode_active, started && vw_worker_client_is_source_active(sys->client));

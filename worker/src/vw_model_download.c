@@ -175,10 +175,14 @@ uint8_t vw_model_download_pct(uint64_t bytes_done, uint64_t bytes_total) {
   return (uint8_t)pct;
 }
 
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+
 static bool vw_model_download_acquire_lock(vw_model_download_t* dl) {
   if (!dl || !dl->lock_path[0]) return false;
 #ifndef _WIN32
-  dl->lock_fd = open(dl->lock_path, O_CREAT | O_RDWR, 0600);
+  dl->lock_fd = open(dl->lock_path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
   if (dl->lock_fd < 0) return false;
   if (flock(dl->lock_fd, LOCK_EX | LOCK_NB) != 0) {
     close(dl->lock_fd);
@@ -218,23 +222,14 @@ static void vw_sleep_ms(unsigned int ms) {
 }
 
 static bool vw_download_via_curl(vw_model_download_t* dl) {
-#ifdef __linux__
-  pid_t parent_pid = getpid();
-#endif
   pid_t pid = fork();
   if (pid < 0) return false;
   if (pid == 0) {
-    // Kill curl if the worker dies, including SIGKILL. The parent-PID check closes the
-    // fork/parent-death race where the worker exits before prctl() is installed.
-#ifdef __linux__
-    if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent_pid) _exit(125);
-#endif
-    // Child: exec curl -fsSL -o <part> <url>
-    execlp("curl", "curl", "-fsSL", "--connect-timeout", "15", "--speed-limit", "10240", "--speed-time", "60", "-o",
-           dl->part_path, dl->entry.url, (char*)NULL);
-    // Also try /usr/bin/curl if execlp fails
-    execl("/usr/bin/curl", "curl", "-fsSL", "--connect-timeout", "15", "--speed-limit", "10240", "--speed-time", "60",
-          "-o", dl->part_path, dl->entry.url, (char*)NULL);
+    // Child: exec curl with quiet progress output.
+    char* const argv[] = {"curl", "-f",         "-L",   "-s", "-S",          "--connect-timeout",
+                          "10",   "--max-time", "1800", "-o", dl->part_path, (char*)dl->entry.url,
+                          NULL};
+    execvp("curl", argv);
     _exit(127);
   }
   // Parent: track child pid for abort.
@@ -242,6 +237,7 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
   dl->child_pid = pid;
   pthread_mutex_unlock(&dl->lock);
 
+  bool child_exited_ok = false;
   int status = 0;
   while (1) {
     if (atomic_load(&dl->abort_requested)) {
@@ -256,7 +252,12 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
       return false;
     }
     pid_t r = waitpid(pid, &status, WNOHANG);
-    if (r == pid) break;
+    if (r == pid) {
+      if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        child_exited_ok = true;
+      }
+      break;
+    }
     if (r < 0) {
       if (errno == EINTR) continue;
       break;
@@ -290,8 +291,7 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
   pthread_mutex_unlock(&dl->lock);
 
   if (atomic_load(&dl->abort_requested)) return false;
-  if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
-  return false;
+  return child_exited_ok;
 }
 #else
 #ifdef _WIN32
@@ -334,8 +334,8 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
     snprintf(path, sizeof(path), "/");
   }
   // Convert to wide strings.
-  wchar_t wHost[256];
-  wchar_t wPath[2048];
+  wchar_t wHost[256] = {0};
+  wchar_t wPath[2048] = {0};
   MultiByteToWideChar(CP_UTF8, 0, host, -1, wHost, 256);
   MultiByteToWideChar(CP_UTF8, 0, path, -1, wPath, 2048);
 
@@ -393,68 +393,49 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   }
   FILE* out = fopen(dl->part_path, "wb");
   if (!out) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot open partial model '%s' (errno=%d)", dl->part_path,
-                 errno);
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot open part file '%s' (%d)", dl->part_path, errno);
     vw_winhttp_close_stored(dl);
     return false;
   }
-  uint64_t total_written = 0;
-  uint8_t buf[65536];
+  char buf[65536];
   DWORD bytes_read = 0;
-  bool ok = true;
-  while (true) {
-    bytes_read = 0;
-    if (!WinHttpReadData(hRequest, buf, sizeof(buf), &bytes_read)) {
-      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "WinHttpReadData failed after %llu bytes (%lu)",
-                   (unsigned long long)total_written, (unsigned long)GetLastError());
-      ok = false;
-      break;
-    }
-    if (bytes_read == 0) break;
+  uint64_t total_read = 0;
+  while (WinHttpReadData(hRequest, buf, sizeof(buf), &bytes_read) && bytes_read > 0) {
     if (atomic_load(&dl->abort_requested)) {
-      ok = false;
-      break;
+      fclose(out);
+      vw_winhttp_close_stored(dl);
+      return false;
     }
     size_t written = fwrite(buf, 1, bytes_read, out);
     if (written != bytes_read) {
-      ok = false;
-      break;
+      fclose(out);
+      vw_winhttp_close_stored(dl);
+      return false;
     }
-    total_written += bytes_read;
-    if (total_written > dl->entry.bytes) {
-      ok = false;
-      break;
+    total_read += bytes_read;
+    if (total_read > dl->entry.bytes) {
+      fclose(out);
+      vw_winhttp_close_stored(dl);
+      return false;
     }
-    uint8_t pct = vw_model_download_pct(total_written, dl->entry.bytes);
+    uint8_t pct = vw_model_download_pct(total_read, dl->entry.bytes);
     pthread_mutex_lock(&dl->lock);
-    dl->progress.bytes_done = total_written;
+    dl->progress.bytes_done = total_read;
     dl->progress.pct = pct;
     pthread_mutex_unlock(&dl->lock);
   }
   fclose(out);
-  // Cleanup handles (single ownership point; abort() may have closed already).
   vw_winhttp_close_stored(dl);
-  // Ensure final progress reflects written size.
-  uint64_t sz = vw_file_size(dl->part_path);
-  uint8_t pct = vw_model_download_pct(sz, dl->entry.bytes);
-  pthread_mutex_lock(&dl->lock);
-  dl->progress.bytes_done = sz;
-  dl->progress.pct = pct;
-  pthread_mutex_unlock(&dl->lock);
-  if (atomic_load(&dl->abort_requested)) return false;
-  return ok;
+  return total_read > 0;
 }
 #endif
 
 static void* vw_download_thread(void* arg) {
   vw_model_download_t* dl = (vw_model_download_t*)arg;
-  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "download thread started model='%s' dest='%s' final='%s'",
-               dl->entry.id, dl->dest_dir, dl->final_path);
+  if (!dl) return NULL;
+
   pthread_mutex_lock(&dl->lock);
   dl->progress.stage = VW_MODEL_STAGE_DOWNLOADING;
-  dl->progress.pct = 0;
-  dl->progress.bytes_done = 0;
-  dl->progress.bytes_total = dl->entry.bytes;
   pthread_mutex_unlock(&dl->lock);
 
   vw_mkdir_p(dl->dest_dir);
@@ -594,13 +575,19 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
   if (!dl) return NULL;
   dl->entry = *entry;
   snprintf(dl->dest_dir, sizeof(dl->dest_dir), "%s", dest_dir);
+  if (!vw_mkdir_p(dest_dir)) {
+    free(dl);
+    return NULL;
+  }
   vw_path_join(dl->part_path, sizeof(dl->part_path), dest_dir, entry->filename);
   // Append .part suffix safely.
   size_t plen = strlen(dl->part_path);
-  if (plen + 5 < sizeof(dl->part_path)) {
-    memcpy(dl->part_path + plen, ".part", 5);
-    dl->part_path[plen + 5] = '\0';
+  if (plen + 5 >= sizeof(dl->part_path)) {
+    free(dl);
+    return NULL;
   }
+  memcpy(dl->part_path + plen, ".part", 5);
+  dl->part_path[plen + 5] = '\0';
   vw_path_join(dl->final_path, sizeof(dl->final_path), dest_dir, entry->filename);
   int lock_path_len = snprintf(dl->lock_path, sizeof(dl->lock_path), "%s.lock", dl->final_path);
   if (lock_path_len < 0 || (size_t)lock_path_len >= sizeof(dl->lock_path)) {
@@ -675,6 +662,7 @@ bool vw_model_download_poll(vw_model_download_t* dl, vw_download_progress_t* out
 
 void vw_model_download_free(vw_model_download_t* dl) {
   if (!dl) return;
+  vw_model_download_abort(dl);
   if (dl->thread_started) {
     pthread_join(dl->thread, NULL);
     dl->thread_started = false;
@@ -706,7 +694,8 @@ bool vw_model_download_default_dir(char* out, size_t out_size) {
     else
       snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
   }
-  snprintf(out, out_size, "%s", tmp);
+  int written = snprintf(out, out_size, "%s", tmp);
+  if (written < 0 || (size_t)written >= out_size) return false;
 #else
   const char* xdg = getenv("XDG_DATA_HOME");
   char tmp[4096];
@@ -719,7 +708,8 @@ bool vw_model_download_default_dir(char* out, size_t out_size) {
     else
       snprintf(tmp, sizeof(tmp), "/tmp/vlc-whisper/models");
   }
-  snprintf(out, out_size, "%s", tmp);
+  int written = snprintf(out, out_size, "%s", tmp);
+  if (written < 0 || (size_t)written >= out_size) return false;
 #endif
   out[out_size - 1] = '\0';
   if (!vw_mkdir_p(out)) return false;

@@ -308,10 +308,14 @@ local function on_download()
   -- Map to catalog id (plugin expects these exact strings).
   local catalog_id = catalog_id_map[sel_id] or "tiny"
   local selected_language = 1
-  pcall(function()
-    if w_language ~= nil then selected_language = w_language:get_value() end
-  end)
-  if selected_language == nil or selected_language < 1 then selected_language = 1 end
+  if model_is_english_only(sel_id) then
+    selected_language = 1
+  else
+    pcall(function()
+      if w_language ~= nil then selected_language = w_language:get_value() end
+    end)
+    if selected_language == nil or selected_language < 1 then selected_language = 1 end
+  end
   pcall(function() refresh_language_dropdown(sel_id, selected_language) end)
   local availability = refresh_model_status(sel_id)
   if availability.bundled or availability.user then

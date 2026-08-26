@@ -63,26 +63,52 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
 
   // Build a mutable command line: quoted executable_path followed by argv[1..].
   // argv[0] is the program name (like main/execve) and must not be duplicated.
-  size_t cmd_len = strlen(executable_path) + 3;
+  size_t cmd_len = strlen(executable_path) * 2 + 10;
   for (size_t i = 1; argv[i] != NULL; i++) {
-    cmd_len += strlen(argv[i]) + 3;  // space + quotes
+    cmd_len += strlen(argv[i]) * 2 + 10;
   }
   char* cmd = (char*)malloc(cmd_len + 1);
   if (!cmd) {
     return false;
   }
   size_t pos = 0;
-  cmd[pos++] = '"';
-  size_t exe_len = strlen(executable_path);
-  memcpy(cmd + pos, executable_path, exe_len);
-  pos += exe_len;
-  cmd[pos++] = '"';
-  for (size_t i = 1; argv[i] != NULL; i++) {
-    cmd[pos++] = ' ';
+
+  // Helper lambda-like macro to append a single quoted/escaped argument
+  const char* all_args[64];
+  size_t arg_count = 0;
+  all_args[arg_count++] = executable_path;
+  for (size_t i = 1; argv[i] != NULL && arg_count < 63; i++) {
+    all_args[arg_count++] = argv[i];
+  }
+  all_args[arg_count] = NULL;
+
+  for (size_t a = 0; a < arg_count; a++) {
+    if (a > 0) cmd[pos++] = ' ';
+    const char* arg = all_args[a];
     cmd[pos++] = '"';
-    size_t len = strlen(argv[i]);
-    memcpy(cmd + pos, argv[i], len);
-    pos += len;
+    for (size_t i = 0; arg[i] != '\0'; i++) {
+      if (arg[i] == '\\') {
+        size_t num_slashes = 1;
+        while (arg[i + 1] == '\\') {
+          num_slashes++;
+          i++;
+        }
+        if (arg[i + 1] == '"' || arg[i + 1] == '\0') {
+          for (size_t s = 0; s < num_slashes * 2; s++) {
+            cmd[pos++] = '\\';
+          }
+        } else {
+          for (size_t s = 0; s < num_slashes; s++) {
+            cmd[pos++] = '\\';
+          }
+        }
+      } else if (arg[i] == '"') {
+        cmd[pos++] = '\\';
+        cmd[pos++] = '"';
+      } else {
+        cmd[pos++] = arg[i];
+      }
+    }
     cmd[pos++] = '"';
   }
   cmd[pos] = '\0';

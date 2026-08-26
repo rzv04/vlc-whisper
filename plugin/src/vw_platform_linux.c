@@ -42,19 +42,46 @@ static void vw_platform_reap_unreaped(void) {
   pthread_mutex_unlock(&vw_unreaped_mutex);
 }
 
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
+#include <fcntl.h>
+#include <stdatomic.h>
+
+extern char** environ;
+
 bool vw_platform_get_random_bytes(void* buffer, size_t size) {
   if (!buffer || size == 0) {
     return false;
   }
-  // Seed the PRNG once; reseeding per call would return identical bytes for
-  // calls within the same second. Note: rand() is NOT a CSPRNG (MVP shortcut).
-  static bool seeded = false;
-  if (!seeded) {
-    srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
-    seeded = true;
+#if defined(__linux__)
+  ssize_t ret = getrandom(buffer, size, 0);
+  if (ret == (ssize_t)size) {
+    return true;
   }
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+  int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    size_t total = 0;
+    while (total < size) {
+      ssize_t r = read(fd, (uint8_t*)buffer + total, size - total);
+      if (r <= 0) {
+        if (r < 0 && errno == EINTR) continue;
+        break;
+      }
+      total += (size_t)r;
+    }
+    close(fd);
+    if (total == size) return true;
+  }
+  static _Atomic unsigned int seed = 0;
+  unsigned int s = atomic_fetch_add(&seed, 1);
+  if (s == 0) s = (unsigned int)time(NULL) ^ (unsigned int)getpid();
   for (size_t i = 0; i < size; i++) {
-    ((uint8_t*)buffer)[i] = (uint8_t)(rand() % 256);
+    ((uint8_t*)buffer)[i] = (uint8_t)(rand_r(&s) % 256);
   }
   return true;
 }
@@ -89,7 +116,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   // posix_spawnp's PATH search semantics directly.
   if (!strchr(executable_path, '/')) {
     pid_t pid;
-    int ret = posix_spawnp(&pid, executable_path, NULL, NULL, (char* const*)argv, NULL);
+    int ret = posix_spawnp(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
     if (ret == 0 && out_process) *out_process = pid;
     return ret == 0;
   }
@@ -99,8 +126,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
     return false;
   }
   pid_t pid;
-  // NULL envp: child inherits the parent environment
-  int ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, NULL);
+  int ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
   if (ret == 0 && out_process) *out_process = pid;
   return ret == 0;
 }
@@ -165,4 +191,6 @@ void vw_platform_sleep_ms(uint32_t ms) {
   nanosleep(&ts, NULL);
 }
 
-#endif
+#endif  // defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+
+typedef int vw_platform_linux_unused_t;
