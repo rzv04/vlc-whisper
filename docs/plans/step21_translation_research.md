@@ -8,10 +8,11 @@ API key, shared secret, or implementation is added by this report.
 ## Executive finding
 
 PotPlayer does not appear to provide an unlimited, provider-funded Google Cloud quota for all
-users. The most concrete public evidence is a community PotPlayer Google translation script. It
-uses a user-supplied Google Cloud API key when present, then falls back to an undocumented Google
-Translate web RPC endpoint when the key is absent. That explains the apparently free, no-account
-experience, but it is not a documented Google API and is not a reliable production dependency.
+users. The supplied PotPlayer file `SubtitleTranslate - google.as` provides direct evidence of
+the mechanism used by this translator script: it uses a user-supplied Google Cloud API key when
+present, then walks through several unauthenticated Google web/legacy endpoints when the key is
+absent or the keyed request fails. That explains the apparently free, no-account experience, but
+it is not a documented Google API and is not a reliable production dependency.
 
 The defensible VLC choices are therefore:
 
@@ -20,32 +21,49 @@ The defensible VLC choices are therefore:
    amendment (possible, but it is not free to operate).
 3. A user-owned local or self-hosted translation endpoint (private, but without a managed SLA).
 
-The undocumented PotPlayer-like web endpoint can be investigated as an isolated compatibility
+The undocumented PotPlayer-like fallback chain can be investigated as an isolated compatibility
 experiment, but should not be the default or the basis of the product promise.
 
 ## Evidence about PotPlayer
 
 The supplied screenshot shows a provider-oriented subtitle translation configuration: Google is
-one of the possible services, with source/target language and account-related settings. It does
-not establish whether the shipped PotPlayer implementation uses an official API, a consumer web
-endpoint, or a provider-owned backend.
+one of the possible services, with source/target language and account-related settings. The newly
+inspected local script clarifies that the apparent account field is actually an API-key field;
+the password value is ignored. The screenshot alone could not establish this.
 
-The strongest available implementation evidence is the archived community
-[PotPlayer Subtitle Translate GoogleFix source](https://raw.githubusercontent.com/veritas501/Potplayer-Subtitle-Translate-GoogleFix/refs/heads/master/SubtitleTranslate%20-%20googleFix.as):
+The strongest implementation evidence is now the local PotPlayer script
+`SubtitleTranslate - google.as` supplied in the working tree. Its host-interface comments and
+functions match a PotPlayer subtitle-translation provider, including a per-line
+`Translate(Text, SrcLang, DstLang)` callback. It shows the following request order:
 
-- It exposes a per-subtitle-line `Translate(Text, SrcLang, DstLang)` callback.
-- It defines an optional `api_key` and first attempts Google Cloud Translation Basic/v2.
-- When no key is available, it calls Google's internal
-  `translate.google.com/_/TranslateWebserverUi/data/batchexecute` RPC endpoint.
-- It hardcodes an internal RPC identifier and web-client build parameter, then parses the
-  undocumented response format.
+1. If `ServerLogin(User, Pass)` received a value, the script stores `User` as `api_key` and
+   calls the documented Google Cloud Translation Basic/v2 endpoint. `Pass` is never used.
+2. If that call is unavailable or returns no parseable translation, it calls Google's internal
+   `translate.google.com/_/TranslateWebserverUi/data/batchexecute` endpoint using an `f.req`
+   POST body, RPC ID `MkEWBc`, and a hardcoded 2022 web-client build parameter. The script itself
+   labels this path `open api(for free)`.
+3. If the RPC response cannot be parsed, it calls
+   `translate.googleapis.com/translate_a/single?client=gtx`, an undocumented legacy endpoint.
+4. If that also fails, it requests the mobile Google Translate page and extracts
+   `<div class="result-container">` from the HTML.
 
-This is evidence for how a PotPlayer-compatible script can appear to offer free Google
-translation, not proof of the current proprietary PotPlayer implementation. The script's
-repository is archived, and the web endpoint can change or reject automated traffic without
-notice. Google documents official authentication and API access in its
+The script also prepends an empty source-language option for automatic detection and exposes a
+large source/target language table. This is consistent with the screenshot and with PotPlayer
+requesting translation one subtitle line at a time.
+
+The archived community
+[PotPlayer Subtitle Translate GoogleFix source](https://raw.githubusercontent.com/veritas501/Potplayer-Subtitle-Translate-GoogleFix/refs/heads/master/SubtitleTranslate%20-%20googleFix.as)
+independently corroborates this design:
+
+- It uses the same keyed API plus undocumented fallback approach.
+
+The local artifact makes the mechanism high-confidence for that installed script, but it still
+does not prove that every PotPlayer release ships the same file or that the current proprietary
+application has no additional service layer. The fallback endpoints can change or reject
+automated traffic without notice. Google documents official authentication and API access in its
 [Cloud Translation authentication guide](https://docs.cloud.google.com/translate/docs/authentication)
-and does not document the web RPC as a general-purpose product API.
+and does not document the web RPC, `translate_a/single`, or mobile-page scraping as general-purpose
+product APIs.
 
 ## Official provider options
 
@@ -188,6 +206,8 @@ This report is the concrete Step 21a research artifact; the roadmap link is upda
 
 ## Sources consulted
 
+- Supplied local PotPlayer provider script: `SubtitleTranslate - google.as` (inspected in the
+  working tree; intentionally not copied into the repository or committed)
 - [PotPlayer GoogleFix implementation](https://raw.githubusercontent.com/veritas501/Potplayer-Subtitle-Translate-GoogleFix/refs/heads/master/SubtitleTranslate%20-%20googleFix.as)
 - [PotPlayer GoogleFix repository](https://github.com/veritas501/Potplayer-Subtitle-Translate-GoogleFix)
 - [Unofficial PotPlayer translation setup discussion](https://potplayer.org/jiqiao/707.html)
