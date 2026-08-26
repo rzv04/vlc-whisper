@@ -1,6 +1,23 @@
 # VLC-Whisper
 
-![VLC-Whisper](./assets/vlc-whisper-logo-animation.gif)
+<p align="center">
+  <img src="./assets/vlc-whisper-logo-animation.gif" width=700 alt="VLC-Whisper">
+</p>
+
+<p align="center">
+  <a href="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml">
+    <img src="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://github.com/rzv04/vlc-whisper/releases">
+    <img src="https://img.shields.io/github/v/release/rzv04/vlc-whisper" alt="Release">
+  </a>
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
+  </a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey" alt="Windows and Linux">
+  <img src="https://img.shields.io/badge/VLC-3.0%2B-orange" alt="VLC 3.0+">
+  <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
+</p>
 
 **VLC-Whisper** brings private, offline, real-time AI speech recognition and subtitle generation directly into VLC media player. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), it automatically transcribes and displays synchronized subtitles for any audio or video file without sending data to the cloud.
 
