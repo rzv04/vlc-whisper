@@ -114,13 +114,18 @@ Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 
 
 Plugin to worker. Payload 49 bytes: session ID, `u8 action` (`DOWNLOAD=1`, `ABORT=2`), `char model_id[32]` (NUL-padded catalog id: `tiny.en|tiny|base.en|base|small|medium|large`; ignored for `ABORT`) — 49 bytes on the wire.
 
-- Semantics: user-initiated model fetch. Worker downloads the requested catalog model to the per-user directory, streaming sha256 verification against the committed catalog (`worker/include/vw_model_catalog.h`), writing to `.part` and atomically renaming on success. Single-flight: a second `DOWNLOAD` while active yields an immediate `MODEL_PROGRESS` `FAILED` response. Unknown `model_id` → `MODEL_PROGRESS` `FAILED`.
+- Semantics: user-initiated model fetch. This is worker-scoped, so a zero session ID is valid when `START` was
+  rejected because the selected model is missing. The worker downloads the requested catalog model to the per-user
+  directory, streaming sha256 verification against the committed catalog (`worker/include/vw_model_catalog.h`),
+  writing to `.part` and atomically renaming on success. Single-flight: a second `DOWNLOAD` while active yields an
+  immediate `MODEL_PROGRESS` `FAILED` response. Unknown `model_id` → `MODEL_PROGRESS` `FAILED`. `ABORT` cancels
+  the download thread and removes its partial file; worker shutdown or IPC disconnect performs the same cleanup.
 
 ### MODEL_PROGRESS (v1.4)
 
 Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADING=1`, `VERIFYING=2`, `DONE=3`, `FAILED=4`, `ABORTING=5`), `u8 pct` (0–100), `u64 bytes_done`, `u64 bytes_total`, `char model_id[32]` (NUL-padded) — 66 bytes on the wire.
 
-- Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) for the settings GUI.
+- Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) and renders progress through a dedicated C presenter SPU channel. Lua only submits commands; it does not poll, sleep, or refresh the dialog in a loop, so playback pause does not pause downloading.
 
 ### Model storage
 
@@ -160,11 +165,12 @@ vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [
 |---|---|---|---|
 | `--pipe <path>` | Yes | (none) | Named pipe name (Win32) or Unix domain socket path (POSIX). |
 | `--token <64_hex>` | Yes | (none) | 32-byte secret authentication token in 64 hexadecimal characters. |
-| `--model <path>` | No | `models/ggml-tiny.en.bin` | Path to Whisper GGML model file. |
+| `--model <path>` | No | bundled `models/ggml-tiny.bin` | Path to Whisper GGML model file. |
 | `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). If not specified, the worker auto-discovers `ggml-silero-vad.bin` in the model directory alongside `--model`. If absent, gracefully falls back to RMS Energy VAD. |
 | `--backend <type>` | No | `auto` | Inference accelerator backend: `auto`, `gpu`, or `cpu`. |
 | `--gpu-device <id>` | No | `0` | GPU/IGPU device index for hardware acceleration. |
 | `--log-file <path>` | No | (temp directory) | Custom destination for diagnostic log output. |
+| `--model-dir <path>` | No | per-user model directory | Destination for explicit catalog downloads; creates the directory on demand. |
 
 ## Compatibility rules
 

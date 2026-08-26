@@ -1,7 +1,8 @@
-# VLC-Whisper Settings GUI — Lua Extension (Step 19b)
+# VLC-Whisper Settings GUI — Lua Extension (Step 19c)
 
 Wired Lua extension dialog for VLC 3.0.23 that reads/writes the plugin config namespace
-and triggers a worker respawn via the plugin’s ~2 s poll loop. No network, no translation.
+and submits worker commands through the plugin’s ~2 s config bridge. Lua never waits, sleeps, polls download state,
+or performs network I/O. No translation.
 
 ## Files
 
@@ -10,12 +11,28 @@ and triggers a worker respawn via the plugin’s ~2 s poll loop. No network, no 
 ## Config keys (plugin registers; Lua writes via `vlc.config.set`)
 
 - `whisper-backend` — `"auto"` (default) | `"gpu"` | `"cpu"`
-- `model-path` — relative path under `models/`, e.g. `models/ggml-tiny.en.bin` (dropdown maps labels → paths; selection allowed even if file absent — `E_MODEL_MISSING` disables captions until 19c)
-- `whisper-language` — `"en"` (default) | `ro` | `tr` | `de` | `fr` | `es` — **no `auto`** entry (tiny.en is English-only; auto-detect on English-only models is meaningless and deliberately omitted)
+- `model-path` — relative path under `models/`, e.g. `models/ggml-tiny.bin` (bundled `tiny` is the default; an explicit user selection remains authoritative and may be absent until downloaded)
+- `whisper-language` — `"en"` (default) | `ro` | `tr` | `de` | `fr` | `es` — **no `auto`** entry in this dialog; automatic language selection is a later UI step
 - `whisper-threads` — integer `1..16`, default `4` (clamped on Apply)
 - `whisper-backend-active` — read-only mirror written by plugin when `STATUS` v1.3 `resolved_backend` drains (`gpu`/`cpu`); Lua reads it for the status label
 
-Language/dropdown wiring: `Apply` does `tonumber` + clamp `1..16` for threads, then `vlc.config.set` ×4 (model-path set to `models/<chosen>.bin` relative path) and logs `[VLC-Whisper] applied …` lines. Plugin sender-loop polls every ~2 s; any diff vs last-applied snapshot → `vw_plugin_respawn_worker()` (brief caption gap, then resumes on new epoch). All four currently apply via respawn (live per-call for language/threads is a future optimization).
+Language/dropdown wiring: `Apply` does `tonumber` + clamp `1..16` for threads, then `vlc.config.set` ×4 (model-path
+set to `models/<chosen>.bin` relative path) and logs `[VLC-Whisper] applied …` lines. Plugin sender-loop polls every
+~2 s; any diff vs last-applied snapshot → `vw_plugin_respawn_worker()` (brief caption gap, then resumes on a new
+epoch). All four currently apply via respawn (live per-call for language/threads is a future optimization).
+
+## Model download behavior
+
+The existing single dialog and menu expose **Download selected model** and **Abort model download**. Each Lua
+callback only writes `whisper-model-download`, `whisper-model-status`, and `whisper-model-progress` config values,
+updates the current label once, and returns. There is no `os.clock`, `dlg:update`, timer, sleep, polling loop, or
+network call in Lua.
+
+The plugin forwards the command after media creates the worker, including when the selected model initially prevents
+caption `START`. The worker downloads on its own thread; the plugin sender renders progress on a dedicated SPU
+overlay, so playback and playback pause do not affect the transfer. Abort, worker disconnect, and worker shutdown
+remove the partial file and clear the overlay. A verified model is installed in the per-user model directory and
+the plugin respawns the worker on that model.
 
 ## Windows manual test (verbatim)
 
@@ -46,7 +63,8 @@ Language/dropdown wiring: `Apply` does `tonumber` + clamp `1..16` for threads, t
    - Plugin log `PLUGIN_RESPAWN` and worker restart (`STARTED` with new `session_id`).
    - Captions continue after the brief gap.
 
-   With the bundled `tiny.en` English-only model, selecting `ro` does **NOT** translate output — worker clamps/falls back to `en` with `WARN` log. Expected.
+   With the bundled multilingual `tiny` model, `ro` is a valid transcription language. The dialog still has no
+   `auto` entry.
 
 5. Change **Engine** to `gpu` on a machine without Vulkan, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` mirrored into `whisper-backend-active`).
 
@@ -65,20 +83,20 @@ vlc -vvv --audio-filter=vlc_whisper
 
 | Label | Relative path |
 |-------|---------------|
-| tiny.en (default) | `models/ggml-tiny.en.bin` |
-| tiny (multilingual) | `models/ggml-tiny.bin` |
+| tiny.en | `models/ggml-tiny.en.bin` |
+| tiny (multilingual, bundled default) | `models/ggml-tiny.bin` |
 | base.en | `models/ggml-base.en.bin` |
 | base (multilingual) | `models/ggml-base.bin` |
 | small | `models/ggml-small.bin` |
 | medium | `models/ggml-medium.bin` |
-| large | `models/ggml-large.bin` |
+| large | `models/ggml-large-v3.bin` |
 
-Selection allowed even if file absent; `E_MODEL_MISSING` disables captions until provisioned (19c adds downloader).
+Selection allowed even if file absent; `E_MODEL_MISSING` disables captions until the selected model is downloaded.
 
 ## What NOT to expect
 
-- No `auto` language option (deliberately omitted — English-only default model).
-- No in-app model downloader (19c).
+- No `auto` language option (automatic language selection is a later UI step).
+- No second settings dialog; model download actions remain in this single Lua extension.
 - No translation (21b).
 - Settings do NOT persist across VLC restart unless VLC exits cleanly (`vlcrc` save happens on clean exit).
 

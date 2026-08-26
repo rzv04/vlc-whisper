@@ -53,8 +53,8 @@ bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_
 // Encodes and sends a PCM audio chunk over the IPC pipe to the worker during an active caption session.
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk);
 
-// Sends a MODEL_CTRL frame requesting model download or abort over IPC, encoding payload with session and
-// NUL-padded identifier; drops transport on failure and returns false when client or pipe invalid.
+// Sends a worker-scoped MODEL_CTRL request over authenticated IPC, allowing download or abort with a zero session ID
+// before caption START succeeds.
 bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action, const char* model_id);
 
 // Sends a STOP control frame over IPC to request the worker to stop processing the current caption session.

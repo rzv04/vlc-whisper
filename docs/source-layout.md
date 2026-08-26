@@ -93,7 +93,7 @@ vlc-whisper/
 ├── models/                                    # Offline local GGML model storage & manifests
 │   ├── vw_download_vad_model.sh               # POSIX helper to download Silero VAD GGML weights
 │   ├── vw_download_vad_model.cmd              # Windows helper to download Silero VAD GGML weights
-│   ├── ggml-tiny.en.bin                       # Default GGML tiny.en weights file (git-ignored binary)
+│   ├── ggml-tiny.bin                           # Bundled multilingual tiny weights file (git-ignored binary)
 │   ├── ggml-silero-vad.bin                    # Silero VAD GGML weights file (git-ignored binary)
 │   └── manifest.json                          # Offline manifest (SHA-256 integrity, RAM bounds)
 ├── tests/                                     # Verification suites, fixtures, and E2E procedures
@@ -150,19 +150,21 @@ vlc-whisper/
 
 The `models/` directory serves as the local offline store for GGML model files and manifests:
 
-- **Local Model Files (`models/*.bin`)**: Large binary weights downloaded or copied out-of-band by the developer/user (e.g. `ggml-tiny.en.bin`). Binary model files are git-ignored.
+- **Local Model Files (`models/*.bin`)**: Bundled or user-provisioned GGML weights (the bundled default is
+  `ggml-tiny.bin`; additional catalog models are downloaded into the per-user directory). Binary model files are
+  git-ignored.
 - **Model Manifest (`models/manifest.json`)**: Declares supported models, expected SHA-256 hashes, language scope (`en`), and disk/RAM footprint bounds per ADR-007.
 
 ## Plugin Files
 
 | File                     | Responsibility                                                            |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `vw_whisper_module.c`   | VLC module registration, activation/deactivation, module setup; since 14c also hosts the sender thread (SPSC drain + worker frame drain, 5/20 ms cadence) and model-path discovery (`model-path` option) |
+| `vw_whisper_module.c`   | VLC module registration, activation/deactivation, module setup; since 14c also hosts the sender thread (SPSC drain + worker frame drain, 5/20 ms cadence), model-path discovery, and worker-scoped model-download orchestration |
 | `vw_session.c`           | Caption session state: start, pause, resume, stop, discontinuity, failure |
 | `vw_audio_capture.c`     | Receive/normalize PCM and associate monotonic media PTS                   |
 | `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |
 | `vw_worker_client.c`     | Launch worker, IPC connect, HELLO handshake, send/receive, cleanup        |
-| `vw_caption_presenter.c` | VLC SPU subpicture channel rendering (`vout_RegisterSubpictureChannel`/`vout_PutSubpicture`/`VLC_CODEC_TEXT`/`text_segment_New`) with OSD fallback and look-ahead future SPU scheduling |
+| `vw_caption_presenter.c` | VLC caption SPU rendering with OSD fallback and look-ahead scheduling; owns a separate wall-clock SPU channel for model-download progress that survives pause/seek blanking |
 | `vw_log.c`               | Privacy-safe diagnostics; never log PCM/transcript by default             |
 | `vw_platform_win32.c`    | Windows: paths, handles, BCrypt CSPRNG, process spawn, timing helpers     |
 | `vw_platform_linux.c`    | Linux/Unix: random bytes, posix_spawn, timing helpers                     |
@@ -186,14 +188,14 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_sha256.c`          | Incremental SHA-256 implementation, streaming hash while writing .part |
 | `vw_model_catalog.h`   | Committed model catalog (7 models, pinned sha256/bytes, Hugging Face URLs) |
 | `vw_model_download.h`  | Download engine interface: dedicated thread, single-flight, abort, progress snapshot |
-| `vw_model_download.c`  | WinHTTP/curl download, .part → sha256 verify → atomic rename into per-user dir |
-| `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, retry-then-fail (unit test) |
+| `vw_model_download.c`  | WinHTTP/curl download, .part → sha256 verify → atomic rename into per-user dir; abort and worker-death cleanup |
+| `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, local success, abort cleanup, and retry-then-fail paths |
 
 The builder exposes `vw_segment_builder_push_hypothesis` (whole-phrase final-subtitles dedup: exact,
 fragment, and expanded superstring hypotheses are dropped; queue grows dynamically; history commits after a
 successful enqueue). See ADR-018 and `docs/plans/phrase_timing_segmentation_plan.md` step 17d.1.
 
-MVP supports CPU inference using `tiny.en`, one local playback session, and final-only segments.
+The shipped default supports multilingual CPU inference using `tiny`, one local playback session, and final-only segments.
 
 ## Protocol Files
 

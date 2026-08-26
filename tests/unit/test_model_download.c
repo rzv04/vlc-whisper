@@ -139,6 +139,56 @@ static void test_default_dir(void) {
   (void)vw_model_download_default_dir(tiny, sizeof(tiny));
 }
 
+static void test_local_file_download(void) {
+#ifdef _WIN32
+  (void)0;
+  return;
+#else
+  char source_tmpl[] = "/tmp/vw_test_source_XXXXXX";
+  int source_fd = mkstemp(source_tmpl);
+  EXPECT(source_fd >= 0);
+  const char payload[] = "local model download test\n";
+  EXPECT(write(source_fd, payload, sizeof(payload) - 1) == (ssize_t)(sizeof(payload) - 1));
+  EXPECT(close(source_fd) == 0);
+
+  char dest_tmpl[] = "/tmp/vw_test_local_dl_XXXXXX";
+  char* dest_dir = mkdtemp(dest_tmpl);
+  EXPECT(dest_dir != NULL);
+
+  char url[4096];
+  snprintf(url, sizeof(url), "file://%s", source_tmpl);
+  uint8_t hash[32];
+  char hash_hex[65];
+  vw_sha256((const uint8_t*)payload, sizeof(payload) - 1, hash);
+  vw_sha256_to_hex(hash, hash_hex);
+  vw_model_catalog_entry_t entry = {"local", "local.bin", url, hash_hex, sizeof(payload) - 1, false};
+
+  vw_model_download_t* dl = vw_model_download_start(&entry, dest_dir);
+  EXPECT(dl != NULL);
+  vw_download_progress_t progress = {0};
+  for (int i = 0; i < 200; i++) {
+    EXPECT(vw_model_download_poll(dl, &progress));
+    if (progress.stage == VW_MODEL_STAGE_DONE || progress.stage == VW_MODEL_STAGE_FAILED) break;
+    struct timespec ts = {0, 10000000L};
+    nanosleep(&ts, NULL);
+  }
+  EXPECT(progress.stage == VW_MODEL_STAGE_DONE);
+  EXPECT(progress.pct == 100);
+  EXPECT_EQ_STR(progress.model_id, "local");
+
+  char final_path[4096];
+  snprintf(final_path, sizeof(final_path), "%s/local.bin", dest_dir);
+  struct stat st;
+  EXPECT(stat(final_path, &st) == 0);
+  EXPECT((uint64_t)st.st_size == sizeof(payload) - 1);
+
+  vw_model_download_free(dl);
+  EXPECT(unlink(final_path) == 0);
+  EXPECT(unlink(source_tmpl) == 0);
+  EXPECT(rmdir(dest_dir) == 0);
+#endif
+}
+
 static void test_poll_and_lifecycle(void) {
 #ifdef _WIN32
   (void)0;
@@ -149,39 +199,38 @@ static void test_poll_and_lifecycle(void) {
   vw_model_download_abort(NULL);
   vw_model_download_free(NULL);
 
-  const vw_model_catalog_entry_t* e = vw_model_catalog_find("tiny");
-  EXPECT(e != NULL);
   // Start with NULL entry or dir should return NULL without network.
   EXPECT(vw_model_download_start(NULL, "/tmp") == NULL);
-  EXPECT(vw_model_download_start(e, NULL) == NULL);
-  EXPECT(vw_model_download_start(e, "") == NULL);
+  vw_model_catalog_entry_t invalid_entry = {"invalid", "invalid.bin", "file:///invalid", "", 1, false};
+  EXPECT(vw_model_download_start(&invalid_entry, NULL) == NULL);
+  EXPECT(vw_model_download_start(&invalid_entry, "") == NULL);
 
-  // Poll with null out should fail.
-  // Create a temp dir for a smoke start that we immediately abort to avoid network.
+  // Create a FIFO so curl blocks locally; abort/free must stop it without network access.
   char tmpl[] = "/tmp/vw_test_dl_XXXXXX";
   char* tmpdir = mkdtemp(tmpl);
   EXPECT(tmpdir != NULL);
-  // Use a short timeout: start then immediately abort and free; no network assertion.
-  vw_model_download_t* dl = vw_model_download_start(e, tmpdir);
+  char fifo_path[4096];
+  snprintf(fifo_path, sizeof(fifo_path), "%s/input", tmpdir);
+  EXPECT(mkfifo(fifo_path, 0600) == 0);
+  char fifo_url[8192];
+  snprintf(fifo_url, sizeof(fifo_url), "file://%s", fifo_path);
+  vw_model_catalog_entry_t fifo_entry = {"fifo", "fifo.bin", fifo_url, "", 1, false};
+  vw_model_download_t* dl = vw_model_download_start(&fifo_entry, tmpdir);
   if (dl) {
     EXPECT(vw_model_download_poll(dl, NULL) == false);
     EXPECT(vw_model_download_poll(dl, &prog) == true);
-    // model_id should be NUL-terminated copy of entry id.
-    EXPECT_EQ_STR(prog.model_id, "tiny");
+    EXPECT_EQ_STR(prog.model_id, "fifo");
     vw_model_download_abort(dl);
-    // Poll after abort should reflect ABORTING or IDLE.
-    // Give thread a moment to observe abort.
-    do {
-      struct timespec ts = {0, 200000000L};
-      nanosleep(&ts, NULL);
-    } while (0);
+    // free() joins the downloader thread and reaps curl after abort.
     EXPECT(vw_model_download_poll(dl, &prog) == true);
     vw_model_download_free(dl);
-    // Ensure no leaked .part remains (cleanup helper also).
-    vw_model_download_cleanup_partial(tmpdir);
   }
-  // Cleanup temp dir.
-  rmdir(tmpdir);
+  char part_path[4096];
+  snprintf(part_path, sizeof(part_path), "%s/fifo.bin.part", tmpdir);
+  struct stat st;
+  EXPECT(stat(part_path, &st) != 0);
+  EXPECT(unlink(fifo_path) == 0);
+  EXPECT(rmdir(tmpdir) == 0);
 }
 
 static void test_cleanup_partial(void) {
@@ -229,6 +278,7 @@ int main(void) {
   test_pct_math();
   test_catalog();
   test_default_dir();
+  test_local_file_download();
   test_poll_and_lifecycle();
   test_cleanup_partial();
   printf("test_model_download: all checks passed\n");

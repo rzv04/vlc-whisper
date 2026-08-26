@@ -2,8 +2,8 @@
 -- VLC 3.0.23 Lua 5.1 runtime. Validates with `luac -p` (Lua 5.1).
 -- Wired version: reads/writes plugin config namespace (whisper-backend,
 -- model-path, whisper-language, whisper-threads) via cfg_get/set.
--- No translation code. No network. See docs/plans/spike_lua_extension.md
--- and Step 19b README section for apply/respawn semantics.
+-- No translation code, network, timers, polling, or waits. Download progress is rendered by the C plugin/worker
+-- path; see docs/plans/model_download_no_wait_plan.md for the command-only Lua architecture.
 
 local dlg = nil
 local w_engine = nil
@@ -73,9 +73,8 @@ for _id = 1, #model_path_map do
   model_path_to_id[model_path_map[_id]] = _id
 end
 
--- Language dropdown: concrete codes ONLY -- no "auto" entry.
--- tiny.en default model is English-only; vendored whisper auto-detect on
--- English-only models is meaningless (deliberately omitted).
+-- Language dropdown: concrete codes ONLY -- no "auto" entry in this dialog.
+-- Automatic language selection is a later UI step even though bundled tiny is multilingual.
 local language_map = {
   [1] = "en",
   [2] = "ro",
@@ -89,6 +88,9 @@ local language_map = {
 local engine_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
 local language_to_id = { ["en"] = 1, ["ro"] = 2, ["tr"] = 3, ["de"] = 4, ["fr"] = 5, ["es"] = 6 }
 
+local default_model_id = 2
+local default_model_path = model_path_map[default_model_id] or "models/ggml-tiny.bin"
+
 local function clamp_threads(v)
   local n = tonumber(v)
   if n == nil then n = 4 end
@@ -99,37 +101,37 @@ local function clamp_threads(v)
 end
 
 local function resolve_model_id_from_path(path)
-  if path == nil or path == "" then return 2 end
+  if path == nil or path == "" then return default_model_id end
   -- Direct hit (relative path as stored).
   if model_path_to_id[path] ~= nil then return model_path_to_id[path] end
   -- Suffix match: handles absolute or bare filename forms (e.g. installed
-  -- location "C:\\...\\models\\ggml-tiny.en.bin" or just filename).
-  for _id = 1, 7 do
+  -- location "C:\\...\\models\\ggml-tiny.bin" or just filename).
+  for _id = 1, #model_path_map do
     local _rel = model_path_map[_id]
     local fname = _rel:match("([^/\\]+)$")
     if fname and path:find(fname, 1, true) then
       return _id
     end
   end
-  -- Fallback: try label substring (e.g. "tiny.en" in a custom path).
-  for _id = 1, 7 do
+  -- Fallback: try label substring (e.g. "tiny" in a custom path).
+  for _id = 1, #model_map do
     local _label = model_map[_id]
     if _label and path:find(_label, 1, true) then
       return _id
     end
   end
-  return 2
+  return default_model_id
 end
 
 local function on_apply()
   local eng_id = w_engine and w_engine:get_value() or 1
-  local mod_id = w_model and w_model:get_value() or 1
+  local mod_id = w_model and w_model:get_value() or default_model_id
   local lang_id = w_language and w_language:get_value() or 1
   local thr_text = w_threads and w_threads:get_text() or "4"
 
   local engine = engine_map[eng_id] or "auto"
-  local model_label = model_map[mod_id] or "tiny.en"
-  local model_path = model_path_map[mod_id] or "models/ggml-tiny.bin"
+  local model_label = model_map[mod_id] or "tiny"
+  local model_path = model_path_map[mod_id] or default_model_path
   local language = language_map[lang_id] or "en"
   local threads = clamp_threads(thr_text)
 
@@ -169,9 +171,6 @@ local function on_abort_download()
       w_status:set_text("Model download: aborting...")
     end
   end)
-  pcall(function()
-    if dlg ~= nil then dlg:update() end
-  end)
 end
 
 local function on_download()
@@ -187,60 +186,28 @@ local function on_download()
   end
   -- Map to catalog id (plugin expects these exact strings).
   local catalog_id = catalog_id_map[sel_id] or "tiny"
+
+  -- Check if playback is active / worker is connected.
+  local is_playing = false
+  pcall(function()
+    if vlc and vlc.input and vlc.input.is_playing then
+      is_playing = vlc.input.is_playing()
+    elseif vlc and vlc.playlist and vlc.playlist.is_playing then
+      is_playing = vlc.playlist.is_playing()
+    end
+  end)
+
+  -- Trigger download via whisper-model-download control variable without
+  -- changing active model-path yet (worker must stay alive on existing model).
   pcall(function() cfg_set("whisper-model-download", catalog_id) end)
-  -- Prime the mirrors synchronously: the plugin relays at its next 2s poll, and
-  -- a PREVIOUS download's terminal status ("done:..."/"failed:...") would
-  -- otherwise break this loop before the first fresh progress frame arrives.
   pcall(function() cfg_set("whisper-model-status", "downloading") end)
   pcall(function() cfg_set("whisper-model-progress", 0) end)
   vlc.msg.info("[VLC-Whisper] download requested " .. tostring(catalog_id))
-  -- Bounded poll loop ~1800 ticks at ~2 Hz (approx 15 min).
-  for _tick = 1, 1800 do
-    local status_text = nil
-    local pct = nil
-    pcall(function() status_text = cfg_get("whisper-model-status") end)
-    pcall(function() pct = cfg_get("whisper-model-progress") end)
-    if status_text == nil then status_text = "" end
-    if pct == nil then pct = 0 end
-    -- Update status label if dialog present; skip when w_model nil (dialog closed).
-    if w_status ~= nil then
-      pcall(function()
-        w_status:set_text("Model " .. tostring(catalog_id) .. ": " .. tostring(status_text) .. " (" .. tostring(pct) .. "%)")
-      end)
-    end
-    local ok_update = pcall(function()
-      if dlg ~= nil then dlg:update() end
-    end)
-    -- Break when dialog was closed (dlg:update pcall failed).
-    if not ok_update then break end
-    -- Check stage prefix: done / failed / idle.
-    local done = false
-    pcall(function()
-      local s = tostring(status_text)
-      if s:sub(1, 4) == "done" then done = true end
-      if s:sub(1, 6) == "failed" then done = true end
-      if s:sub(1, 4) == "idle" then done = true end
-    end)
-    if done then break end
-    -- Pace ~2 Hz with busy-wait (allowed inside function).
-    local t0 = os.clock()
-    while os.clock() - t0 < 0.5 do end
+
+  if w_status ~= nil then
+    local status = is_playing and "download requested" or "queued (play media to start worker)"
+    pcall(function() w_status:set_text("Model " .. tostring(catalog_id) .. ": " .. status) end)
   end
-  -- One final status refresh after loop end.
-  pcall(function()
-    local status_text = nil
-    local pct = nil
-    pcall(function() status_text = cfg_get("whisper-model-status") end)
-    pcall(function() pct = cfg_get("whisper-model-progress") end)
-    if status_text == nil then status_text = "" end
-    if pct == nil then pct = 0 end
-    if w_status ~= nil then
-      -- Re-resolve catalog_id for final label (keep same).
-      local final_id = catalog_id
-      w_status:set_text("Model " .. tostring(final_id) .. ": " .. tostring(status_text) .. " (" .. tostring(pct) .. "%)")
-    end
-    if dlg ~= nil then dlg:update() end
-  end)
 end
 
 local function build_dialog()
@@ -259,7 +226,7 @@ local function build_dialog()
   pcall(function() cur_active = cfg_get("whisper-backend-active") end)
 
   if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
-  if cur_model_path == nil or cur_model_path == "" then cur_model_path = "models/ggml-tiny.bin" end
+  if cur_model_path == nil or cur_model_path == "" then cur_model_path = default_model_path end
   if cur_language == nil or cur_language == "" then cur_language = "en" end
   if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
   cur_threads = tostring(cur_threads)
@@ -271,7 +238,7 @@ local function build_dialog()
 
   -- Row 1: Engine
   dlg:add_label("Engine:", 1, 1, 1, 1)
-  w_engine = dlg:add_dropdown(2, 1, 2, 1)
+  w_engine = dlg:add_dropdown(2, 1, 3, 1)
   w_engine:add_value("auto (default)", 1)
   w_engine:add_value("GPU (Vulkan)", 2)
   w_engine:add_value("CPU only", 3)
@@ -279,19 +246,22 @@ local function build_dialog()
 
   -- Row 2: Model (labels map to models/<name>.bin relative paths)
   dlg:add_label("Model:", 1, 2, 1, 1)
-  w_model = dlg:add_dropdown(2, 2, 2, 1)
-  w_model:add_value("tiny.en (default)", 1)
-  w_model:add_value("tiny (multilingual)", 2)
-  w_model:add_value("base.en", 3)
-  w_model:add_value("base (multilingual)", 4)
-  w_model:add_value("small", 5)
-  w_model:add_value("medium", 6)
-  w_model:add_value("large", 7)
+  w_model = dlg:add_dropdown(2, 2, 3, 1)
+  for _id = 1, #model_path_map do
+    local label = model_map[_id] or "model"
+    if _id == 2 or _id == 4 then
+      label = label .. " (multilingual)"
+    end
+    if _id == default_model_id then
+      label = label .. " (bundled default)"
+    end
+    w_model:add_value(label, _id)
+  end
   pcall(function() w_model:set_value(sel_model) end)
 
-  -- Row 3: Language (NO auto entry -- English-only default model makes it meaningless)
+  -- Row 3: Language (concrete codes)
   dlg:add_label("Language:", 1, 3, 1, 1)
-  w_language = dlg:add_dropdown(2, 3, 2, 1)
+  w_language = dlg:add_dropdown(2, 3, 3, 1)
   w_language:add_value("English (en)", 1)
   w_language:add_value("Romanian (ro)", 2)
   w_language:add_value("Turkish (tr)", 3)
@@ -302,12 +272,13 @@ local function build_dialog()
 
   -- Row 4: Threads -- text input (VLC Lua has no spinbox widget).
   dlg:add_label("Threads:", 1, 4, 1, 1)
-  w_threads = dlg:add_text_input(cur_threads, 2, 4, 2, 1)
+  w_threads = dlg:add_text_input(cur_threads, 2, 4, 3, 1)
 
-  -- Row 5: Apply
-  dlg:add_button("Apply", on_apply, 1, 5, 4, 1)
+  -- Row 5: Action Buttons (Apply & Download Selected Model)
+  dlg:add_button("Apply", on_apply, 1, 5, 2, 1)
+  dlg:add_button("Download Selected Model", on_download, 3, 5, 2, 1)
 
-  -- Row 6: Detected backend status (informational, mirrors whisper-backend-active)
+  -- Row 6: Detected backend / download status
   w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 6, 4, 1)
 
   -- Row 7: Hint
@@ -324,7 +295,7 @@ function descriptor()
     description = "Settings GUI for VLC-Whisper (Lua extension). "
       .. "Engine/Model/Language dropdowns + Threads input. "
       .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
-      .. "plugin polls and respawns worker mid-play (brief caption gap). "
+      .. "plugin polls config and respawns worker mid-play (brief caption gap); download progress is rendered by C. "
       .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
       .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent. "
       .. "Menu entries: VLC-Whisper Settings, Download selected model, Abort model download.",
@@ -386,4 +357,14 @@ function trigger_menu(id)
   else
     pcall(function() dlg:show() end)
   end
+end
+
+-- Extension lifecycle callbacks (silences VLC lua warnings during media playback)
+function meta_changed()
+end
+
+function input_changed()
+end
+
+function playing_changed()
 end

@@ -453,7 +453,9 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
 }
 
 bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action, const char* model_id) {
-  if (!client || !client->pipe_handle || !client->session_active) return false;
+  // Model provisioning is worker-scoped, not caption-session-scoped: a missing selected model can reject START,
+  // while the same authenticated worker must still accept DOWNLOAD/ABORT with a zero session id.
+  if (!client || !client->pipe_handle) return false;
   vw_msg_model_ctrl_t msg;
   memset(&msg, 0, sizeof(msg));
   msg.action = action;

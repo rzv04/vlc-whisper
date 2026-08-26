@@ -303,7 +303,7 @@ cpack --config build/windows-x64-release/CPackConfig.cmake
 ```
 
 _Outputs generated in `build/windows-x64-release/`:_
-- `vlc-whisper-0.3.0-win64-setup.exe` (~74 MB standalone setup wizard with embedded Whisper tiny.en + Silero VAD weights)
+- `vlc-whisper-0.3.0-win64-setup.exe` (~74 MB standalone setup wizard with embedded Whisper tiny + Silero VAD weights)
 - `vlc-whisper-0.3.0-win64.zip` (Portable release archive)
 ---
 
@@ -317,12 +317,16 @@ It exposes four controls that map directly to the plugin’s config namespace:
 | Control | Config key | Values / mapping |
 |---------|------------|-------------------|
 | Engine (backend) | `whisper-backend` | `auto` (default) · `gpu` (Vulkan) · `cpu` |
-| Model | `model-path` | dropdown labels map to **relative** paths under `models/`: `tiny.en` → `models/ggml-tiny.en.bin`, `tiny` → `models/ggml-tiny.bin`, `base.en` → `models/ggml-base.en.bin`, `base` → `models/ggml-base.bin`, `small` → `models/ggml-small.bin`, `medium` → `models/ggml-medium.bin`, `large` → `models/ggml-large.bin` (selection allowed even if file absent; missing file disables captions with `E_MODEL_MISSING` until provisioned — see 19c) |
-| Language | `whisper-language` | `en` (default) · `ro` · `tr` · `de` · `fr` · `es` — **no `auto` entry** (the bundled `tiny.en` is English-only; vendored whisper auto-detect on English-only models is meaningless and deliberately omitted) |
+| Model | `model-path` | dropdown labels map to **relative** paths under `models/`: `tiny.en` → `models/ggml-tiny.en.bin`, `tiny` → `models/ggml-tiny.bin`, `base.en` → `models/ggml-base.en.bin`, `base` → `models/ggml-base.bin`, `small` → `models/ggml-small.bin`, `medium` → `models/ggml-medium.bin`, `large` → `models/ggml-large-v3.bin` (selection allowed even if file absent; missing file disables captions with `E_MODEL_MISSING` until provisioned — see 19c) |
+| Language | `whisper-language` | `en` (default) · `ro` · `tr` · `de` · `fr` · `es` — **no `auto` entry** in this dialog; the bundled `tiny` is multilingual, but automatic language selection remains a later UI step |
 | Threads | `whisper-threads` | integer `1..16`, default `4` (clamped on Apply) |
 | Detected backend (read-only) | `whisper-backend-active` | informational label refreshed on dialog open; shows `gpu` or `cpu` as resolved by the worker (`STATUS` v1.3 `resolved_backend`) after the first session `STARTED` |
 
-The dialog preselects current values on open via `vlc.config.get` (nil-safe defaults `auto` / `models/ggml-tiny.en.bin` / `en` / `4`). `Apply` validates threads (`tonumber` + clamp `1..16`), writes all four keys via `vlc.config.set`, and logs `[VLC-Whisper] applied …` lines (filter `Tools > Messages`).
+The dialog preselects current values on open via `vlc.config.get` (nil-safe defaults `auto` / bundled
+`models/ggml-tiny.bin` / `en` / `4`). If the user has not selected another model, plugin discovery prioritizes the
+bundled `tiny`; an explicit user-selected `model-path` remains authoritative. `Apply` validates threads (`tonumber`
++ clamp `1..16`), writes all four keys via `vlc.config.set`, and logs `[VLC-Whisper] applied …` lines (filter
+`Tools > Messages`).
 
 ### How settings apply
 
@@ -355,7 +359,8 @@ The dialog preselects current values on open via `vlc.config.get` (nil-safe defa
    - Plugin log `PLUGIN_RESPAWN` and worker restart (`worker` process respawn, `STARTED` with new `session_id`).
    - Captions continue after the brief gap (new epoch).
 
-5. With the **bundled `tiny.en` English-only model**, selecting `ro` does **NOT** translate output — the worker clamps / falls back to `en` and emits a `WARN` log (the model has no multilingual vocab; `ro` is ignored). This is expected until a multilingual model is provisioned (19c).
+5. The bundled `tiny` model is multilingual, so selecting a supported concrete language such as `ro` is valid. The
+   dialog still has no `auto` entry; automatic language selection remains a future UI step.
 
 6. Change **Engine** to `gpu` on a machine without Vulkan support, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` is mirrored into `whisper-backend-active`). Log shows `PLUGIN_RESPAWN` and backend resolution.
 
@@ -363,8 +368,7 @@ The dialog preselects current values on open via `vlc.config.get` (nil-safe defa
 
 ### What NOT to expect (19b scope)
 
-- **No auto-detect language option** — English-only default model makes it meaningless; deliberately omitted from the Language dropdown (only `en`/`ro`/`tr`/`de`/`fr`/`es`).
-- **No in-app model downloader** — model dropdown selection is allowed even if the file is absent (`E_MODEL_MISSING` disables captions); provisioning/downloading is 19c.
+- **No auto-detect language option** — deliberately omitted from the Language dropdown (only `en`/`ro`/`tr`/`de`/`fr`/`es`).
 - **No translation** — language selects the Whisper SOT token only; translation to another language is 21b (opt-in, network).
 - **Settings do NOT persist across VLC restart unless VLC exits cleanly** — `vlcrc` is saved on clean exit (`config_SaveConfigFile`); if VLC is killed, the last `Apply` is lost. Re-apply after a crash or set keys in `vlcrc` manually.
 
@@ -377,12 +381,12 @@ captions work immediately with no download. Additional models (`tiny.en`, `base.
 catalog (`worker/include/vw_model_catalog.h` / `models/manifest.json`).
 
 To download: select the desired model in the **Model** dropdown, then open the extension menu
-(`Tools` > `Extensions` > `VLC-Whisper Settings` > menu) and choose **Download selected model**.
-Live progress (stage, percent, bytes) appears in the dialog status row (`w:set_text` + `d:update()`
-polling loop, `add_spin_icon`); the worker executes the transfer on a dedicated thread (WinHTTP on
-Windows, `curl` on Linux), streaming sha256 while writing `<model>.part` and atomically renaming on
-verified success. **Abort** is available via the same menu (`Abort model download`) — the `.part`
-file is removed and the status returns to `idle`.
+(`Tools` > `Extensions` > `VLC-Whisper Settings` > menu) and choose **Download selected model**. Lua submits the
+request and returns immediately; it performs no timer, polling loop, sleep, or network I/O. Once media is playing,
+the worker executes the transfer on a dedicated thread (WinHTTP on Windows, `curl` on Linux), while the plugin
+sender renders stage/percent progress on a dedicated SPU overlay. The video keeps playing and pausing the video does
+not pause the download. **Abort** is available via the same menu (`Abort model download`) — the `.part` file is
+removed and the status returns to `idle`.
 
 Models are stored per-user (`%LOCALAPPDATA%\vlc-whisper\models` on Windows,
 `$XDG_DATA_HOME/vlc-whisper/models` on Linux; `--model-dir` override), so MS Store installs and
@@ -402,7 +406,7 @@ To install and verify the VLC plugin manually during development:
    - The worker is self-contained: all MinGW runtime is statically linked — zero external DLL dependencies (ADR-010).
 
 3. **Install the Models**:
-   - Speech Model: `C:\Program Files\VideoLAN\VLC\models\ggml-tiny.en.bin`
+   - Speech Model: `C:\Program Files\VideoLAN\VLC\models\ggml-tiny.bin`
    - VAD Model: `C:\Program Files\VideoLAN\VLC\models\ggml-silero-vad.bin`
 
 4. **Reset Plugin Cache & Verify Registration**:

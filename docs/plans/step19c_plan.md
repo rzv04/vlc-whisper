@@ -1,7 +1,7 @@
 # Task: Implement Step 19c — Lazy Model Provisioning & Download UX (Option B: Worker Runtime Download)
 
 ## Goal
-One user-visible outcome: the installer bundles the universal multilingual `ggml-tiny.bin`; selecting any other catalog model (tiny.en, base.en, base, small, medium, large) in the VLC-Whisper settings extension offers an explicit **Download selected model** action; the worker downloads it (sha256-pinned, per-user directory), the settings dialog shows live progress in its existing status row, and captions resume on the new model once the download completes — playback never interrupted, transport-recovery budget untouched.
+One user-visible outcome: the installer bundles the universal multilingual `ggml-tiny.bin`; selecting any other catalog model (tiny.en, base.en, base, small, medium, large) in the VLC-Whisper settings extension offers an explicit **Download selected model** action; the worker downloads it (sha256-pinned, per-user directory), the plugin shows live dedicated-SPU progress over the active video, and captions resume on the new model once the download completes — playback never interrupted, transport-recovery budget untouched.
 
 ## Context
 - Relevant docs/ADR:
@@ -22,7 +22,7 @@ One user-visible outcome: the installer bundles the universal multilingual `ggml
   - Protocol v1.4: `VW_MSG_MODEL_CTRL` (14, plugin→worker) and `VW_MSG_MODEL_PROGRESS` (15, worker→plugin) with codec encode/decode/validate and golden-byte tests.
   - Worker: streaming SHA-256 (`vw_sha256`), committed model catalog header (`vw_model_catalog.h`), download engine (`vw_model_download`: dedicated thread, WinHTTP on Windows / `curl` subprocess on Linux, `.part` → verify → atomic rename into the per-user dir, single-flight, abort), `--model-dir` CLI, `--language auto` acceptance, MODEL_CTRL handling + 1 Hz MODEL_PROGRESS emission.
   - Plugin: `whisper-model-download` control var (6th snapshot key), `whisper-model-progress`/`whisper-model-status` read-only mirrors, MODEL_CTRL send + MODEL_PROGRESS drain, auto-respawn on `done` when the downloaded model is the selected one, model resolve probe extended (catalog names incl. `ggml-tiny.bin`, then per-user dir).
-  - Lua extension: `Download selected model` / `Abort model download` menu entries, progress rendered in the existing status label (`w:set_text` + `d:update()` polling loop), default model selection → bundled `tiny`.
+  - Lua extension: `Download selected model` / `Abort model download` menu entries, command-only callbacks with no polling or busy wait, default model selection → bundled `tiny`; the plugin sender renders progress on a dedicated SPU overlay.
   - Bundle switch: `models/manifest.json` full catalog (7 models, pinned sha256), provision/installer defaults → `ggml-tiny.bin`.
   - Docs: ADR-023, api-contracts v1.4, roadmap (19c shipped; 21a ADR renumber), source-layout, README.
 - Out of scope:
@@ -67,7 +67,9 @@ Base URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/`:
 ### Ownership/threading model
 - Worker: IPC main loop owns all socket writes. Download thread never writes IPC; it updates a mutex-guarded progress snapshot. Main loop polls at its existing cadence and emits `MODEL_PROGRESS` at ≥1 Hz while a download is active (stage transitions always emitted immediately).
 - Plugin: 2 s snapshot loop gains a 6th watched key `whisper-model-download` (string: catalog id, or `abort`). Diff → send `MODEL_CTRL`. Receiver drains `MODEL_PROGRESS` → `config_PutInt("whisper-model-progress")` + `config_PutPsz("whisper-model-status", "<stage>:<model_id>")` (config lock already proven for cross-thread writes). On `stage=DONE`: if catalog filename == resolved selected model filename, trigger one config-style respawn (no budget) so captions resume on the new model.
-- Lua: menu entry writes `whisper-model-download` then runs a bounded poll loop (2 Hz, `os.clock()` pacing, `pcall`-guarded `w_status:set_text` + `dlg:update()`), aborting when the user closes the dialog. `menu()` returns three entries.
+- Lua: menu entry writes `whisper-model-download`, updates the label once, and returns. The plugin sender and worker
+  own progress transport and rendering; no `os.clock`, `dlg:update`, sleep, polling loop, or network call exists in
+  Lua. `menu()` returns three entries from the single dialog extension.
 
 ### Bounds, time units, and failure behavior
 - Download: single-flight; `.part` size capped by catalog `bytes_total` (abort if exceeded); progress `pct = bytes_done * 100 / bytes_total` saturating. Verify stage has no time bound (sha256 of 3 GB ≈ seconds).

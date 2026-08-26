@@ -17,6 +17,9 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #else
 #include <direct.h>
 #include <pthread.h>
@@ -176,9 +179,17 @@ static void vw_sleep_ms(unsigned int ms) {
 }
 
 static bool vw_download_via_curl(vw_model_download_t* dl) {
+#ifdef __linux__
+  pid_t parent_pid = getpid();
+#endif
   pid_t pid = fork();
   if (pid < 0) return false;
   if (pid == 0) {
+    // Kill curl if the worker dies, including SIGKILL. The parent-PID check closes the
+    // fork/parent-death race where the worker exits before prctl() is installed.
+#ifdef __linux__
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent_pid) _exit(125);
+#endif
     // Child: exec curl -fsSL -o <part> <url>
     execlp("curl", "curl", "-fsSL", "--connect-timeout", "15", "--speed-limit", "10240", "--speed-time", "60", "-o",
            dl->part_path, dl->entry.url, (char*)NULL);
@@ -362,6 +373,7 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   // Ensure final progress reflects written size.
   uint64_t sz = vw_file_size(dl->part_path);
   uint8_t pct = vw_model_download_pct(sz, dl->entry.bytes);
+  pthread_mutex_lock(&dl->lock);
   dl->progress.bytes_done = sz;
   dl->progress.pct = pct;
   pthread_mutex_unlock(&dl->lock);

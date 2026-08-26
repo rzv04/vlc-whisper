@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #endif
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,9 +79,9 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
   return NULL;
 }
 
-static bool vw_caption_presenter_render_spu(vw_caption_presenter_t* presenter, vout_thread_t* vout, const char* text,
+static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id, const char* text, int alignment, int y,
                                             int64_t start_tick, int64_t stop_tick) {
-  if (!presenter || !vout || !text || presenter->spu_channel_id < 0) {
+  if (!vout || !text || channel_id < 0) {
     return false;
   }
 
@@ -106,13 +107,13 @@ static bool vw_caption_presenter_render_spu(vw_caption_presenter_t* presenter, v
     return false;
   }
 
-  region->i_align = SUBPICTURE_ALIGN_BOTTOM;
-  region->i_text_align = SUBPICTURE_ALIGN_BOTTOM;
+  region->i_align = alignment;
+  region->i_text_align = alignment;
   region->i_x = 0;
-  region->i_y = 20;
+  region->i_y = y;
 
   subpic->p_region = region;
-  subpic->i_channel = presenter->spu_channel_id;
+  subpic->i_channel = channel_id;
   subpic->i_start = (vlc_tick_t)start_tick;
   subpic->i_stop = (vlc_tick_t)stop_tick;
   // Render in the OSD clock domain: b_subtitle=false selects render_osd_date = mdate(), the
@@ -128,6 +129,100 @@ static bool vw_caption_presenter_render_spu(vw_caption_presenter_t* presenter, v
 
   vout_PutSubpicture(vout, subpic);
   return true;
+}
+
+static bool vw_caption_presenter_register_model_progress_channel(vw_caption_presenter_t* presenter,
+                                                                 vout_thread_t* vout) {
+  if (!presenter || !vout) {
+    return false;
+  }
+  if (presenter->model_progress_channel_registered && presenter->p_model_progress_held_vout == (void*)vout) {
+    return true;
+  }
+
+  if (presenter->p_model_progress_held_vout) {
+    if (presenter->model_progress_channel_registered && presenter->model_progress_channel_id >= 0) {
+      vout_FlushSubpictureChannel((vout_thread_t*)presenter->p_model_progress_held_vout,
+                                  presenter->model_progress_channel_id);
+    }
+    vlc_object_release(VLC_OBJECT((vout_thread_t*)presenter->p_model_progress_held_vout));
+    presenter->p_model_progress_held_vout = NULL;
+  }
+
+  int channel_id = vout_RegisterSubpictureChannel(vout);
+  if (channel_id < 0) {
+    presenter->model_progress_channel_id = -1;
+    presenter->model_progress_channel_registered = false;
+    return false;
+  }
+
+  vlc_object_hold(VLC_OBJECT(vout));
+  presenter->p_model_progress_held_vout = (void*)vout;
+  presenter->model_progress_channel_id = channel_id;
+  presenter->model_progress_channel_registered = true;
+  return true;
+}
+
+bool vw_caption_presenter_show_model_progress(vw_caption_presenter_t* presenter,
+                                              const vw_msg_model_progress_t* progress) {
+  if (!presenter || !presenter->p_filter_ctx || !progress) {
+    return false;
+  }
+
+  vout_thread_t* vout = vw_caption_presenter_find_vout((filter_t*)presenter->p_filter_ctx);
+  if (!vout || !vw_caption_presenter_register_model_progress_channel(presenter, vout)) {
+    if (vout) {
+      vlc_object_release(VLC_OBJECT(vout));
+    }
+    return false;
+  }
+
+  const char* stage = "idle";
+  switch (progress->stage) {
+    case VW_MODEL_STAGE_DOWNLOADING:
+      stage = "downloading";
+      break;
+    case VW_MODEL_STAGE_VERIFYING:
+      stage = "verifying";
+      break;
+    case VW_MODEL_STAGE_DONE:
+      stage = "done";
+      break;
+    case VW_MODEL_STAGE_FAILED:
+      stage = "failed";
+      break;
+    case VW_MODEL_STAGE_ABORTING:
+      stage = "aborting";
+      break;
+    default:
+      break;
+  }
+  int progress_percent = progress->pct > 100 ? 100 : progress->pct;
+  char progress_text[128];
+  snprintf(progress_text, sizeof(progress_text), "Model %s: %s (%d%%)", progress->model_id, stage, progress_percent);
+
+  int64_t start_tick = (int64_t)mdate();
+  bool rendered = vw_caption_presenter_render_spu(
+      vout, presenter->model_progress_channel_id, progress_text, SUBPICTURE_ALIGN_TOP, 20, start_tick,
+      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US));
+  vlc_object_release(VLC_OBJECT(vout));
+  return rendered;
+}
+
+void vw_caption_presenter_clear_model_progress(vw_caption_presenter_t* presenter) {
+  if (!presenter) {
+    return;
+  }
+  if (presenter->p_model_progress_held_vout) {
+    if (presenter->model_progress_channel_registered && presenter->model_progress_channel_id >= 0) {
+      vout_FlushSubpictureChannel((vout_thread_t*)presenter->p_model_progress_held_vout,
+                                  presenter->model_progress_channel_id);
+    }
+    vlc_object_release(VLC_OBJECT((vout_thread_t*)presenter->p_model_progress_held_vout));
+  }
+  presenter->p_model_progress_held_vout = NULL;
+  presenter->model_progress_channel_id = -1;
+  presenter->model_progress_channel_registered = false;
 }
 
 static bool vw_caption_presenter_render_text(filter_t* p_filter, const char* text, int64_t duration_us) {
@@ -231,7 +326,8 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     }
     start_tick = vw_saturating_add_i64(now_tick, lead_us);
     stop_tick = vw_saturating_add_i64(start_tick, dur_wallclock_us);
-    rendered = vw_caption_presenter_render_spu(presenter, vout, segment->text_utf8, start_tick, stop_tick);
+    rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, segment->text_utf8,
+                                               SUBPICTURE_ALIGN_BOTTOM, 20, start_tick, stop_tick);
   }
 
   // Graceful fallback to OSD if SPU rendering failed or was unregistered
@@ -340,6 +436,7 @@ void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
 // (and the filter context it holds) is going away — never mid-session. Called only from
 // vw_plugin_close (module teardown); mid-session clears use vw_caption_presenter_blank.
 void vw_caption_presenter_clear(vw_caption_presenter_t* presenter) {
+  vw_caption_presenter_clear_model_progress(presenter);
   vw_caption_presenter_blank(presenter);
   if (presenter) {
     presenter->has_pending = false;

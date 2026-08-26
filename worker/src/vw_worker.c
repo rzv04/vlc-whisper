@@ -692,6 +692,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
         case VW_MSG_MODEL_CTRL: {
           uint8_t action = payload_decoded.model_ctrl.action;
           const char* req_id = payload_decoded.model_ctrl.model_id;
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "received model_ctrl action=%u model='%s'", action,
+                       req_id ? req_id : "");
           if (action == VW_MODEL_ACTION_DOWNLOAD) {
             const vw_model_catalog_entry_t* entry = vw_model_catalog_find(req_id);
             if (!entry) {
@@ -764,8 +766,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   model_dl = NULL;
                   last_stage = -1;
                 }
+                vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "starting download for model '%s' (url=%s dest=%s)",
+                             entry->id, entry->url, dl_dir);
                 model_dl = vw_model_download_start(entry, dl_dir);
                 if (!model_dl) {
+                  vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "vw_model_download_start failed for model '%s'",
+                               entry->id);
                   vw_msg_model_progress_t prog;
                   memset(&prog, 0, sizeof(prog));
                   if (session_active) {
@@ -796,8 +802,28 @@ int vw_worker_run(const vw_worker_config_t* config) {
               }
             }
           } else if (action == VW_MODEL_ACTION_ABORT) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "abort requested for model download");
             if (model_dl) {
               vw_model_download_abort(model_dl);
+            } else {
+              // Keep the control path visibly terminal when Abort is pressed after the download already ended.
+              vw_msg_model_progress_t prog;
+              memset(&prog, 0, sizeof(prog));
+              prog.stage = VW_MODEL_STAGE_IDLE;
+              uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+              size_t prog_len = 0;
+              if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, prog_payload, sizeof(prog_payload),
+                                             &prog_len)) {
+                vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
+                                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                                              .type = VW_MSG_MODEL_PROGRESS,
+                                              .payload_length = (uint32_t)prog_len,
+                                              .sequence = ++sequence};
+                uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
+                vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
+                vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
+                vw_ipc_send(handle, prog_payload, prog_len);
+              }
             }
           }
           break;
@@ -829,7 +855,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
         bool should_send = false;
         if ((int)prog.stage != prev_stage) {
           should_send = true;
-        } else if (prog.stage == VW_MODEL_STAGE_DOWNLOADING && now_us - last_progress_send_us >= 1000000) {
+        } else if ((prog.stage == VW_MODEL_STAGE_DOWNLOADING || prog.stage == VW_MODEL_STAGE_VERIFYING ||
+                    prog.stage == VW_MODEL_STAGE_ABORTING) &&
+                   now_us - last_progress_send_us >= 1000000) {
           should_send = true;
         }
         if (should_send) {

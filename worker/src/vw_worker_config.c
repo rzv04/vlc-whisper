@@ -84,7 +84,7 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
     return false;
   }
   memset(config, 0, sizeof(vw_worker_config_t));
-  strncpy(config->model_path, "models/ggml-tiny.en.bin", sizeof(config->model_path) - 1);
+  strncpy(config->model_path, "models/ggml-tiny.bin", sizeof(config->model_path) - 1);
   strncpy(config->language, "en", sizeof(config->language) - 1);
   config->n_threads = 4;
   config->sample_rate = 16000;

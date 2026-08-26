@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,8 +36,11 @@ static int64_t g_mock_mdate = 100000000LL;  // 100s
 static float g_mock_rate = 1.0f;
 static int64_t g_last_subpic_start = 0;
 static int64_t g_last_subpic_stop = 0;
+static int g_last_subpic_channel = -1;
 static bool g_last_subpic_b_subtitle = false;
 static bool g_last_subpic_b_ephemer = false;
+static char g_last_subpic_text[128];
+static int g_flushed_channels[64];
 
 vlc_tick_t mdate(void) { return (vlc_tick_t)g_mock_mdate; }
 
@@ -52,10 +56,13 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
   if (subpic) {
     g_last_subpic_start = subpic->i_start;
     g_last_subpic_stop = subpic->i_stop;
+    g_last_subpic_channel = subpic->i_channel;
     g_last_subpic_b_subtitle = subpic->b_subtitle;
     g_last_subpic_b_ephemer = subpic->b_ephemer;
     if (subpic->p_region) {
       if (subpic->p_region->p_text) {
+        snprintf(g_last_subpic_text, sizeof(g_last_subpic_text), "%s",
+                 subpic->p_region->p_text->psz_text ? subpic->p_region->p_text->psz_text : "");
         text_segment_Delete(subpic->p_region->p_text);
       }
       subpicture_region_Delete(subpic->p_region);
@@ -66,6 +73,9 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
 
 void vout_FlushSubpictureChannel(vout_thread_t* vout, int channel) {
   (void)vout;
+  if (g_flush_calls < (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]))) {
+    g_flushed_channels[g_flush_calls] = channel;
+  }
   g_flush_calls++;
   g_flush_channel = channel;
 }
@@ -144,6 +154,17 @@ void vout_OSDText(vout_thread_t* vout, int channel, int position, vlc_tick_t dur
   g_osd_text_calls++;
 }
 
+static bool was_channel_flushed(int channel) {
+  int count = g_flush_calls;
+  if (count > (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]))) {
+    count = (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]));
+  }
+  for (int i = 0; i < count; i++) {
+    if (g_flushed_channels[i] == channel) return true;
+  }
+  return false;
+}
+
 int main(void) {
   // Test 1: NULL text handling
   assert(!vw_caption_presenter_display(NULL, NULL, 1000000LL));
@@ -198,6 +219,7 @@ int main(void) {
   assert(spu_presenter.spu_channel_id == 42);
   assert(spu_presenter.spu_channel_registered == true);
   assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_channel == 42);
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 102000000LL);
   assert(g_last_subpic_b_subtitle == false);
@@ -430,11 +452,41 @@ int main(void) {
   assert(g_last_subpic_b_ephemer == true);
   assert(g_last_subpic_b_subtitle == false);
 
+  // Test 19: Model progress uses an independent OSD-clock SPU channel and survives caption blanking.
+  g_mock_register_channel_return = 77;
+  g_register_spu_calls = 0;
+  g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
+  g_mock_mdate = 200000000LL;
+  vw_msg_model_progress_t progress = {.stage = VW_MODEL_STAGE_DOWNLOADING, .pct = 42};
+  snprintf(progress.model_id, sizeof(progress.model_id), "%s", "tiny");
+  assert(vw_caption_presenter_show_model_progress(&spu_presenter, &progress));
+  assert(g_register_spu_calls == 1);
+  assert(spu_presenter.model_progress_channel_id == 77);
+  assert(spu_presenter.model_progress_channel_registered == true);
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_channel == 77);
+  assert(g_last_subpic_start == 200000000LL);
+  assert(g_last_subpic_stop == 200000000LL + VW_MODEL_PROGRESS_DISPLAY_DURATION_US);
+  assert(g_last_subpic_b_subtitle == false);
+  assert(g_last_subpic_b_ephemer == true);
+  assert(strcmp(g_last_subpic_text, "Model tiny: downloading (42%)") == 0);
+
+  g_flush_calls = 0;
+  vw_caption_presenter_blank(&spu_presenter);
+  assert(!was_channel_flushed(77));
+  assert(spu_presenter.model_progress_channel_registered == true);
+
+  vw_caption_presenter_clear_model_progress(&spu_presenter);
+  assert(was_channel_flushed(77));
+  assert(spu_presenter.model_progress_channel_id == -1);
+  assert(spu_presenter.model_progress_channel_registered == false);
+
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (18/18 tests)\n");
+  printf("test_caption_presenter PASSED (19/19 tests)\n");
   return 0;
 }

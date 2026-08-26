@@ -19,7 +19,7 @@ int main(void) {
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_none[] = {"vlc-whisper-worker", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 1, argv_none) == 0);
-    EXPECT_EQ_STR(cfg.model_path, "models/ggml-tiny.en.bin");
+    EXPECT_EQ_STR(cfg.model_path, "models/ggml-tiny.bin");
     EXPECT_EQ_STR(cfg.language, "en");
     EXPECT(cfg.sample_rate == 16000u);
     EXPECT(cfg.pipe_name[0] == '\0');

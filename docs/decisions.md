@@ -397,8 +397,9 @@ The question is where and under what conditions that egress is permitted.
    (`worker/include/vw_model_catalog.h`, mirrored in `models/manifest.json`), and is **ALWAYS**
    sha256-verified before use (stream hash while writing `.part` → compare → atomic rename).
 2. **Never automatic, never at playback start, never elsewhere.** No background fetch, no start-up
-   prefetch, no retry polling, and no request to any other host. Transcripts and PCM are never
-   persisted or transmitted.
+   prefetch, no retry polling, and no request to any other host. A request made before playback is queued as a
+   config command and starts only when the media-created worker exists. Transcripts and PCM are never persisted or
+   transmitted.
 3. **Plugin stays network-free.** `libvlc_whisper_plugin.dll` performs zero network I/O; it only sends
    `MODEL_CTRL` and mirrors `MODEL_PROGRESS` into the read-only config vars
    `whisper-model-progress`/`whisper-model-status`.
@@ -407,6 +408,10 @@ The question is where and under what conditions that egress is permitted.
    on Linux; `--model-dir` override), created on demand. Stale `*.part` files are deleted at worker start;
    downloads write to `<dest>/<filename>.part` and are atomically renamed on success. Resolve order:
    explicit `model-path` → install `models/` → per-user dir.
+5. **No-wait UI boundary.** The single Lua settings dialog performs bounded config writes and returns immediately.
+   The plugin sender thread consumes worker progress and renders it on a dedicated C-managed SPU channel. Caption
+   blanking on pause/seek does not flush that channel, so the download continues while media is paused; abort,
+   worker disconnect, or shutdown cancels the worker download and clears the overlay.
 
 **Consequences.**
 
