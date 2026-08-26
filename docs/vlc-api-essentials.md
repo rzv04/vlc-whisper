@@ -111,8 +111,16 @@ In VLC 3.0, all time measurements use **`vlc_tick_t`**, which is defined as a si
 ### Media PTS vs Wall-Clock Time
 
 - **Media PTS (`i_pts`)**: The exact position on the media timeline. Must always be used for caption timing.
-- **Wall-Clock Time (`vlc_tick_now()`)**: System clock time. **Must NEVER be used for caption timing**.
+- **Wall-Clock Time (`vlc_tick_now()` / `mdate()`)**: System clock time (µs since boot on Windows via QPC). **Must NEVER be used for caption timing**.
 - **Reason**: Using wall-clock time causes severe caption desynchronization during video pause, playback rate changes (0.5x, 2.0x), and user seeking.
+
+### Audio-Filter Block PTS Are System-Date, Not Media PTS (critical gotcha)
+
+In VLC 3.0 the audio output re-bases audio-filter block timestamps into the **system-date domain**: `aout_DecPlay` (`src/audio_output/dec.c`) asserts `block->i_pts >= VLC_TICK_0` and computes `advance = block->i_pts - mdate()`, so a block's `i_pts` is the *system date at which the samples are heard*, NOT the media position. Consequence for plugins:
+
+- `p_block->i_pts` seen inside `pf_audio_filter` is system-date scale (e.g. ~µs since boot on Windows), while `input_Control(INPUT_GET_TIME)` returns the **media** position.
+- Mixing the two domains (e.g. `mdate() + (segment_pts - input_time)`) yields garbage offsets (hours) that schedule subpictures far in the future — they never display.
+- To convert system-date segment PTS to the media timeline: `media_t = segment_pts - (system_now - input_time)` where `system_now` is the freshest audio-filter block PTS (stable while paused, since both anchors freeze) and `input_time` is `INPUT_GET_TIME`. This conversion is correct *in principle* for the subtitle clock (see §7), but as of the 2026-08-18 live test on VLC 3.0.23 Windows (d3d11va + direct3d11) **media-domain `b_subtitle = true` subpictures are silently dropped before region rendering** — the vout's spu emits no "original picture size is undefined" warning that would fire for any selected subpicture with unset dimensions. The plugin therefore renders captions in the **OSD clock domain** (`i_start = mdate()`, `b_subtitle = false`), the configuration the OSD milestones (11-16) demonstrated displaying. Re-evaluate the subtitle clock (e.g. push a wide-window probe subpicture) before 17c media scheduling depends on it.
 
 ---
 
@@ -131,13 +139,13 @@ VLC signals user seeking, playback rate changes, or media item transitions throu
 ### Discontinuity Handling Workflow
 
 ```text
-vlc_whisper_module (pf_audio_filter)
+vw_whisper_module (pf_audio_filter)
   │
   ├── Detect (i_flags & BLOCK_FLAG_DISCONTINUITY) OR (i_pts < last_pts_us)
   │
   ├── 1. Clear active presentation: vw_caption_presenter_clear()
   ├── 2. Send IPC control message: STOP (reason = SEEK_DISCONTINUITY)
-  ├── 3. Reset SPSC queue & VAD state: vw_spsc_queue_reset()
+  ├── 3. Discard SPSC queue (drain via vw_spsc_queue_pop) & VAD state (energy VAD is stateless)
   └── 4. Re-initialize session: Send START message with updated timeline_origin_pts_us
 ```
 
@@ -336,6 +344,21 @@ void vout_OSDText(vout_thread_t *vout, int channel, int position, vlc_tick_t dur
 
 For persistent, styled, or refresh-driven overlays (e.g. a live caption track), the more capable pattern is a subpicture **filter** source: `filter_NewSubpicture()` + `subpicture_region_NewText()` + `text_segment_New()`, with `b_ephemer` and `i_start`/`i_stop` timing — see the canonical `marq.c` (`modules/spu/marq.c`) implementation, which context7 surfaced as the reference pattern.
 
+### Two SPU Clock Domains: `b_subtitle` selects the render clock
+
+The vout renders subpictures against **one of two clocks** (`ThreadDisplayRenderPicture` in `src/video_output/video_output.c`):
+
+| `subpicture_t->b_subtitle` | Render date compared to `i_start`/`i_stop` | Domain |
+|---|---|---|
+| `true` (native subtitle) | `render_subtitle_date` = displayed picture PTS (or the frozen pause date while paused) | **media timeline** |
+| `false` (OSD-style) | `render_osd_date` = `mdate()` (commented `FIXME wrong` in VLC core) | **system date** |
+
+Consequences:
+
+- **`b_subtitle = true` subpictures must carry media-domain `i_start`/`i_stop`** (same base as picture PTS). The vout also applies pause compensation to them (on resume, subtitle dates are shifted by the pause duration), and non-ephemeral `b_subtitle` subpictures are kept until their `i_start` (overlap support). `vout_RegisterSubpictureChannel()` channels are not gated by any subtitle-ES/track selection — a registered channel always renders. **Empirical caveat (VLC 3.0.23 Windows, d3d11va + direct3d11, 2026-08-18):** filter-pushed `b_subtitle = true` subpictures were silently dropped before region rendering (no selection warning in the vout log); use the OSD clock domain below until the subtitle clock is probed.
+- **`b_subtitle = false` subpictures must carry system-date `i_start`/`i_stop`** (`vlc_tick_now()`-scale). A media-domain timestamp here is treated as "late" instantly (it is far before `mdate()`) and the subpicture is purged. This is the **reliable rendering domain for filter-pushed subpictures** in the 3.0.23 Windows build — the vlc-whisper presenter schedules `i_start = mdate()`, `i_stop = i_start + duration`.
+- A subpicture whose `i_start` is in the future of its render clock is skipped ("Too early, come back next monday") until the clock catches up — with domain-mixed timestamps (hours apart) it is skipped for the whole session, which is why `mdate() + (segment_pts - input_time)` never displays.
+
 ---
 
 ## 8. Module Registration & ABI Invariants
@@ -363,4 +386,15 @@ vlc_module_end()
 | `set_description` | Full plugin description displayed in VLC module lists. |
 | `set_capability` | Category string (`"audio filter"`) and priority score (`0`). |
 | `add_shortcut` | Command line flags (`--audio-filter=vlc_whisper`). |
+| `add_loadfile` | Registers the `worker-path` string option consumed via `config_GetPsz()` for the worker executable location override. |
 | `set_callbacks` | Initialization (`open`) and cleanup (`close`) function pointers. |
+
+### Worker executable discovery
+
+The plugin locates `vlc-whisper-worker[.exe]` in this order:
+
+1. `config_GetPsz(obj, "worker-path")` — explicit override (CLI `--vlc-whisper-worker-path`, or the module prefs).
+2. Next to the plugin module (`dladdr` on POSIX / `GetModuleHandleEx` + `GetModuleFileNameA` on Windows), walking up to 4 ancestor directories.
+3. Next to the VLC executable (Linux `/proc/self/exe`, Windows `GetModuleFileNameA(NULL)`).
+
+If none of those produce an existing file, the plugin falls back to a bare `vlc-whisper-worker[.exe]` name. On POSIX that is resolved through `PATH` via `posix_spawnp` — never relative to VLC's current working directory — so a worker installed on `PATH` starts even when VLC launches from an arbitrary directory.

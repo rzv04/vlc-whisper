@@ -4,22 +4,26 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The initial protocol is `major=1, minor=0`; a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=2` (Protocol v1.2); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
 - **Accept Connection Timeout**: 10 seconds (`vw_ipc_listen()` waits up to 10,000 ms for plugin connection, returning `NULL` on timeout).
-- **Frame Read / Write Timeout**: 3 seconds (`vw_ipc_receive()` and `vw_ipc_send()` enforce 3,000 ms timeout per I/O call on both POSIX and Win32).
-- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` for 3-second read timeout (connection remains open during video pause, receiver continues waiting), and `-1` for fatal error or peer disconnect (EOF / broken pipe).
+- **Frame Read / Write Timeout**: 3 seconds (`vw_ipc_receive()` and `vw_ipc_send()` enforce 3,000 ms timeout per I/O call on both POSIX and Win32). Custom read timeouts can be specified via `vw_ipc_receive_timeout(handle, buffer, size, timeout_us)`.
+- **Receive Return Semantics**: `vw_ipc_receive()` and `vw_ipc_receive_timeout()` return `> 0` for bytes read, `-1` (`VW_IPC_RECV_TIMEOUT`) for a read timeout (connection remains open during video pause; the receiver should retry/keep waiting), and `-2` (`VW_IPC_RECV_FATAL`) for a fatal error or peer disconnect (EOF / broken pipe), after which the handle must be treated as dead.
 
 ## Terminology & Abbreviations
 
 | Term / Abbreviation | Definition                                                                                                                                                 |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **PTS**             | **Presentation TimeStamp** — The exact position on the media playback timeline (not wall-clock time) at which audio, video, or captions must be presented. |
-| **`pts_us`**        | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$).                      |
-| **`duration_us`**   | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds.                                                    |
+| **`pts_us`**        | **PTS in Microseconds** — Signed 64-bit integer (`int64_t`) representing PTS in microseconds ($1\text{ s} = 1,000,000\,\mu\text{s}$). |
+| **`duration_us`**   | **Duration in Microseconds** — Signed 64-bit integer (`int64_t`) representing duration in microseconds. |
 | **IPC**             | **Inter-Process Communication** — Local authenticated binary message-mode transport (named pipe on Windows, Unix domain socket on Linux).                  |
+
+> **Wire `pts_us` domain (v1.1):**
+> - In **Live Streaming Mode** (or live IPTV), AUDIO chunk timestamps are stamped by the plugin from VLC's audio-filter block PTS in the system-date domain.
+> - In **Look-Ahead Source Mode** (v1.1), `start_pts_us` and `end_pts_us` are media-relative PTS timestamps decoded directly by the native demuxer. The plugin translates them to the SPU presentation time using the sampled `input_time_us` from VLC (`start_tick = mdate() + (start_pts_us - input_time_us)`).
 
 ## Envelope
 
@@ -47,19 +51,27 @@ Plugin to worker. Payload: `u16 min_major`, `u16 max_major`, `u8 token[32]`, `u1
 
 ### HELLO_ACK
 
-Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO`; optional flags include `PARTIAL_SEGMENTS` and `SEEK_RESET`.
+Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO` (`1U << 0`); optional flags include `PARTIAL_SEGMENTS` (`1U << 1`), `SEEK_RESET` (`1U << 2`), and `SOURCE_MODE` (`VW_CAPABILITY_SOURCE_MODE = 1U << 3`).
 
 ### START
 
-Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), and source-kind enum (`LOCAL_FILE=1`). `STARTED` either confirms effective settings or responds with `ERROR`.
+Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. `STARTED` either confirms effective settings or responds with `ERROR`.
+
+### POSITION (v1.1)
+
+Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown.
 
 ### AUDIO
 
-Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal `duration_us * 16000 / 1_000_000 * 2`, subject only to explicitly documented whole-sample rounding. The worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
+Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal `duration_us * 16000 / 1_000_000 * 2`, subject only to explicitly documented whole-sample rounding: the receiver accepts ±1 byte of the computed value (half a sample at 16 kHz S16LE = 1 byte), since producers may round the duration up or down for odd-length partial blocks. The worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
 
 ### SEGMENT
 
 Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `bool is_final`, `u16 text_bytes`, UTF-8 text. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
+
+- **Phrase-by-Phrase Timing (`ADR-017`)**: Segment timing is derived from internal Whisper sub-segment boundaries ($t_0, t_1$ in centiseconds scaled by `10000LL` to microsecond PTS), rather than coarse 8-second window spans.
+- **`is_final` Invariant**: `is_final == true` denotes an immutable, committed subtitle cue to be rendered on screen via SPU (`vout_PutSubpicture`). Uncommitted/in-flight hypotheses are held until their window onset is finalized or drained.
+- **Silence Screen Blanking**: Non-contiguous phrases (e.g. 0.6s pause between speakers) generate distinct non-overlapping subpictures, naturally blanking the screen during conversational pauses.
 
 Example semantic value, shown as JSON only for readability:
 
@@ -74,16 +86,17 @@ Example semantic value, shown as JSON only for readability:
 }
 ```
 
-### STARTED
+### STARTED (v1.2)
 
-Worker to plugin. Payload: Empty (header only). Confirms session initialization and effective settings after `START`.
+Worker to plugin. Payload: `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if source file look-ahead mode initialized successfully; `VW_SOURCE_ACTIVE_INACTIVE = 0` if live streaming mode). Confirms session initialization and effective settings after `START`.
 
 ### CONTROL MESSAGES (`PAUSE`, `RESUME`, `STOP`)
 
 Plugin to worker. Payload: session ID, `u16 reason`.
-- `PAUSE`: Suspends active transcription processing while preserving audio buffer timeline. Reason codes: `USER_PAUSE=1`.
+
+- `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); the session timeline/epoch is preserved. Reason codes: `USER_PAUSE=1`.
 - `RESUME`: Resumes active transcription processing after pause. Reason codes: `USER_RESUME=1`.
-- `STOP`: Terminates active captioning session, clears buffers, and resets VAD state. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2`, `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
+- `STOP`: Terminates active captioning session, clears buffers, and resets VAD state. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
 
 ### SHUTDOWN
 
@@ -95,9 +108,10 @@ Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 
 
 ### ERROR
 
-Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_code`, `u8 recoverable`, `char message[256]` (safe redacted UTF-8 message).
+Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_code`, `u8 recoverable`, `char message[256]` (safe redacted UTF-8 message). The message content is at most 255 bytes and MUST carry its own NUL terminator within the fixed-size field: the encoder rejects unterminated strings, and the decoder force-terminates only payloads that contain no NUL anywhere (defensive; never emitted by a conforming peer).
+
 - If `recoverable == 0`: Fatal failure. Plugin disables captions for item, closes transport; VLC media playback continues uninterrupted.
-- If `recoverable == 1`: Non-fatal warning (e.g. `E_BACKPRESSURE`); plugin logs diagnostic, session continues.
+- If `recoverable == 1`: Non-fatal warning (e.g. `E_BACKPRESSURE`, `E_SOURCE_OPEN`); plugin logs diagnostic, session continues.
 
 ## Error catalog
 
@@ -112,6 +126,25 @@ Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_cod
 | `E_DISCONTINUITY`    | Seek/rate/source timeline changed | Clear captions and end MVP session gracefully                                  |
 | `E_WORKER_CRASH`     | Worker exit/pipe close            | Clear captions; one bounded restart only before first audio, otherwise disable |
 | `E_INTERNAL`         | Unclassified worker failure       | Disable captions; offer redacted diagnostics                                   |
+| `E_SOURCE_OPEN`      | Native source demuxer open failed | Non-fatal; plugin falls back transparently to live PCM stream capture          |
+
+## Worker CLI Contracts
+
+The worker executable (`vlc-whisper-worker.exe` / `vlc-whisper-worker`) is spawned by the plugin or launched manually during testing with the following command-line interface:
+
+```text
+vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [--vad-model <vad_path>] [--backend auto|gpu|cpu] [--gpu-device <id>] [--log-file <log_path>]
+```
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `--pipe <path>` | Yes | (none) | Named pipe name (Win32) or Unix domain socket path (POSIX). |
+| `--token <64_hex>` | Yes | (none) | 32-byte secret authentication token in 64 hexadecimal characters. |
+| `--model <path>` | No | `models/ggml-tiny.en.bin` | Path to Whisper GGML model file. |
+| `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). If not specified, the worker auto-discovers `ggml-silero-vad.bin` in the model directory alongside `--model`. If absent, gracefully falls back to RMS Energy VAD. |
+| `--backend <type>` | No | `auto` | Inference accelerator backend: `auto`, `gpu`, or `cpu`. |
+| `--gpu-device <id>` | No | `0` | GPU/IGPU device index for hardware acceleration. |
+| `--log-file <path>` | No | (temp directory) | Custom destination for diagnostic log output. |
 
 ## Compatibility rules
 

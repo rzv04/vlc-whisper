@@ -49,6 +49,7 @@
 # Kernel Module Compile Results
 *.mod*
 *.cmd
+!models/*.cmd
 .tmp_versions/
 modules.order
 Module.symvers
@@ -191,3 +192,12 @@ review.md
 .agents/mcp_config.json
 opencode.jsonc
 opencode.json
+
+.commandcode/
+
+graphify-out/
+.graphifyignore
+
+# Packaging artifacts
+_CPack_Packages/
+*.zip

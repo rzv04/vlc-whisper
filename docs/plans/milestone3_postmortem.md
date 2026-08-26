@@ -1,0 +1,377 @@
+# Implementation Task Template & Postmortem
+
+# Task: Postmortem & Technical Handoff Blueprint for Milestone 3 Feature Branches
+
+## Goal
+Comprehensive postmortem evaluation of three feature branches (`gemini/milestone-3-steps-14-15`, `gemini/gpu-directml`, and `gemini/transcription-lookahead`), recording all step-by-step changes, in-scope/out-of-scope additions, architectural evolutions, critical bugs encountered, and establishing a clear, phased re-implementation blueprint for future development on `gemini/milestone-3`.
+
+## Context
+- **Branches Analyzed**:
+  - `gemini/milestone-3-steps-14-15`: Real-time PCM IPC streaming and initial caption segment rendering.
+  - `gemini/gpu-directml`: Vulkan/GPU whisper acceleration backend and transcription quality tuning.
+  - `gemini/transcription-lookahead`: Look-ahead source file decoding, SPU subpicture rendering, and seek re-sync engine.
+- **Relevant Docs/ADRs**: ADR-006, ADR-013, ADR-015, `docs/architecture.md`, `docs/api-contracts.md`, `docs/whisper-api.md`.
+- **Target OS/Builds**: Linux (GCC/Clang, POSIX named sockets) & Windows (MinGW x64, Win32 Named Pipes, Media Foundation).
+
+---
+
+## Executive Summary & Root Cause of Reset
+
+During development following the Milestone 3 handshake baseline (`f211d84`), three major feature initiatives were implemented in rapid succession:
+1. Steps 14 & 15 (Real-time PCM IPC streaming and caption presentation).
+2. GPU Acceleration via Vulkan/ggml-vulkan and beam search quality passes.
+3. Look-Ahead Source Decoding (FFmpeg/MediaFoundation worker demuxer) combined with SPU Subpicture channel rendering and seek re-synchronization.
+
+While these features provided valuable functional proof-of-concept (e.g., look-ahead transcription capability and GPU acceleration), the pacing was too aggressive. Multiple complex architectural shifts were combined in single commits without sufficient step-by-step isolation. This led to subtle blocking bugs, hidden regressions (e.g., invisible subtitles due to empty subpictures, Windows weak-attribute symbol resolution failures, process lifecycle races during seeking), and an opaque codebase.
+
+To restore total codebase transparency, maintainability, and standard-compliant stability, the local feature branches (`gemini/milestone-3-steps-14-15`, `gemini/gpu-directml`, `gemini/transcription-lookahead`) are being archived/removed, returning to the clean baseline on `gemini/milestone-3`. This postmortem serves as the authoritative handoff document and blueprint for re-implementing these features at a controlled, maintainable rhythm.
+
+---
+
+## Detailed Branch Analysis & Step-by-Step Breakdown
+
+### 1. Branch: `gemini/milestone-3-steps-14-15` (Real-Time PCM Streaming & Presentation)
+
+#### Step-by-Step Summary of Changes
+- **Step 14 (IPC Audio Streaming)**: Integrated `vw_audio_capture` in the VLC filter callback to enqueue resampled 16 kHz Mono S16LE PCM chunks into a bounded SPSC queue. Created a background sender thread in the plugin to drain the queue and send `VW_MSG_AUDIO_PCM` frames across the IPC transport.
+- **Step 15 (Worker Inference & Caption Presentation)**: Implemented worker inference loop using `whisper.cpp`, VAD speech detection, and 4 s window / 2 s hop windowing geometry. Created segment builder (`vw_segment_builder`) to package transcribed text into `VW_MSG_CAPTION_SEGMENT` frames. Added receiver thread in plugin to parse incoming captions and invoke `vout_OSDText`.
+
+#### In-Scope vs. Out-of-Scope Changes
+- **In-Scope**:
+  - `VW_MSG_AUDIO_PCM` and `VW_MSG_CAPTION_SEGMENT` wire framing and validation.
+  - Basic 4 s analysis window and 2 s hop inference.
+  - VLC OSD display via `vout_OSDText`.
+- **Out-of-Scope / Unplanned Refactors**:
+  - **Shared SPSC Queue**: Moved `vw_spsc_queue` and `vw_audio_chunk_t` from `plugin/` to `protocol/` so worker and plugin share the implementation.
+  - **Worker IPC Reader Thread (`ADR-013`)**: Decoupled IPC frame receiving from worker main loop using a dedicated reader thread and SPSC queue, preventing inference latency from stalling pipe draining.
+  - **Win32 Platform Fixes**: Canonical named pipe paths (`\\\\.\\pipe\\vlc-whisper-PID`), CRT thread wrappers (`vw_thread.c`), BCryptGenRandom NTSTATUS checks.
+  - **Window Geometry Macro Fix**: Corrected 32-bit arithmetic overflow in `VW_WINDOW_SAMPLES` where 8s windows overflowed to 0.2s.
+  - **OSD String Lifetime Bug**: Fixed dangling pointer crash where segment UTF-8 text pointed to dead stack memory on the receiver thread.
+
+---
+
+### 2. Branch: `gemini/gpu-directml` (GPU Acceleration & Quality Pass)
+
+#### Step-by-Step Summary of Changes
+- **GPU Backend Integration**: Integrated `ggml-vulkan` backend into `whisper.cpp` CMake build (`VW_WITH_VULKAN`). Added CLI flags `--backend auto|gpu|cpu` and `--gpu-device <id>` to `vlc-whisper-worker`.
+- **Automatic Fallback**: Implemented automatic CPU fallback when GPU initialization or Vulkan device enumeration fails.
+- **Quality Tuning Pass**: Configured beam search decoding parameters, cross-window context preservation, and anti-aliasing audio resampler filtering.
+
+#### In-Scope vs. Out-of-Scope Changes
+- **In-Scope**:
+  - Vulkan GPU acceleration for `whisper.cpp`.
+  - CPU backend fallback.
+- **Out-of-Scope**:
+  - **Build Resource Memory Spikes**: Discovered that compiling Vulkan shaders (`glslc`) creates significant host RAM/swap pressure during parallel builds (`ninja -j`), requiring documentation of build OOM flags.
+  - **Quality Pass Bundling**: Combined inference quality parameters (beam search, cross-window context) directly into the GPU branch instead of keeping backend acceleration isolated.
+
+---
+
+### 3. Branch: `gemini/transcription-lookahead` (Look-Ahead Source Decoding & SPU Subsystem)
+
+#### Step-by-Step Summary of Changes
+- **Phase 0 (Spikes)**: Implemented SPU Subpicture rendering spike (S1) and `vw_timeline` state machine spike (S2).
+- **Phase 1 (Protocol 1.1 & Source Decoder)**: Extended protocol to v1.1 (`VW_CAPABILITY_SOURCE_MODE`, `source_url`, `timeline_origin_pts_us`, `POSITION` messages). Implemented `vw_source_decode.c` using FFmpeg (Linux) and Media Foundation (Windows) to decode media files ahead-of-time in the worker process.
+- **Phase 2 (Seek Re-Sync Engine)**: Implemented input clock jump detection (`VW_INPUT_JUMP_DISCONTINUITY_US = 5s`), epoch restarts, SPU flushing, and session ID updates on seeking.
+
+#### Critical Bugs & Technical Failures Encountered
+1. **The Empty SPU Subpicture Bug (`subpicture_New(NULL)`)**:
+   - *Symptom*: Subtitles stopped displaying entirely; worker GPU usage was 50%, captions were sent over IPC, but screen remained blank.
+   - *Cause*: `subpicture_New(NULL)` created a subpicture with `p_region = NULL` and no updater callback. VLC's vout had no graphic or text regions to draw.
+   - *Fix*: Replaced with `subpicture_region_New(VLC_CODEC_TEXT)` and `text_segment_New(text_utf8)`.
+2. **Windows MinGW Weak Symbol Resolution Failure**:
+   - *Symptom*: SPU channel registration (`vout_RegisterSubpictureChannel`) returned NULL pointer on Windows.
+   - *Cause*: `__attribute__((weak))` on MinGW DLLs resolved external VLC symbols to NULL at runtime.
+   - *Fix*: Introduced `VW_WEAK` macro (weak on Linux, standard `extern` on Windows) and added explicit exports in `plugin/libvlccore.def`.
+3. **Session ID Zero-Stamping Bug**:
+   - *Symptom*: Worker generated segments but plugin rejected all of them as `PLUGIN_SEGMENT_REJECTED`.
+   - *Cause*: Worker failed to copy `session_id` to outbound `vw_caption_segment_t`, causing session ID mismatch checks in plugin to fail.
+4. **Model Reload Latency (`ADR-015`)**:
+   - *Symptom*: Rapid seeks killed worker sessions before captions could start.
+   - *Cause*: Worker reloaded the 74 MB model on every `START_SESSION` message (taking 1-2 seconds per seek).
+   - *Fix*: Adopted "Model-Once" worker architecture where the model is loaded once at worker start and reused across seek epochs.
+5. **Media Foundation Seek & Lifecycle Races**:
+   - *Symptom*: Worker crashed or stopped decoding immediately after a seek event.
+   - *Cause*: `is_seeking` flag was not set on epoch restart; `worker_session_free` was not called between STOP and START; per-thread `MFStartup`/`MFShutdown` calls raced with thread joins.
+
+---
+
+## Architectural Changes & State Transitions Overview
+
+```text
+Baseline (Milestone 3 Baseline)
+   │
+   ├─► Step 14/15: Real-time Audio Streaming (Plugin Capture -> Pipe -> Worker CPU -> OSD)
+   │
+   ├─► GPU Branch: Vulkan Acceleration Backend (whisper.cpp Vulkan shaders + CPU fallback)
+   │
+   └─► Look-Ahead Branch: Ahead-of-Time Source Decoding (Worker FFmpeg/MF Demux -> SPU Text Regions)
+```
+
+### Detailed Implementation of Solved Blockers & Solved Architecture
+
+#### 1. Inheriting Media Location MRL (`vw_plugin_find_input_location`)
+When starting source decoding mode, the plugin must find the current media file path or URI from VLC's object hierarchy. In VLC 3.0, the `filter_t` object does not directly hold the input MRL; it must walk up the parent object chain or inspect the children list:
+```c
+static char* vw_plugin_find_input_location(filter_t* p_filter) {
+  if (!p_filter) return NULL;
+  vlc_object_t* cur = VLC_OBJECT(p_filter);
+
+  // Method A: Direct vlc_object_find_name lookup for "input"
+  if (vlc_object_find_name != NULL) {
+    vlc_object_t* input_obj = vlc_object_find_name(VLC_OBJECT(p_filter), "input");
+    if (input_obj) {
+      char* uri = NULL;
+      if (input_GetItem != NULL) {
+        input_item_t* item = input_GetItem((input_thread_t*)input_obj);
+        if (item && item->psz_uri && item->psz_uri[0] != '\0') {
+          uri = strdup(item->psz_uri);
+        }
+      }
+      vlc_object_release(input_obj);
+      if (uri && uri[0] != '\0') return uri;
+      if (uri) free(uri);
+    }
+  }
+
+  // Method B: Parent chain walk to find "playlist" ancestor and playlist_CurrentInput()
+  while (cur) {
+    if (cur->obj.object_type && strcmp(cur->obj.object_type, "playlist") == 0) {
+      playlist_t* p_playlist = (playlist_t*)cur;
+      if (playlist_CurrentInput != NULL) {
+        input_thread_t* p_input = playlist_CurrentInput(p_playlist);
+        if (p_input) {
+          char* uri = NULL;
+          if (input_GetItem != NULL) {
+            input_item_t* item = input_GetItem(p_input);
+            if (item && item->psz_uri && item->psz_uri[0] != '\0') {
+              uri = strdup(item->psz_uri);
+            }
+          }
+          vlc_object_release(VLC_OBJECT(p_input));
+          if (uri && uri[0] != '\0') return uri;
+          if (uri) free(uri);
+        }
+      }
+    }
+    cur = cur->obj.parent;
+  }
+  return NULL;
+}
+```
+
+#### 2. Cross-Platform Ahead-of-Time Source Decoding: FFmpeg (Linux) vs. Media Foundation (Windows)
+The worker source decoder (`vw_source_decode.c`) decodes media files out-of-process to feed 16 kHz Mono S16LE PCM chunks ahead of real-time playback:
+
+- **Linux Implementation (FFmpeg / `libavformat` + `libswresample`)**:
+  - Opens media via `avformat_open_input()`, locates best audio stream with `av_find_best_stream()`.
+  - Configures `SwrContext` resampler (`swr_alloc_set_opts2`) to convert arbitrary sample formats and rates to 16000 Hz Mono S16LE.
+  - Seeks using `av_seek_frame(fmt_ctx, audio_idx, ts, AVSEEK_FLAG_BACKWARD)` and flushes buffers with `avcodec_flush_buffers()`.
+
+- **Windows Implementation (Media Foundation / `IMFSourceReader`)**:
+  - Converts UTF-8 source MRL to wide-char string and strips leading `file:///` (e.g. `file:///C:/video.mp4` → `C:/video.mp4`).
+  - Creates reader via `MFCreateSourceReaderFromURL()`.
+  - Configures target media type to PCM 16kHz 16-bit Mono:
+    ```c
+    IMFMediaType* pPartialType = NULL;
+    MFCreateMediaType(&pPartialType);
+    pPartialType->lpVtbl->SetGUID(pPartialType, &MF_MT_MAJOR_TYPE, &MFMediaType_Audio);
+    pPartialType->lpVtbl->SetGUID(pPartialType, &MF_MT_SUBTYPE, &MFAudioFormat_PCM);
+    pPartialType->lpVtbl->SetUINT32(pPartialType, &MF_MT_AUDIO_NUM_CHANNELS, 1);
+    pPartialType->lpVtbl->SetUINT32(pPartialType, &MF_MT_AUDIO_SAMPLES_PER_SECOND, 16000);
+    pPartialType->lpVtbl->SetUINT32(pPartialType, &MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    pReader->lpVtbl->SetCurrentMediaType(pReader, MF_SOURCE_READER_FIRST_AUDIO_STREAM, NULL, pPartialType);
+    ```
+  - Seeks using `SetCurrentPosition` with 100ns timestamp units:
+    ```c
+    PROPVARIANT var;
+    var.vt = VT_I8;
+    var.hVal.QuadPart = target_pts_us * 10;
+    pReader->lpVtbl->SetCurrentPosition(pReader, &GUID_NULL, &var);
+    ```
+  - Process-wide lifecycle: `MFStartup`/`MFShutdown` are called once per worker lifetime in `vw_worker_run`, preventing per-thread refcount races.
+
+#### 3. Native SPU Text Region Construction & MinGW Symbol Linkage
+- **Text Region Construction**: Native subpictures must carry a `subpicture_region_t` containing text segments:
+  ```c
+  subpicture_t* subpic = subpicture_New(NULL);
+  if (subpic) {
+    video_format_t fmt;
+    memset(&fmt, 0, sizeof(fmt));
+    fmt.i_chroma = VLC_CODEC_TEXT;
+    subpicture_region_t* region = subpicture_region_New(&fmt);
+    region->p_text = text_segment_New(text_utf8);
+    region->i_align = SUBPICTURE_ALIGN_BOTTOM;
+    region->i_x = 0;
+    region->i_y = 20;
+    subpic->p_region = region;
+    subpic->i_channel = channel_id;
+    subpic->i_start = (vlc_tick_t)system_start_pts_us;
+    subpic->i_stop = (vlc_tick_t)system_end_pts_us;
+    subpic->b_subtitle = true;
+    vout_PutSubpicture(vout, subpic);
+  }
+  ```
+- **Windows MinGW Symbol Linkage**: Weak symbol attributes (`__attribute__((weak))`) fail on MinGW by evaluating function pointers to NULL at link time. Resolved using conditional `VW_WEAK` macro and exporting required symbols in `plugin/libvlccore.def`:
+  ```c
+  #ifdef _WIN32
+  #define VW_WEAK
+  #else
+  #define VW_WEAK __attribute__((weak))
+  #endif
+  extern subpicture_region_t* subpicture_region_New(const video_format_t*) VW_WEAK;
+  extern text_segment_t* text_segment_New(const char*) VW_WEAK;
+  ```
+
+---
+
+## Phased Re-Implementation Roadmap & Blueprint
+
+To implement these feature sets cleanly and verifiably on `gemini/milestone-3`, future work MUST follow this 4-phase sequence. Each phase MUST be implemented on its own dedicated branch, verified against the definition of done, and merged before starting the next.
+
+```text
+[Milestone 3 Baseline]
+          │
+          ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase A: Real-Time Audio Streaming & OSD (Steps 14-15) │
+│ - Pure real-time PCM streaming via IPC                 │
+│ - 4s window / 2s hop whisper.cpp inference             │
+│ - vout_OSDText timed caption presentation              │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase B: GPU Acceleration Backend                      │
+│ - ggml-vulkan CMake integration                        │
+│ - CLI --backend auto|gpu|cpu & --gpu-device            │
+│ - Isolated CPU fallback & build documentation          │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase C: SPU Subpicture Subsystem                      │
+│ - SPU channel registration & vout_PutSubpicture        │
+│ - Proper subpicture_region_New(VLC_CODEC_TEXT) setup   │
+│ - System-to-media date domain conversion               │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase D: Look-Ahead Source Decoding & Seek Engine     │
+│ - Protocol 1.1 source_url & POSITION messages          │
+│ - Worker FFmpeg / MF source demuxer                    │
+│ - Model-once process lifetime (ADR-015)                │
+│ - Input-clock jump seek re-sync & SPU flushing         │
+└─────────────────────────┬──────────────────────────────┘
+```
+
+### Phase A Details: Real-Time PCM IPC & OSD Presentation
+- **Goal**: Implement baseline real-time audio streaming from VLC audio filter callback to worker, performing CPU inference and displaying captions via OSD (`vout_OSDText`).
+- **Key Constraints**:
+  - Keep `vw_spsc_queue` thread-safe and non-blocking in VLC audio callback.
+  - Implement worker reader thread (`ADR-013`) for IPC pipe draining.
+  - Use `vout_OSDText` only; do not introduce SPU channels yet.
+
+### Phase B Details: GPU Acceleration Backend
+- **Goal**: Add Vulkan GPU acceleration to `whisper.cpp` worker build without changing plugin IPC or rendering contracts.
+- **Key Constraints**:
+  - Validate clean CPU fallback when Vulkan is unavailable.
+  - Document parallel build memory limits (`glslc`).
+
+### Phase C Details: SPU Subpicture Subsystem
+- **Goal**: Replace OSD rendering with native SPU subpicture channel rendering for exact subtitle timing and positioning.
+- **Key Constraints**:
+  - Always allocate `subpicture_region_New(VLC_CODEC_TEXT)` and `text_segment_New()`.
+  - Use `VW_WEAK` macro for Windows compatibility.
+  - Perform system-to-media timestamp translation (`mdate() - input_time`).
+
+### Phase D Details: Look-Ahead Source Decoding & Seek Engine
+- **Goal**: Enable worker ahead-of-time source file demuxing (FFmpeg/MF) and seek re-synchronization.
+- **Key Constraints**:
+  - Enforce Model-Once worker engine lifetime (`ADR-015`).
+  - Set `is_seeking = true` explicitly when `timeline_origin_pts_us > 0`.
+  - Manage Media Foundation process-wide in `vw_worker_run`.
+  - Re-anchor seek detector and media-system offset upon input clock jump.
+
+---
+
+## Acceptance Criteria & Definition of Done Checklist
+
+- [x] Comprehensive postmortem report generated in `docs/plans/milestone3_postmortem.md`.
+- [x] Architectural changes, root causes of failures, and technical handoff details fully documented.
+- [x] Phased 4-step re-implementation blueprint defined.
+- [x] Code formatting verification (`clang-format --dry-run --Werror`) clean on target files.
+- [x] Native build and unit test suite (`cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug && ctest --preset linux-x64-debug`) 100% passing.
+- [x] Valgrind memory leak verification (`ctest --test-dir build/linux-x64-debug -T memcheck`) 100% clean.
+
+---
+
+## Evidence & Verification Results
+- **Postmortem Report File**: `docs/plans/milestone3_postmortem.md`
+- **Native Test Suite**: 13/13 tests passing on `gemini/milestone-3` baseline.
+- **Memcheck Output**: 0 memory leaks, 100% tests passed under Valgrind.
+
+---
+
+## Addendum: Step 17b SPU Bugfix Trace (Newer Iteration — 2026-08-18)
+
+> **Timeline note:** this section documents the bugfix trace of the **step-17b re-implementation** on
+> `gemini/milestone-3-step-17b` (commits `98d64d8` feat, `34e13cf` fix). It was written **after** the
+> postmortem above and is **not part of the postmortem's original timeline**. The two postmortem
+> findings re-encountered here ("Empty SPU Subpicture", MinGW weak symbols) are referenced as such;
+> the root-cause chain below is new.
+
+### Symptom
+Pipeline fully working — worker running GPU inference, segments emitted over IPC, presenter logging
+`PRESENTER_SPU_RENDER` on the registered channel — yet **no captions on screen** in live VLC
+3.0.23 (Windows, d3d11va hardware decode + direct3d11 display).
+
+### Step 1 — postmortem's "Empty SPU" bug ruled out
+The postmortem's documented cause (subpicture pushed with `p_region = NULL`) was already fixed in the
+17b code: regions carry `subpicture_region_New(VLC_CODEC_TEXT)` + `text_segment_New()`. Construction
+matches the postmortem's canonical pattern field-for-field (verified against `vout_OSDText`'s own
+region construction). Not the failure.
+
+### Step 2 — clock-domain mixup (S-domain PTS vs media position)
+Worker segment PTS are **not** media timestamps. VLC 3.0's audio output re-bases audio-filter block
+PTS into the **system-date domain** (`aout_DecPlay` in `src/audio_output/dec.c` computes
+`advance = block->i_pts - mdate()`; µs since boot on Windows — worker logs showed `~19874s`/`~21133s`
+≈ boot uptime), while `input_Control(INPUT_GET_TIME)` returns the media position. The presenter's
+`mdate() + (segment_pts - input_time)` subtracted hours of offset → subpictures scheduled ~5.5h in
+the future → `SpuSelectSubpictures` "Too early, come back next monday" forever.
+Fix: S→M conversion `media_t = segment_pts - (system_now - input_time)` with `system_now` = last
+audio-filter block PTS (frozen while paused, keeping the offset stable). Logs then showed correct
+media-range times (`start=8400000us stop=16400000us`) — **but captions were still invisible**.
+
+### Step 3 — subtitle-clock selection drop (root cause)
+With correct media-domain times and `b_subtitle = true`, the subpictures are still dropped **before
+region rendering**. Decisive evidence: the `-vv` VLC log contains **no `main warning: original
+picture size is undefined`**, which MUST fire for any selected subpicture with unset
+`i_original_picture_*` (ours are 0). Therefore `SpuSelectSubpictures` never selects them: the
+subtitle clock (`render_subtitle_date` = displayed picture PTS) does not accept filter-pushed
+subpictures in this build. Full static trace of `spu_PutSubpicture` → selection gates →
+`SpuRenderSubpictures` → freetype → d3d11 quad path shows every stage passes only if the render
+date matches the subpicture's clock domain.
+
+### Step 4 — fix: OSD clock domain
+Render captions in the **OSD clock domain**: `b_subtitle = false` + `i_start = mdate()` +
+`i_stop = i_start + duration`, on the registered private SPU channel
+(`vout_RegisterSubpictureChannel`, no ES/track gating in 3.0.23). `render_osd_date = mdate()`
+**always** — no fallback ambiguity — and this is exactly the configuration the OSD milestones
+(11-16) demonstrated displaying (`vout_OSDText` self-timestamps at `mdate()`). Verified live:
+captions display on SPU channel 9 at bottom center; flush/blank on seek intact.
+
+### Known residual & deferred work
+- **`main warning: original picture size is undefined` (once per caption)** — intended; the
+  presenter cannot learn the video source size via a public API, VLC falls back to the correct
+  source size and caches it back into the heap subpicture (text scaling stays correct). See
+  `docs/plans/step17b_plan.md` §3.
+- **Media-domain scheduling (`b_subtitle = true`) is the 17c look-ahead prerequisite** — blocked on
+  probing the subtitle clock (e.g. pushing a wide-window probe subpicture) before relying on it.
+  The S→M conversion math is preserved in `docs/vlc-api-essentials.md` §3.4.
+
+### Evidence
+- Commits: `98d64d8` (feat 17b base), `34e13cf` (fix, 10 files).
+- 16/16 ctest, clang-format clean, Valgrind 0 errors (only pre-existing libgomp still-reachable
+  noise), Windows MinGW cross-build links (`libvlc_whisper_plugin.dll`).

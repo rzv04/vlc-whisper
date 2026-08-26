@@ -1,5 +1,5 @@
 // Copyright 2026 VLC-Whisper Contributors. All rights reserved.
-// Use of this source code is governed by a BSD-style license.
+// Use of this source code is governed by the MIT License that can be found in the LICENSE file.
 
 #include "vw_log.h"
 
@@ -10,11 +10,14 @@
 
 static vw_log_sink_fn g_log_sink = NULL;
 static void* g_log_user_data = NULL;
+static FILE* g_log_file = NULL;
 
 void vw_log_set_sink(vw_log_sink_fn sink, void* user_data) {
   g_log_sink = sink;
   g_log_user_data = user_data;
 }
+
+void vw_log_set_file(FILE* file) { g_log_file = file; }
 
 static const char* vw_log_level_to_string(vw_log_level_t level) {
   switch (level) {
@@ -51,5 +54,11 @@ void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, .
     // Default fallback sink: print to stderr with tags
     fprintf(stderr, "[%s] [%s] %s\n", vw_log_level_to_string(level), event_id, message_buf);
     fflush(stderr);
+  }
+
+  // Optional additional FILE* output (e.g. the worker's default-on temp log file).
+  if (g_log_file != NULL) {
+    fprintf(g_log_file, "[%s] [%s] %s\n", vw_log_level_to_string(level), event_id, message_buf);
+    fflush(g_log_file);
   }
 }

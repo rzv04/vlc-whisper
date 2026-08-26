@@ -6,31 +6,36 @@
 #include <stdint.h>
 #include <whisper.h>
 
-// Initializes a separate VAD context using the default parameters and the provided model path, separate from the
-// whisper pipeline. Returns a pointer to the initialized context, or NULL on failure.
-
-// Documented defaults are:
-/*  threshold               =  0.5f,    Threshold for speech detection (0.0 to 1.0)
-    min_speech_duration_ms  =  250,     Minimum duration of speech to consider it valid (in milliseconds)
-    min_silence_duration_ms =  100,     Minimum duration of silence to consider speech ended (in milliseconds)
-    max_speech_duration_s   =  FLT_MAX, Maximum duration of a speech segment before forcing a new segment (in seconds)
-    speech_pad_ms           =  30,      Padding added before and after speech segments (in milliseconds)
-    samples_overlap         =  0.1,     Overlap in seconds when copying audio samples from speech segment (in seconds)
-*/
-
 #define VW_VAD_ENERGY_THRESHOLD 0.01f  // RMS energy floor for speech detection (normalized float [-1,+1])
 
+// Initializes a standalone Silero VAD context from a GGML model file using default parameters. Returns a valid context
+// pointer on success, or NULL if the model file is missing or invalid.
 struct whisper_vad_context* vw_vad_init_default(const char* path_model);
 
-// Detects speech in a given PCM audio buffer/window using a VAD model. Falls back to an energy-based check when vctx is
-// NULL (no VAD model loaded). The input audio is 32-bit float normalized to [-1.0f, +1.0f], 16kHz. Returns true if
-// speech is detected, false otherwise.
+// Detects voice activity in a 16kHz float32 audio buffer. Uses Silero VAD when vctx is non-null, falling back
+// transparently to RMS energy thresholding when vctx is NULL.
 bool vw_vad_detect_speech(const float* pcm32, size_t sample_count, struct whisper_vad_context* vctx);
 
-// Lightweight energy-based VAD. Computes RMS of PCM buffer and compares against threshold.
-// No model required. Returns true if average energy exceeds the given threshold.
+// Lightweight energy-based speech detector comparing root-mean-square amplitude against a float threshold. Returns
+// true if audio energy exceeds the specified limit without requiring model weights.
 bool vw_vad_detect_speech_energy(const float* pcm32, size_t sample_count, float threshold);
 
+#define VW_CHUNK_MIN_SAMPLES 96000     // 6.0s at 16kHz
+#define VW_CHUNK_MAX_SAMPLES 384000    // 24.0s at 16kHz
+#define VW_CHUNK_PAD_SAMPLES 2400      // 150ms speech boundary padding
+#define VW_CHUNK_MIN_SILENCE_GAP 4800  // 300ms silence interval for natural sentence pause
+
+// Evaluates speech intervals in an audio buffer to determine the optimal non-overlapping chunk cut point at a natural
+// silence pause (or leading silence drain) to avoid word clipping and redundant inference.
+bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct whisper_vad_context* vctx, bool is_eof,
+                                size_t* out_cut_samples, size_t* out_silence_drain);
+
+// Resets internal recurrent LSTM states in the Silero VAD context. Must be invoked during seeking, pause resume, or
+// session epoch transitions to prevent past audio state leakage.
+void vw_vad_reset_state(struct whisper_vad_context* vctx);
+
+// Releases all resources and memory buffers allocated for the Silero VAD context. Safe to call with a NULL context
+// pointer.
 void vw_vad_free(struct whisper_vad_context* vctx);
 
 #endif  // VW_VAD_H_

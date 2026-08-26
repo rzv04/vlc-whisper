@@ -17,16 +17,16 @@
 
 # This hook catches non-compliant commit messages to Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
 
-msg="$(cat "$1")"
+subject="$(head -n1 "$1")"
 
 pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?(!)?: .{1,72}$'
 
-if echo "$msg" | grep -Eq "$pattern"; then
+if echo "$subject" | grep -Eq "$pattern"; then
   exit 0
 fi
 
 cat >&2 <<'EOF'
-Commit message does not follow Conventional Commits.
+Commit message does not follow Conventional Commits, or it has more than 72 characters in its subject.
 Expected: type(scope): description
 Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
 Add ! after type/scope for breaking changes, e.g. feat(api)!: drop legacy buffer

@@ -8,6 +8,7 @@ bool vw_protocol_validate_header(const vw_frame_header_t* header) {
   return true;
 }
 
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -74,9 +75,8 @@ static bool is_empty_or_whitespace(const char* s, size_t len) {
   return true;
 }
 
-// Validate the payload struct for a given message type. Returns true if valid, false otherwise.
 bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
-  if (!payload && type != VW_MSG_SHUTDOWN && type != VW_MSG_STARTED) return false;
+  if (!payload && type != VW_MSG_SHUTDOWN) return false;
   switch (type) {
     case VW_MSG_HELLO: {
       const vw_msg_hello_t* p = (const vw_msg_hello_t*)payload;
@@ -93,10 +93,12 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
     case VW_MSG_AUDIO_PCM: {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
       if (p->duration_us <= 0 || p->duration_us > 30000000) return false;
-      // pcm_bytes = duration_us * 16000 / 1000000 * 2 = duration_us * 32 / 1000
-      // integer truncated; valid audio under 31.25 µs silently passes?. Negligible at 16kHz (0.5 sample)
+      // pcm_bytes = duration_us * 16000 / 1000000 * 2 = duration_us * 32 / 1000.
+      // api-contracts allows "documented whole-sample rounding": producers may round duration up
+      // or down by half a sample (0.5 sample = 1 byte at 16kHz S16LE), so accept ±1 byte. A
+      // strict equality check killed real sessions on odd-length partial blocks (off-by-one).
       uint32_t expected_bytes = (uint32_t)((p->duration_us * 32) / 1000);
-      if (p->pcm_bytes != expected_bytes) return false;
+      if (p->pcm_bytes + 1 < expected_bytes || p->pcm_bytes > expected_bytes + 1) return false;
       if (p->pcm_bytes > 0 && !p->pcm_data) return false;
       return true;
     }
@@ -106,12 +108,25 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
     case VW_MSG_STATUS:
     case VW_MSG_ERROR:
     case VW_MSG_SHUTDOWN:
-    case VW_MSG_STARTED:
       return true;
+    case VW_MSG_STARTED: {
+      const vw_msg_started_t* p = (const vw_msg_started_t*)payload;
+      if (p->source_active != VW_SOURCE_ACTIVE_INACTIVE && p->source_active != VW_SOURCE_ACTIVE_ACTIVE) return false;
+      return true;
+    }
+    case VW_MSG_POSITION: {
+      const vw_msg_position_t* p = (const vw_msg_position_t*)payload;
+      if (p->current_pts_us < -10000000LL || p->current_pts_us > 315360000000000LL) return false;
+      if (p->input_time_us < -1LL || p->input_time_us > 315360000000000LL) return false;
+      if (!isfinite(p->playback_rate) || p->playback_rate <= 0.0f || p->playback_rate > 16.0f) return false;
+      if ((p->flags & ~(VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED)) != 0) return false;
+      return true;
+    }
     case VW_MSG_CAPTION_SEGMENT: {
       const vw_caption_segment_t* p = (const vw_caption_segment_t*)payload;
       if (p->end_pts_us <= p->start_pts_us) return false;
       if (p->text_bytes > VW_MAX_TEXT_BYTES) return false;
+      if (p->text_bytes > 0 && !p->text_utf8) return false;
       if (is_empty_or_whitespace(p->text_utf8, p->text_bytes)) return false;
       if (!is_valid_utf8(p->text_utf8, p->text_bytes)) return false;
       // No control characters except space and newline (handled strictly)

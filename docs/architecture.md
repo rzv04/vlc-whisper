@@ -15,26 +15,35 @@ VLC decode pipeline
 capture module (C, non-blocking producer)
   | bounded in-process SPSC queue
   v
-IPC sender thread ---- local named pipe ---- worker.exe (C application)
-                                                  |
-                                             whisper.cpp C API
-                                                  |
-caption receiver thread -- timed segments --> caption presenter (C)
-                                                  |
-                                             VLC subtitle/OSD path
+plugin sender thread (14c, single send+receive: 5/20 ms cadence)
+  | ---- local named pipe ---- worker.exe (C application)
+                                        |
+                                 worker IPC reader thread (14c, ADR-013)
+                                        |
+                                 worker frame queue (bounded, drop-oldest AUDIO)
+                                        |
+                                 worker session+inference main loop
+                                        |
+                                   whisper.cpp C API (Model-once ADR-015)
+                                        |
+caption receiver thread (step 15) -- timed segments --> caption presenter (C)
+                                        |
+                                   VLC subtitle/SPU/OSD path
 ```
 
-| Component                  | Owns                                                            | Must not do                                                  |
-| -------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
-| Capture module             | Audio-format validation, PTS mapping, bounded PCM enqueue       | Wait for worker, infer, write pipe, allocate per audio block |
-| IPC sender                 | Session handshake, PCM framing, queue drain, backpressure       | Call VLC presentation API                                    |
-| Worker                     | Model lifetime, VAD/windowing, inference, segment deduplication | Read arbitrary paths, expose network service, control VLC    |
-| Caption receiver/presenter | Validate worker messages, schedule/show/clear captions          | Trust malformed text/timestamps or block VLC playback        |
-| Supervisor                 | Worker start/stop/restart policy and status                     | Restart endlessly or conceal a fatal compatibility error     |
+| Component                          | Owns                                                                                                                                                                                                                                                                                | Must not do                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Capture module                     | Audio-format validation, PTS mapping, bounded PCM enqueue                                                                                                                                                                                                                           | Wait for worker, infer, write pipe, allocate per audio block            |
+| Plugin sender (14c, 15, 16)        | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR, dispatch SEGMENT frames to the caption presenter, poll input pause state and send PAUSE/RESUME                                                                                        | Block on inference; call VLC presentation API from the audio callback   |
+| Worker IPC Reader (14c, `ADR-013`) | Pipe frame reading, protocol validation, worker frame queue enqueue                                                                                                                                                                                                                 | Block on whisper.cpp inference or delay transport reading; send replies |
+| Worker frame queue (14c)           | Bounded FIFO of `{type, payload}` frames; drop-oldest AUDIO; controls never evicted for audio; overflow evicts only PAUSE/RESUME, same-type, or the oldest non-SHUTDOWN control for a required incoming (START/STOP); a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming | Block; allocate unbounded                                               |
+| Worker Engine (`ADR-015`, 17a)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder; Vulkan backend default ON with transparent CPU fallback (`--backend auto|gpu|cpu`, `--gpu-device`)                                                                                                                    | Read arbitrary paths, expose network service, control VLC               |
+| Caption receiver/presenter         | Validate worker messages, schedule/show/clear captions                                                                                                                                                                                                                              | Trust malformed text/timestamps or block VLC playback                   |
+| Supervisor                         | Worker start/stop/restart policy and status                                                                                                                                                                                                                                         | Restart endlessly or conceal a fatal compatibility error                |
 
 ## Time and buffering
 
-All protocol times are signed 64-bit microseconds in the media timeline (`pts_us`), never wall-clock time. PCM is canonical 16 kHz, mono, signed 16-bit little-endian before it leaves the plugin; conversion belongs off the realtime callback if VLC cannot deliver it already.
+All protocol times are signed 64-bit microseconds (`pts_us`). VLC 3.0's audio output stamps audio-filter block PTS in the **system-date domain** (µs since boot on Windows; `aout_DecPlay` compares block PTS against `mdate()`), so the wire carries that domain. The caption presenter schedules SPU subpictures in the OSD clock domain (`i_start = mdate()`) — the clock the 3.0.23 Windows build renders filter-pushed subpictures against; media-domain scheduling (`b_subtitle = true`, picture-PTS clock) is the 17c target, currently blocked on the subtitle clock silently dropping such subpictures (evidence chain in `docs/plans/step17b_plan.md` §3 and `docs/vlc-api-essentials.md` §7). PCM is canonical 16 kHz, mono, signed 16-bit little-endian before it leaves the plugin; conversion belongs off the realtime callback if VLC cannot deliver it already.
 
 Start with an 8-second analysis window, 2-second hop, and a hard 15-second audio backlog. These are configuration defaults, not compatibility guarantees. whisper.cpp offers a C-style API, VAD support, CPU-only operation, quantized models, and an example that repeatedly transcribes short real-time windows; its own stream example is described as naive, so overlap/deduplication and latency measurement are product work. [page:0]
 
@@ -63,17 +72,32 @@ IDLE -> STARTING -> READY -> PLAYING <-> PAUSED -> STOPPING -> IDLE
 
 A session is identified by a random 128-bit `session_id`; each playback start creates a new one. `sequence` is monotonic per direction. The plugin ignores stale session messages. A pause sends `PAUSE`, stops forwarding audio, and clears partial captions; final captions already scheduled may remain until their end PTS. Resume sends `RESUME`. Stop clears all generated captions before closing IPC.
 
-MVP seeking & discontinuity policy: when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), resets the SPSC queue & VAD state, and initializes a new session epoch (`timeline_origin_pts_us`) seamlessly without disabling captions or interrupting VLC media playback.
+Seeking & discontinuity policy (shipped in step 17; hardened in steps 17c & 17d):
+- In **Live Streaming Mode**, when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), discards the SPSC queue, and starts a new session epoch seamlessly without disabling captions or interrupting VLC media playback.
+- In **Look-Ahead Source Mode (Steps 17c & 17d)**, the worker natively decodes the local source file ahead of the playhead (maintaining a 30s horizon). The plugin extracts the media URL (`input_item_GetURI`) and periodically sends `POSITION` messages to pace worker decoding. On seek events, the plugin transmits a `POSITION` message with `VW_POSITION_FLAG_SEEK`; the worker repositions its native demuxer (`IMFSourceReader::SetCurrentPosition` on Windows / `av_seek_frame` on Linux) and clears in-flight hypotheses without tearing down the worker process or IPC pipe.
+- **5-Second Clock Jump Gate (Step 17d)**: In both the realtime audio callback and throttled position-poll detectors, forward timeline jumps are gated by `VW_INPUT_JUMP_DISCONTINUITY_US = 5000000LL` (5.0s). Minor network transport jitter, packet slips, and re-buffering ($|\Delta\text{PTS}| < 5\text{s}$) are suppressed to prevent false-positive caption dropouts, while backward jumps ($> 500\text{ms}$) and true macroscopic seeks ($\ge 5\text{s}$) trigger instant seek re-sync and SPU channel flushing. Live PCM capture and IPC streaming are gated when source mode is confirmed active via `VW_MSG_STARTED` (`source_active = 1`).
+- **Phrase-by-Phrase Timing & Segmentation (Step 17d.1, `ADR-017`, `ADR-018`)**: Whisper's internal sub-segments ($t_0, t_1$ centiseconds scaled by `10000LL`) are extracted directly instead of concatenating the entire 8-second window. A decoupled `vw_segment_builder` maintains a 16-slot committed history ring buffer across 2s window hops, deduplicating candidate phrases within $500\,\text{ms}$ tolerance. Discrete non-overlapping SPU subpictures are scheduled with `i_start = mdate() + lead_us` and `i_stop = i_start + dur_us / rate`, naturally blanking the screen during conversational pauses (e.g. 0.6s gap) for a natural PotPlayer / Netflix visual cadence.
+- **Multi-Tier Voice Activity Detection & Silence Gating (Step 17e.1, `ADR-019`)**:
+  - **Tier 1 (Pre-Inference VAD)**: Employs vendored Silero GGML VAD (`whisper_vad_detect_speech` / `whisper_vad_segments_from_probs`) across all worker audio ingestion paths. Auto-discovers `ggml-silero-vad.bin` in the model directory alongside `ggml-tiny.en.bin` or via CLI `--vad-model <path>`, gracefully falling back to zero-config RMS Energy VAD (`0.01f`) if absent. Silent/music windows skip Whisper inference completely, cutting idle CPU/GPU usage by up to 80%.
+  - **Tier 2 (Post-Inference Acoustic Confidence Gating)**: Configures `wparams.no_speech_thold = 0.60f` and `wparams.suppress_nst = true`. Evaluates `whisper_full_get_segment_no_speech_prob` and discards sub-segments with $P(\text{no\_speech}) \ge 0.60$ for mixed speech/silence windows.
+  - **Tier 3 (Formatting & Non-Speech Tag Cleanliness)**: Encapsulated in `vw_hallucination_filter.c`. Strips standalone non-speech descriptors (`[Music]`, `(applause)`, `♪`, `♫`, etc.) and isolated punctuation (`...`, `---`) with zero alphanumeric characters, preserving 100% of spoken words and sentence punctuation.
+  - **Discontinuity LSTM Resets**: `whisper_vad_reset_state()` clears recurrent cell and hidden states on seek, pause, resume, and epoch restarts.
+- **VAD-Guided Non-Overlapping Audio Chunking (Step 17e.1 No-Hop, `ADR-020`)**:
+  - In **Lookahead Source Mode**, replaces fixed 2-second sliding hops with dynamic VAD-guided non-overlapping audio chunking (`vw_vad_find_chunk_boundary`). Audio is partitioned along natural conversational pauses ($\ge 300\text{ms}$ silence gap between sentences) bounded between $6.0\text{s}$ and $24.0\text{s}$ ($150\text{ms}$ acoustic padding).
+  - Each speech chunk is transcribed **exactly once** and drained 100% without overlap, eliminating duplicate/stuttering subtitles, mid-word clipping, and cross-hop timestamp jitter while reducing worker compute by 75%. Leading or all-silence intervals are drained with zero Whisper calls. Live streaming mode retains low-latency sliding windows for real-time responsiveness.
+- **Subtitle Reading Floor & Decoding Optimization (Step 17e.2, `ADR-021`)**:
+  - In `vw_caption_presenter.c`, enforces `VW_CAPTION_MIN_DISPLAY_DURATION_US = 1000000LL` (1.0s) rate-scaled wall-clock minimum display floor ($\text{duration\_us} = \max(\text{raw\_dur}, \lfloor 1000000 \times \text{rate} \rfloor)$), eliminating unreadable sub-second flash cues while preserving authentic acoustic timing for long phrases.
+  - In `vw_whisper_engine.c`, configures deterministic greedy decoding (`strategy = GREEDY`, `temperature = 0.0f`, `temperature_inc = 0.2f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`), isolating audio windows and preventing latency spikes or hallucination cascades.
 
 ## IPC protocol
 
-Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit capability token passed only on the worker command line/handle setup. Linux later maps the same framed byte protocol to a Unix-domain `SOCK_SEQPACKET` socket. Bind only locally; no TCP fallback.
+Use a Windows **message-mode named pipe** with a random pipe name and a one-time 256-bit authentication token passed only on the worker command line/handle setup. Linux maps the same framed byte protocol to a Unix-domain socket. Bind only locally; no TCP fallback.
 
 ### Transport Timeouts & Return Semantics
 
 - **Connection Accept Timeout**: 10 seconds. `vw_ipc_listen()` waits up to 10s (`poll()` on POSIX, `WaitForSingleObject` on Win32) for an incoming plugin connection before closing the socket/pipe and self-terminating (returns `NULL`).
 - **I/O Read/Write Timeout**: 3 seconds. `vw_ipc_receive()` and `vw_ipc_send()` enforce a 3-second timeout (`SO_RCVTIMEO`/`SO_SNDTIMEO` on POSIX, overlapped `WaitForSingleObject(3000)` on Win32).
-- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `0` on 3s read timeout (allowing worker loop to continue waiting during long video pauses), and `-1` on fatal error or peer disconnect (EOF / broken pipe).
+- **Receive Return Semantics**: `vw_ipc_receive()` returns `> 0` for bytes read, `VW_IPC_RECV_TIMEOUT` (`-1`) on 3s read timeout (connection stays open; callers retry / keep waiting, e.g. during long video pauses), and `VW_IPC_RECV_FATAL` (`-2`) on fatal error or peer disconnect (EOF / broken pipe) — the handle is dead and the caller must abort.
 
 Each frame is binary and little-endian:
 
@@ -90,8 +114,9 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 
 | Type                      | Direction                | Required payload                                                                       |
 | ------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| `HELLO` / `HELLO_ACK`     | both                     | version range, session ID, 32-byte token, capabilities                                 |
-| `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin |
+| `HELLO` / `HELLO_ACK`     | both                     | version range, 32-byte token, capabilities (`VW_CAPABILITY_SOURCE_MODE`)               |
+| `START` / `STARTED`       | plugin -> worker / reply | media identity hash (optional), audio format, model ID, language `en`, timeline origin, optional `source_url` |
+| `POSITION`                | plugin -> worker         | session ID, `current_pts_us`, `input_time_us`, `playback_rate`, `flags` (SEEK/PAUSED)  |
 | `AUDIO`                   | plugin -> worker         | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes                   |
 | `PAUSE`, `RESUME`, `STOP` | plugin -> worker         | session ID, reason where applicable                                                    |
 | `SEGMENT`                 | worker -> plugin         | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence                    |
@@ -103,6 +128,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 The worker manages models; the plugin knows only a model ID string (`tiny.en`).
 
 Incoming audio frames carry:
+
 - `pcm_data`: Raw sample bytes (S16LE, FL32, or S32LE)
 - `frame_count`: Number of audio frames in the block
 - `pts_us`: Signed 64-bit microsecond PTS
@@ -110,6 +136,7 @@ Incoming audio frames carry:
 - `channels`: e.g., 1 or 2
 
 Converted SPSC queue chunks carry:
+
 - `start_pts_us`: Signed 64-bit microsecond PTS
 - `duration_us`: Duration of the chunk in microseconds
 - `sample_rate`: 16000 Hz
@@ -118,6 +145,7 @@ Converted SPSC queue chunks carry:
 - `pcm_data`: `int16_t` inline sample array (zero allocation)
 
 Transcribed segments carry:
+
 - `segment_id`: Monotonic 64-bit integer per session
 - `start_pts_us` / `end_pts_us`: microsecond media timeline bounds
 - `is_final`: Boolean flag
@@ -136,6 +164,17 @@ Transcribed segments carry:
 
 - Non-elevated: worker runs as the user running VLC.
 - No network: local IPC only. Token authentication prevents unauthorized local processes from connecting.
-- Resource limits: worker memory capped by single model model allocation (~39 MB for `tiny.en`). Worker CPU thread count capped by configuration (default 2 threads).
+- Resource limits: worker memory capped by single model model allocation (~39 MB for `tiny.en`). Worker CPU thread count capped by configuration (default 2 threads; graph compute uses ggml's pthread-based threadpool — on Windows OpenMP is disabled at build time so the worker exe stays free of MinGW runtime DLLs, ADR-010).
 - Audio buffer limit: plugin drops audio chunks when the queue reaches 16 chunks (8 s capacity) rather than consuming unbounded memory.
 - Input bounds: header payload length strictly capped at 1 MB. Malformed UTF-8 text or impossible PTS values are rejected.
+- Caption queueing: plugin maintains no internal caption queue (ADR-016). Timed subpictures are submitted directly to VLC's native SPU pipeline (`vout_PutSubpicture`), which manages PTS display scheduling.
+
+## Deployment & Packaging
+
+- **Windows Installer (NSIS)**: Standalone installer (`vlc-whisper-win64-setup.exe`) auto-detects VLC 64-bit installation paths from `HKLM\Software\VideoLAN\VLC`, installs the plugin DLL to `<VLC>\plugins\audio_filter\`, worker executable and models to `<VLC>\`, regenerates VLC's plugin cache (`vlc-cache-gen.exe`), registers an uninstaller, and creates shortcuts (`vlc.exe --audio-filter=vlc_whisper`).
+- **Path Resolution Hierarchy**:
+  1. Plugin DLL directory ancestors (`plugins/audio_filter` $\to$ `plugins` $\to$ `<VLC_ROOT>`).
+  2. VLC process executable directory (`GetModuleFileNameA(NULL)`).
+  3. Windows Registry keys `HKCU\Software\VLC-Whisper\InstallPath` and `HKLM\Software\VLC-Whisper\InstallPath`.
+  4. Environment paths `%LOCALAPPDATA%\vlc-whisper\` and `%PROGRAMFILES%\vlc-whisper\`.
+- **Licensing & Offline Discipline**: Root permissive MIT License with full third-party attributions (`THIRD_PARTY_NOTICES.md`). Completely zero network connectivity or cloud APIs.

@@ -20,12 +20,12 @@ int main(void) {
 
   // HELLO
   vw_msg_hello_t hello = {.min_major = 1, .max_major = 1, .client_version_length = 6, .client_version = (char*)"1.0.0"};
-  memset(hello.token, 0xAB, 32);
+  memset(hello.auth_token, 0xAB, VW_AUTH_TOKEN_BYTES);
   EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &hello, buffer, sizeof(buffer), &written));
   vw_msg_hello_t decoded_hello = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_HELLO, buffer, written, &decoded_hello));
   EXPECT(decoded_hello.min_major == 1);
-  EXPECT(decoded_hello.token[0] == 0xAB);
+  EXPECT(decoded_hello.auth_token[0] == 0xAB);
   EXPECT_EQ_STR(decoded_hello.client_version, "1.0.0");
 
   // HELLO_ACK
@@ -43,7 +43,7 @@ int main(void) {
   // START
   vw_msg_start_t start = {
       .timeline_origin_pts_us = 1000, .sample_rate = 16000, .channels = 1, .sample_format = 1, .source_kind = 1};
-  memset(start.session_id.bytes, 1, 16);
+  memset(start.session_id.bytes, 1, VW_SESSION_ID_BYTES);
   strcpy(start.model_id, "ggml-tiny");
   strcpy(start.language, "en");
   EXPECT(vw_protocol_encode_payload(VW_MSG_START_SESSION, &start, buffer, sizeof(buffer), &written));
@@ -64,7 +64,7 @@ int main(void) {
 
   // CONTROL
   vw_msg_control_t control = {.reason = 42};
-  memset(control.session_id.bytes, 2, 16);
+  memset(control.session_id.bytes, 2, VW_SESSION_ID_BYTES);
   EXPECT(vw_protocol_encode_payload(VW_MSG_PAUSE, &control, buffer, sizeof(buffer), &written));
   vw_msg_control_t decoded_control = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_PAUSE, buffer, written, &decoded_control));
@@ -100,9 +100,40 @@ int main(void) {
   EXPECT(decoded_seg.is_final == true);
   EXPECT_EQ_STR(decoded_seg.text_utf8, "text");
 
-  // STARTED & SHUTDOWN
-  EXPECT(vw_protocol_encode_payload(VW_MSG_STARTED, NULL, buffer, sizeof(buffer), &written));
-  EXPECT(written == 0);
+  // START with source_url
+  vw_msg_start_t start_url = {.sample_rate = 16000, .channels = 1, .source_kind = VW_SOURCE_LOCAL_FILE};
+  strcpy(start_url.model_id, "tiny.en");
+  strcpy(start_url.language, "en");
+  strcpy(start_url.source_url, "file:///path/to/video.mp4");
+  start_url.source_url_len = (uint16_t)strlen(start_url.source_url);
+  EXPECT(vw_protocol_encode_payload(VW_MSG_START_SESSION, &start_url, buffer, sizeof(buffer), &written));
+  vw_msg_start_t decoded_start_url = {0};
+  EXPECT(vw_protocol_decode_payload(VW_MSG_START_SESSION, buffer, written, &decoded_start_url));
+  EXPECT(decoded_start_url.sample_rate == 16000);
+  EXPECT_EQ_STR(decoded_start_url.model_id, "tiny.en");
+  EXPECT_EQ_STR(decoded_start_url.source_url, "file:///path/to/video.mp4");
+  EXPECT(decoded_start_url.source_url_len == strlen("file:///path/to/video.mp4"));
+
+  // POSITION
+  vw_msg_position_t pos = {
+      .current_pts_us = 12345000LL, .input_time_us = 12300000LL, .playback_rate = 1.0f, .flags = VW_POSITION_FLAG_SEEK};
+  EXPECT(vw_protocol_encode_payload(VW_MSG_POSITION, &pos, buffer, sizeof(buffer), &written));
+  vw_msg_position_t decoded_pos = {0};
+  EXPECT(vw_protocol_decode_payload(VW_MSG_POSITION, buffer, written, &decoded_pos));
+  EXPECT(decoded_pos.current_pts_us == 12345000LL);
+  EXPECT(decoded_pos.input_time_us == 12300000LL);
+  EXPECT(decoded_pos.playback_rate == 1.0f);
+  EXPECT(decoded_pos.flags == VW_POSITION_FLAG_SEEK);
+
+  // STARTED
+  vw_msg_started_t started = {.source_active = VW_SOURCE_ACTIVE_ACTIVE};
+  EXPECT(vw_protocol_encode_payload(VW_MSG_STARTED, &started, buffer, sizeof(buffer), &written));
+  EXPECT(written == 1);
+  vw_msg_started_t decoded_started = {0};
+  EXPECT(vw_protocol_decode_payload(VW_MSG_STARTED, buffer, written, &decoded_started));
+  EXPECT(decoded_started.source_active == VW_SOURCE_ACTIVE_ACTIVE);
+
+  // SHUTDOWN
   EXPECT(vw_protocol_encode_payload(VW_MSG_SHUTDOWN, NULL, buffer, sizeof(buffer), &written));
   EXPECT(written == 0);
 

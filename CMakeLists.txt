@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(vlc_whisper C CXX)
+project(vlc_whisper VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -37,6 +37,7 @@ add_subdirectory(plugin)
 
 # Automated unit & integration tests
 if(BUILD_TESTING)
+    set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=all")
     include(CTest)
     enable_testing()
     add_subdirectory(tests)
@@ -44,3 +45,6 @@ endif()
 
 # Separate sample snippet targets (marked EXCLUDE_FROM_ALL)
 add_subdirectory(samples EXCLUDE_FROM_ALL)
+
+# Packaging and distribution (CPack & NSIS installer)
+include(cmake/vw_packaging.cmake)

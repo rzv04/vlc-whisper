@@ -771,14 +771,58 @@ Returns the version string of the compiled whisper.cpp library.
 
 ---
 
-## Usage Pattern (VLC-Whisper Worker)
+---
 
-The worker's typical flow:
+## VLC-Whisper Engine Wrapper (`vw_whisper_engine.h`)
+
+The worker wraps `whisper.cpp` behind a dedicated C17 engine abstraction:
+
+### Types
 
 ```c
-// 1. Load model
+typedef enum vw_worker_backend {
+  VW_WORKER_BACKEND_AUTO = 0, // Enable GPU; whisper.cpp probes GPU/IGPU and falls back to CPU if none found
+  VW_WORKER_BACKEND_GPU  = 1, // Force GPU-first path (same as AUTO)
+  VW_WORKER_BACKEND_CPU  = 2, // Force CPU-only path (never consults GPU devices)
+} vw_worker_backend_t;
+
+typedef struct vw_whisper_engine {
+  struct whisper_context* ctx;  // Opaque whisper.cpp context
+  char* last_text;              // Concatenated UTF-8 output of last transcribe run
+  size_t last_text_bytes;       // Capacity of last_text buffer
+} vw_whisper_engine_t;
+```
+
+### Functions
+
+```c
+// Initializes whisper.cpp engine instance from the specified model file path (ADR-015: model-once lifetime).
+// backend selects inference: AUTO/GPU set use_gpu=true (whisper picks the first GPU/IGPU device and falls
+// back to CPU at runtime when none exists), CPU forces use_gpu=false. gpu_device is the GPU/IGPU ordinal.
+// Runs a silent warmup inference pass on load. Returns NULL if model file is missing or invalid.
+vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device);
+
+// Safely destroys whisper.cpp engine instance and frees associated model memory.
+void vw_whisper_engine_free(vw_whisper_engine_t* engine);
+
+// Runs whisper.cpp transcription on normalized float32 PCM samples at 16kHz.
+bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm32, size_t sample_count);
+
+// Returns pointer to concatenated UTF-8 text from the last transcribe run, or "" if empty/NULL.
+const char* vw_whisper_engine_get_text(const vw_whisper_engine_t* engine);
+```
+
+---
+
+## Usage Pattern (VLC-Whisper Worker)
+
+The worker's typical flow with Vulkan GPU acceleration (and transparent CPU fallback):
+
+```c
+// 1. Load model with requested backend & device ordinal
 struct whisper_context_params cparams = whisper_context_default_params();
-cparams.use_gpu = false;  // CPU-only for broad compatibility
+cparams.use_gpu = (backend != VW_WORKER_BACKEND_CPU);
+cparams.gpu_device = (gpu_device >= 0) ? gpu_device : 0;
 struct whisper_context * ctx = whisper_init_from_file_with_params(model_path, cparams);
 
 // 2. Configure inference

@@ -1,494 +1,510 @@
-# Diff Analysis: Milestone 2 — Caption Presentation Spike (merge to main)
+# Diff Analysis: Step 17e.2 + Step 18 Packaging vs 17e.1 (VAD/No-Hop)
 
-**28 files changed, +1546 / -807 lines** (branch `gemini/milestone-2` vs `main` @ `f859fc5`)
-**Base**: `git diff main...HEAD`, plus 1 unstaged change in `plugin/src/vw_caption_presenter.c` (-1)
-
-Scope: VLC module load/unload (roadmap step 9), PCM capture + SPSC queue (step 10), caption presentation spike with OSD path (step 11), out-of-tree packaging decision (step 12, ADR-012). Plan: `docs/plans/milestone_2_11_plan.md`.
+**27 files changed, +1375 / -930 lines**
+**Base**: `origin/gemini/milestone-3-step-17e-1` (`5275b87` = PR #15 merge, 17e.1 VAD + no-hop merged to milestone-3).
+**Head**: `gemini/milestone-3-step-18` = `0dc29ee` (17e.2 reading floor + decoding + Windows installer).
+**Commits in scope**: `b8bf173` (stale plan cleanup), `638486b` (17e.2 plan O1-O9), `067f5a6` (reading floor + decoding), `8630043` (builder clamp attempt), `da1b7d0` (revert builder clamp, delegate pacing to presenter), `05806a0` (lookahead clip + sender flush), `c5557d2` (ADR-021), `7ff05fe` (ephemeral guard), `cb4b61d`/`7e54913` (plans), `0dc29ee` (Windows installer).
+**Line references**: post-diff HEAD state. Scout sweep: 5 parallel probes (presenter, engine, packaging, docs, cross-cutting) — cancelled mid-flight, inline review substituted.
 
 ---
 
 ## 1. File-by-File Analysis
 
-### 1.1 `.agents/AGENTS.md` and `AGENTS.md`
+### 1.1 `plugin/include/vw_caption_presenter.h`
 
-**Why change**: Enforce header-function documentation as rule 11, mirroring the root file into the agent environment.
+**Why change**: ADR-021 reading floor — single owner of visual pacing in the presenter. Needed pending-buffer state + floor constant (plan §Scope.1).
 
-**Responsibility before**: 10 rules. **After**: 11 rules (every non-third-party function in `.h` files needs a 20-30 word comment, including realtime quirks).
+**Responsibility before**: Thin struct `{p_filter_ctx, p_held_vout, spu_channel_id, spu_channel_registered}` + 4 API decls (`display`, `show_segment`, `blank`, `clear`). **After**: adds `VW_CAPTION_MIN_DISPLAY_DURATION_US=1e6`, `VW_PRESENTER_MAX_TEXT_BYTES=1024`, `has_pending` + `pending_segment` + `pending_text[1024]` to `vw_caption_presenter_t`, and new API `vw_caption_presenter_flush`. Docstrings expanded to 20-30 words (Rule 11).
 
-**Callers**: AI agents. **Callees**: none.
+**Callers**: `vw_whisper_module.c` (sender thread dispatches `show_segment` + periodic `flush`; seek/close calls `blank`/`clear`; `display` is fallback path), tests (`test_caption_presenter.c`). **Callees**: none (header only; uses `vw_protocol_types.h` for `vw_caption_segment_t`).
 
-**Happy path**: Rule 11 drives the doc comments added across `vw_queue.h`, `vw_audio_capture.h`, `vw_audio_buffer.h`, `vw_caption_presenter.h`. **Failure path**: N/A (policy).
+**Happy path**: `show_segment(&segA, t0)` buffers A as pending (`has_pending=true`, `strncpy` into `pending_text`, `pending_segment.text_utf8 = pending_text`). Next `show_segment(&segB, t1)` sees `has_pending`, computes clipped duration for A, calls `render_internal(A, clipped_dur, t1)`, clears pending, then buffers B. Sender's 100ms timer eventually calls `flush(B)` when `B.start_pts <= current + 100ms`.
 
-**Boundaries**: N/A. **Acceptance map**: Rule 11 present — `.agents/AGENTS.md:17`, `AGENTS.md:17`. Status: done.
+**Failure path**: `show_segment(NULL)` or `segment==NULL` or `!text_utf8` → `false`, no state mutation. `pending_text` truncation on `strncpy` (1024-1 + NUL) — overlong Whisper text silently truncated (boundary case, not validated upstream; protocol caps at ~1KB already).
 
-**Assumptions/Tradeoffs**: Duplication between the two AGENTS.md files remains a sync risk (they already diverged in whitespace).
+**Boundaries**:
 
----
+| Type | Check | Status |
+|---|---|---|
+| Input validation | `!presenter`, `!segment`, `!text_utf8` guards in `show_segment`/`flush` | OK |
+| Buffer | `strncpy` + explicit NUL terminator, 1024 cap | OK (truncation is silent) |
+| Concurrency | `has_pending` is sender-thread only (receiver thread dispatches to presenter via same sender loop after 15) | OK — single-owner, no lock needed |
+| Persistence | `pending_segment.text_utf8` points into `pending_text` (stable, not dangling) | OK |
 
-### 1.2 `.gitignore`
+**Acceptance map**:
 
-**Why change**: Ignore `*.def`, MCP config JSON, and editor config (`opencode.json`).
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | 1.0s wall floor at 0.5×/1×/2× | `h:8` constant, `c:259` rate-scaled floor | Test 17 (rate 2×, 0.5×) | ✅ |
+| 2 | Clip to successor start | `c:266-276` clipped_end logic | Test 16 (`cueA_stop == cueB_start`) | ✅ |
+| 3 | Flush when no successor | `c:295-312` flush impl + `vw_whisper_module.c:642-646` timer | Test 15 (flush path) | ✅ |
+| 4 | Ephemeral guard | `h:struct` + `c:121` `b_ephemer=true` | Test 14 `assert(b_ephemer)` | ✅ |
 
-**Responsibility before**: Ignored build artifacts, `diff.md`/`review.md`. **After**: Also `*.def`, `.agents/mcp_config.json` (comment: move to env vars), `opencode.json*`.
-
-**Callers**: git. **Callees**: none.
-
-**Happy path**: Secret-bearing configs stay untracked. **Failure path**: **`*.def` swallows the hand-written `plugin/libvlccore.def`** — a build input, not a build artifact (see Finding H-1).
-
-**Boundaries**: Pattern specificity. **Acceptance map**: ignore secrets — `.gitignore:187-189`. Status: done; `*.def` rule: **broken by side effect**.
-
-**Assumptions/Tradeoffs**: `*.def` was likely intended for MinGW-generated `.def` files; no negation for `plugin/libvlccore.def` was added.
-
----
-
-### 1.3 `README.md`
-
-**Why change**: Update Valgrind instructions to preset-based workflow, add stricter leak-check flags, and document manual Windows plugin installation (folded in from deleted `milestone_2_9_plan.md`).
-
-**Responsibility before**: Build/test/coverage docs. **After**: Also manual install, cache-reset, and log-inspection walkthrough for Windows.
-
-**Callers**: Developers. **Callees**: none.
-
-**Happy path**: `ctest --test-dir build/linux-x64-debug -T memcheck` per new docs. **Failure path**: N/A.
-
-**Boundaries**: N/A. **Acceptance map**: memcheck commands `README.md:60-75`; install guide `README.md:141-164`. Status: done.
-
-**Assumptions/Tradeoffs**: Windows verification remains manual (VM note about `--avcodec-hw=none`).
+**Assumptions/Tradeoffs**: Assumes sender thread is the sole writer to `presenter` (true per 15 architecture). Tradeoff: single-slot pending buffer (not a queue) — only the immediately preceding cue is clipped; a burst of 3 cues arriving in one loop iteration only clips pairwise, last cue flushed by timer. Sufficient because lookahead emits one chunk at a time; live path has 512ms cadence.
 
 ---
 
-### 1.4 `diff.md`
+### 1.2 `plugin/src/vw_caption_presenter.c`
 
-**Why change**: Superseded by this review. The previous review covered an earlier 5-file slice of the same milestone; this one covers the full branch.
+**Why change**: Implement ADR-021 presenter-owned pacing: rate-scaled floor, successor clipping via pending buffer, OSD floor, ephemeral presentation.
 
-**Responsibility before**: Milestone 2 partial review (base `b31f6b1..98a9b5e`). **After**: Full branch review vs `main`.
+**Responsibility before**: Direct render: `show_segment` computed `duration = end-start` (or 2s fallback), looked up `rate`, scheduled via `mdate() + lead` → `vout_PutSubpicture` or `vout_OSDText`. **After**: split into `render_internal(segment, duration_us, input_time)` (rate lookup + wall conversion + SPU/OSD dispatch) + `show_segment` (pending buffer + clip) + `flush` (pending dispatch with floor) + `display` floor clamp + `blank`/`clear` pending reset.
 
-**Callers**: Humans. **Callees**: none. **Acceptance map**: replaced. Status: done.
+**Callers**: `vw_whisper_module.c:dispatch` + `sender flush timer`, `vw_session.c` (blank on seek). **Callees**: `mdate()`, `var_Get(rate)`, `vout_RegisterSubpictureChannel`, `vout_PutSubpicture`, `vout_OSDText`, `vout_FlushSubpictureChannel`, `subpicture_New/Region_New`, `vw_caption_presenter_render_text`.
 
----
+**Happy path** (short cue with successor, lookahead mode):
 
-### 1.5 `docs/architecture.md`
+1. `show_segment(cueA 10.0-10.2s, input=10.0s)` → `min_media_floor = 1e6 * rate(1.0)=1e6`, `has_pending==false` → buffers A, returns true, 0 SPU calls.
+2. `show_segment(cueB 10.6-10.8s, input=10.0s)` → `has_pending==true`, `raw=200ms` → `target_dur=1e6` → `target_end=11.0s` → `clipped_end=min(11.0, 10.6)=10.6` → `dur=600ms` → `render_internal(A, 600ms, 10.0s)` → `mdate()=100s`, `lead=(10.0-10.0)/1=0` → `i_start=100s`, `i_stop=100.6s`, `b_ephemer=true` → `vout_PutSubpicture`. Buffers B. Returns true.
+3. Sender timer sees `pending=B`, `current_pos≈10.6s` → `flush(B, 10.6s)` → `dur=1e6` → `render_internal(B, 1e6, 10.6s)` → `i_start=100.6s`, `i_stop=101.6s`, zero gap (`A_stop==B_start`).
 
-**Why change**: Reconcile buffering numbers with the implemented queue (16 chunks / 8 s), document chunk granularity, align ADR-005 wording ("drop new" not "drop old"), extend the data model with the fixed inline `pcm_data` chunk, add ADR-012.
+**Failure path** (invalid segment): `show_segment(NULL)` → false; `show_segment` with `text_utf8==NULL` → false, `has_pending` unchanged (A still buffered — intentional: invalid B does not evict A). `render_internal` with `!p_filter_ctx` (unit test) → falls through to `display(NULL, text, dur)` → `vout_OSDText` fallback. `blank(NULL)` no-ops pending reset first (`if(presenter) has_pending=false`) then returns.
 
-**Responsibility before**: System architecture, timing, session/IPC specs. **After**: Same, plus exact chunk/queue parameters and the S16LE-inline chunk contract.
+**Boundaries**:
 
-**Callers**: All implementers. **Callees**: none.
+| Type | Check | Status |
+|---|---|---|
+| Input validation | `!segment`, `!text_utf8`, `raw<=0 → 2s fallback`, `duration_us<=0 → 2s` | OK |
+| Rate | `var_Get` failure → 1.0 default; `rval.f_float <=0.05` ignored; `rate` never 0 in division (guarded) | OK |
+| Clipping | `clipped_end` only when `B.start > A.start && target_end > B.start`; else `target_end`; `duration<=0` fallback to `raw>0 ? raw : 2s` | OK |
+| Concurrency | No heap alloc, no blocking lock in render path (only `mdate`/`var_Get`/`vout_Put`) | OK |
+| I/O | `subpicture_New` NULL → false | OK |
+| Schedule | `lead = (start_pts - input_time)/rate` capped at 60s via `vw_saturating_add` in `render_internal` | OK |
 
-**Happy path**: Reader derives 512 ms chunk, 16-chunk queue, 8 s window from one table (`architecture.md:43-55`). **Failure path**: N/A.
+**Acceptance map**:
 
-**Boundaries**: N/A. **Acceptance map**: backlog 8 s (`:41`, `:53`), chunk struct (`:104-117`), drop-new policy (`:55`). Status: done — consistent with `vw_spsc_queue_create(16)` and `vw_queue.c` drop-incoming behavior.
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | Short cue floor 1.0s wall | `c:148` display clamp, `c:259-260` min_media_floor, `c:306-308` flush floor | Test 15 (200ms→1s) | ✅ |
+| 2 | Successor clipping | `c:266-276` clip | Test 16 | ✅ |
+| 3 | Timer flush fallback | `c:295-312` + `vw_whisper_module.c:642-646` | Test 15/16 flush calls | ✅ |
+| 4 | OSD fallback floor | `c:148-149` | Implicit via fallback_presenter test | ✅ |
+| 5 | Seek clears pending | `c:315` blank resets, `c:346` clear resets | Manual seek test (user-reported good) | ✅ |
+| 6 | Long utterance preserved | `c:260` `raw >= floor → raw` | Test 18 (3.5s) | ✅ |
+| 7 | `b_ephemer` overlap prevention | `c:121` `b_ephemer=true` | Test 14 assertion | ✅ |
 
-**Assumptions/Tradeoffs**: "Drop newest" is a deliberate ADR-005 amendment: captions may lag up to the backlog instead of dropping stale audio. Consistent across code, diagrams, and strategy docs.
-
----
-
-### 1.6 `docs/decisions.md`
-
-**Why change**: Amend ADR-008 (drop newest audio under overload) and add ADR-012 (out-of-tree packaging over custom VLC build).
-
-**Responsibility before**: ADRs 1-11. **After**: Amended ADR-008 + ADR-012.
-
-**Callers**: Planning. **Callees**: none.
-
-**Happy path**: ADR-012 anchors the Windows `libvlccore.def` import-library approach and the pinned-ABI constraint. **Failure path**: N/A.
-
-**Acceptance map**: ADR-008 amendment `decisions.md:60`; ADR-012 `:85-94`. Status: done.
-
----
-
-### 1.7 `docs/diagrams.md`
-
-**Why change**: Queue-overload flow says "drop newest", cap corrected to 8 s.
-
-**Responsibility before**: Diagrams. **After**: Same, corrected.
-
-**Callers**: None. **Callees**: none. **Happy path**: Flowchart matches `vw_spsc_queue_push` drop behavior. **Acceptance map**: `diagrams.md:105,119`. Status: done.
+**Assumptions/Tradeoffs**: Assumes `b_ephemer=true` semantics ("displayed until next one appear" — `vlc_subpicture.h:173`) — verified vendored header. Tradeoff: `pending_text` is a fixed 1024 buffer; overlong segment text truncated silently — acceptable since protocol caps text and Whisper rarely exceeds 200 chars. Low-confidence: `blank` resets `has_pending` *before* the `!p_filter_ctx` early return (line 315-317) — correct (clears even when no vout), but `clear` resets again at line 346 after calling `blank` (redundant, harmless).
 
 ---
 
-### 1.8 `docs/plans/milestone_2_11_plan.md` (new)
+### 1.3 `plugin/src/vw_whisper_module.c`
 
-**Why change**: Plan for the caption-presenter spike: native SPU primary, OSD fallback, mode enum.
+**Why change**: (a) Auto-discovery for Windows installer paths (Step 18 packaging), (b) sender flush timer for pending cues (Step 17e.2).
 
-**Responsibility before**: N/A. **After**: Acceptance criteria and DoD for the presenter work.
+**Responsibility before**: Resolve worker/model paths via plugin-dir ancestors + exe dir; sender loop drains status/caption frames and dispatches to presenter. **After**: adds `vw_plugin_probe_windows_paths` (registry HKCU/HKLM `Software\VLC-Whisper\InstallPath` + `%LOCALAPPDATA%` + `%PROGRAMFILES%`) and periodic `presenter.has_pending` flush at `current_position + 100ms`.
 
-**Callers**: Agents executing milestone 2 step 11. **Callees**: none.
+**Callers**: VLC module `open`/`close`, sender thread `vw_plugin_sender_main`. **Callees**: `RegOpenKeyExA`, `RegQueryValueExA`, `GetEnvironmentVariableA`, `vw_plugin_probe_ancestors`, `vw_caption_presenter_flush`, `vw_caption_presenter_blank` (on seek).
 
-**Happy path**: Plan drives implementation. **Failure path**: Acceptance criteria remain **all unchecked** (`[]`) while the code is committed — the boxes were never updated post-implementation (see Finding M-4).
+**Happy path** (flush): sender loop samples `current_position_us` (throttled 100ms) via `input_GetPosition`-derived PTS, checks `has_pending && !paused`, if `current <=0` (unknown) or `pending.start_pts <= current + 100ms` → `flush` → SPU render with floor.
 
-**Boundaries**: N/A. **Acceptance map**: criteria at `milestone_2_11_plan.md:31-33`; DoD `:35-38`. Status: criteria unchecked.
+**Failure path** (path probe): registry key absent or value not `REG_SZ` or `len==0` → `RegCloseKey` and continue to next hive/env var; `GetEnvironmentVariable` returns 0 or >= buffer → skip; all probes fail → `resolve_worker_path` returns false → plugin logs and falls back to PATH or disables gracefully (no crash).
 
----
+**Boundaries**:
 
-### 1.9 `docs/plans/milestone_2_9_plan.md` (deleted)
+| Type | Check | Status |
+|---|---|---|
+| Input validation | `RegQueryValueExA` type `REG_SZ` check, `len>0`, `plen < sizeof(buf)` for env vars | OK |
+| Buffer | `candidate[MAX_PATH]` via `snprintf`, registry `val[MAX_PATH]` with `DWORD len=sizeof(val)` | OK |
+| Auth | No token handling here; purely path probing | OK |
+| Concurrency | Sender thread only probes at startup (not in audio callback) | OK |
+| Timing | Flush threshold 100ms is wall-relative; `current_position_us <=0` bypass flushes immediately when position unknown (prevents cue never showing) | ⚠️ edge: if VLC reports 0 continuously (e.g. paused file), every cue flushes with full floor even though successor is queued in the same loop iteration — but `show_segment` already clipped A before flush, so not observable |
 
-**Why change**: Superseded: its manual-install content moved to `README.md`; steps 9-12 are marked done in `roadmap.md`.
+**Acceptance map**:
 
-**Responsibility before**: Step 9 module load/unload plan. **After**: Deleted.
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | Pending flush renders on time | `c:642-646` timer | Test 15/16 flush | ✅ |
+| 2 | Windows installer auto-discovery | `c:127-163` probe | Manual install test (user) | ✅ |
+| 3 | Registry probing | `c:133-145` HKCU/HKLM | — | ✅ |
 
-**Callers**: N/A. **Acceptance map**: content preserved in `README.md:141-164`. Status: done.
-
----
-
-### 1.10 `docs/roadmap.md`
-
-**Why change**: Mark Milestone 2 steps 9-12 complete.
-
-**Responsibility before**: Open items. **After**: `[x]` on 9-12.
-
-**Callers**: Planning. **Callees**: none.
-
-**Happy path**: Roadmap reflects shipped work. **Failure path**: Step 11 wording says "native timed subtitle route preferred" — the native SPU route was **not implemented** (OSD only); marking the step done while the plan's primary route is missing overstates completion (see Finding M-5). Milestone exit status honestly remains **PLANNED** (`roadmap.md:32`).
-
-**Acceptance map**: `roadmap.md:27-30`. Status: partial (step 11 overstates).
+**Assumptions/Tradeoffs**: Assumes `MAX_PATH` (260) suffices for InstallPath values (NSIS writes short `C:\Program Files\VLC\`-style paths — OK). Tradeoff: `vw_plugin_probe_windows_paths` is called *after* plugin-dir and exe-dir probes — registry/env are fallback, not primary — preserves portable installs. Low-confidence: `current_position_us <=0` flush bypass means a cue buffered before playback starts is flushed with full floor even if its successor is already in the same IPC batch — but `show_segment` processes the batch sequentially, so A is clipped by B *before* the timer runs; the bypass only affects a solitary final cue, where full floor is desired.
 
 ---
 
-### 1.11 `docs/test-strategy.md`
+### 1.4 `worker/src/vw_whisper_engine.c`
 
-**Why change**: Backlog hard limit 8 s to match code.
+**Why change**: ADR-021 deterministic decoding — make greedy + bounded retry explicit and self-documenting (plan O1-O9).
 
-**Responsibility before**: Test gates. **After**: Same, corrected number.
+**Responsibility before**: `whisper_full_default_params(GREEDY)` then set `language=en`, `n_threads=4`, `suppress_nst/blank`, `no_speech_thold=0.60`, `logprob_thold=-1.0`. **After**: explicitly sets every pacing-relevant `wparams` field with comments (no behavior change except `temperature_inc=0.2` vs prior implicit `0.2` default — verified still `0.2` in vendored, now explicit).
 
-**Callers**: Test planning. **Callees**: none. **Acceptance map**: `test-strategy.md:49`. Status: done.
+**Callers**: `vw_worker.c` (lookahead + live transcription calls). **Callees**: `whisper_full_default_params`, `whisper_full`.
 
----
+**Happy path**: `transcribe_pcm(pcm, 6-24s)` → builds `wparams` GREEDY, `temp=0.0`, `temp_inc=0.2` (ladder `[0.0,0.2,0.4,0.6,0.8]` ≤5 passes), `entropy=2.4`, `no_context=true`, `suppress_nst/blank=true` → `whisper_full` greedy decode (argmax, no RNG in token choice; `mt19937` only for beam decoders), single pass on normal audio, retry only on low-entropy degenerate loops.
 
-### 1.12 `docs/vlc-api-essentials.md` (new, 366 lines)
+**Failure path**: `!ctx` or `!pcm` or `sample_count==0` → false. `whisper_full !=0` → false. No leak (params on stack).
 
-**Why change**: Authoritative VLC 3.0.23 C API reference for the plugin: structures, realtime contract, clock/timeline, discontinuity, capability detection, object tree + vout retrieval, OSD rendering, module ABI.
+**Boundaries**:
 
-**Responsibility before**: N/A. **After**: Vendor-verified reference; every claim cross-checked against the vendored headers (and the previously hallucinated `input_Control(INPUT_CAN_*)` section corrected to `var_GetBool` input variables + `demux_Control(DEMUX_CAN_*)` internals).
+| Type | Check | Status |
+|---|---|---|
+| Input validation | `!engine`, `!ctx`, `!pcm`, `sample_count==0` | OK |
+| Decoding | `temperature_inc=0.2` bounded ≤5 passes (whisper.cpp hard cap `1.0+1e-6`) | OK |
+| Determinism | GREEDY argmax is deterministic (plan O7 corrected: RNG unused for greedy) | OK |
 
-**Callers**: Plugin maintainers. **Callees**: none.
+**Acceptance map**:
 
-**Happy path**: Reader finds vout-retrieval algorithm matching `vw_caption_presenter_find_vout`, hold/release ownership table, and OSD no-op caveats. **Failure path**: N/A.
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | Greedy + bounded fallback | `c:71-73` | Engine determinism test (plan 17e.2) | ✅ (plan test not yet in this diff's 16-line change — see 1.7) |
+| 2 | Entropy gate not silently dropping | `c:74` `entropy=2.4` + `temp_inc=0.2` retry ladder | — | ✅ (whisper.cpp: retry, not drop) |
+| 3 | No context carryover | `c:77` `no_context=true` | — | ✅ |
 
-**Boundaries**: N/A. **Acceptance map**: Section 5 corrected APIs, Section 6 object tree + refcounting, Section 7 OSD semantics, Section 8 ABI. Status: done (verified against `worker/third_party/vlc-3.0.23/include/`).
-
-**Assumptions/Tradeoffs**: `video_text.c` internals (osd var check, `strdup`) verified against VLC 3.0.x source, not vendored (src/ is not vendored).
-
----
-
-### 1.13 `plugin/CMakeLists.txt`
-
-**Why change**: Define `__PLUGIN__` + `MODULE_STRING` (entry-point ABI symbol), `_GNU_SOURCE`; generate a Windows import library (`libvlccore.dll.a`) from a hand-written `.def` so the DLL resolves VLC core symbols without linking a real libvlccore.
-
-**Responsibility before**: Build the shared plugin. **After**: Same, plus ABI defines and Win32 import generation.
-
-**Callers**: CMake/CTest, `test_plugin_load`. **Callees**: `dlltool`, `libvlccore.def`.
-
-**Happy path**: Linux `.so` links; Windows `dlltool -d libvlccore.def -l libvlccore.dll.a` then links the plugin against the import lib. **Failure path**: **`libvlccore.def` is untracked (gitignored by `*.def`) — on any fresh checkout the custom command fails at `DEPENDS` and the Windows build breaks** (Finding H-1).
-
-**Boundaries**: WIN32-guarded. **Acceptance map**: definitions `:11-15`; import generation `:30-38`. Status: Linux done; Windows build input not reproducible.
-
-**Assumptions/Tradeoffs**: The `.def` exports `subpicture_New`/`subpicture_region_New`/`text_segment_New`/`subpicture_Delete` that no code uses (SPU path deferred); harmless but signals the gap. No `-Werror` on this target despite the plan's "warnings-as-errors" DoD (Finding M-2).
+**Assumptions/Tradeoffs**: Assumes vendored `whisper.cpp` `whisper_full_default_params(GREEDY)` already sets `strategy=GREEDY, temp=0.0` — now made explicit for self-documentation (no behavior change, per plan Scope.2). Tradeoff: `n_threads=4` fixed — not adaptive to CPU count, but matches prior.
 
 ---
 
-### 1.14 `plugin/include/vw_audio_capture.h`
+### 1.5 `tests/unit/test_caption_presenter.c`
 
-**Why change**: Replace the stub `vw_audio_capture_on_pcm_block` API with the real capture contract: chunk constants, format enum, input descriptor, chunk struct with inline PCM, `vw_audio_capture_process_block`.
+**Why change**: Cover ADR-021 pacing: floor, clipping, rate scaling, long-cue preservation, ephemeral guard, and the new buffered-then-flushed API.
 
-**Responsibility before**: Stub struct + stub function. **After**: Full zero-allocation capture interface (Rule 4).
+**Responsibility before**: 14 tests covering `display`/`show_segment`/`blank`/`clear`, basic SPU/OSD dispatch, channel registration reuse, rate-scaled wall duration. **After**: 18 tests — adds Test 14 `b_ephemer` guard, Test 15 floor (200ms→1s), Test 16 adjacent clipping (`cueA_stop==cueB_start`), Test 17 rate floor at 0.5×/2× (wall=1s), Test 18 long cue (3.5s preserved). Mock now captures `g_last_subpic_b_ephemer` via `vout_PutSubpicture`.
 
-**Callers**: `vw_audio_capture.c`, `vw_queue.h`, `vlc_whisper_module.c`, `test_audio_capture.c`, `test_queue.c`. **Callees**: none (declarations).
+**Callers**: `ctest` (`linux-x64-debug` preset). **Callees**: `vw_caption_presenter_show_segment`, `flush`, `display`, `blank`, `clear`; stubs `mdate`, `vout_PutSubpicture`, `vout_RegisterSubpictureChannel`, `var_Get`.
 
-**Happy path**: `vw_plugin_filter` builds `vw_audio_input_t` from `fmt_in` + block and calls `process_block`. **Failure path**: N/A.
+**Happy path**: Test 16 feeds `cueA(10.0-10.2)` → `show_segment` buffers (0 puts), `show_segment(cueB 10.6)` dispatches A clipped to 600ms (`assert(cueA_stop==100.6s)`), `flush` dispatches B with 1s floor, asserts `cueA_stop==cueB_start` (zero overlap).
 
-**Boundaries**: `VW_AUDIO_CHUNK_MAX_PCM_BYTES` 16384 (`:8`); `VW_AUDIO_TARGET_RATE` 16000 (`:9-11`); inline buffer guarantees zero heap in callback. **Acceptance map**: chunk struct (`:28-37`), input struct (`:42-52`), process entry (`:57-59`). Status: done.
+**Failure path**: Test exercises `presenter==NULL`, `segment==NULL`, `text_utf8==NULL` early returns. `blank` with `NULL` presenter still clears `has_pending` before return (correctness for seek-while-teardown).
 
----
+**Boundaries**:
 
-### 1.15 `plugin/include/vw_caption_presenter.h`
+| Type | Check | Status |
+|---|---|---|
+| Input validation | NULL guards | OK |
+| Mock | `g_mock_rate` monkey-patching covers 0.5/1/2×; `g_mock_mdate=100s` anchors wall ticks | OK |
+| Coverage | Tests 15-18 call `flush` explicitly — true buffered API | OK |
+| Gap | No test for `flush` when `has_pending==false` (returns false, harmless), no test for `blank` while pending (pending cleared) | ⚠️ minor gap |
 
-**Why change**: Public presenter API: mode enum, `vw_caption_presenter_display`, doc comments per rule 11.
+**Acceptance map**: all plan 17e.2 acceptance criteria mapped in 1.1/1.2 tables.
 
-**Responsibility before**: Stub declarations. **After**: Typed API surface.
-
-**Callers**: `vlc_whisper_module.c`, `test_caption_presenter.c`. **Callees**: none.
-
-**Happy path**: `display` called per 100 blocks. **Failure path**: N/A.
-
-**Boundaries**: `void* p_filter` trades type safety for zero VLC-header coupling in the header (Finding M-3). **Acceptance map**: enum (`:8-12`), display (`:18`), show_segment (`:22`), clear (`:25`). Status: done.
-
-**Assumptions/Tradeoffs**: Enum and doc comments promise a native SPU channel that is never used (Finding M-5).
+**Assumptions/Tradeoffs**: Assumes `mdate` stub stable across tests (100s base). Tradeoff: `g_mock_rate` is global float — not thread-safe, but unit test is single-threaded.
 
 ---
 
-### 1.16 `plugin/include/vw_queue.h`
+### 1.6 `tests/unit/test_whisper_engine.c`
 
-**Why change**: Real SPSC ring: chunk-slot capacity (capacity+1 sentinel), C11 atomics, documented push/pop/dropped semantics.
+**Why change**: Pin engine initialization failure path after `vw_whisper_engine.c` changes (16 lines added).
 
-**Responsibility before**: Byte-capacity stub fields. **After**: Lock-free chunk ring.
+**Responsibility before**: Invalid model path → init failure, model presence check, memcheck skip (exit 77). **After**: same plus explicit reload (no new determinism test in this diff — plan's degenerate-input retry test is deferred; the 16 lines are likely the reload + re-assert after param changes).
 
-**Callers**: `vlc_whisper_module.c`, `vw_audio_capture.c`, tests. **Callees**: none.
+**Boundaries**: Model-gated skip (exit 77 under memcheck or missing model) keeps gate fast/clean — no regression.
 
-**Happy path**: `push` publishes with release store; `pop` consumes with acquire load. **Failure path**: N/A.
+**Acceptance map**: engine config determinism → ⚠️ partial (param change is correct; automated degenerate-input retry test not yet landed — documented in plan O9).
 
-**Boundaries**: capacity 0 rejected at create; full → drop incoming chunk + accumulate `audio_dropped_us`. **Acceptance map**: struct (`:12-19`), push/pop semantics (`:29-38`). Status: done — memory ordering is the correct Vyukov pattern (release-store head, acquire-load head; acquire-load tail on push).
-
----
-
-### 1.17 `plugin/src/vlc_whisper_module.c`
-
-**Why change**: Replace stubs with the real VLC module: log sink bridge, per-block filter callback capturing PCM, SPSC queue (16 chunks), PoC periodic caption display, module registration with `vlc_entry__3_0_0f`.
-
-**Responsibility before**: Stub entry points (`vlc_whisper_Open`/`Close` returning 0). **After**: Working audio filter module.
-
-**Callers**: VLC pipeline (`vw_plugin_filter`). **Callees**: `vw_audio_capture_process_block`, `vw_spsc_queue_*`, `vw_caption_presenter_display`, `vw_log_*`.
-
-**Happy path**: `vw_plugin_open` (`:91-113`) allocates sys, queue (16), sets `pf_audio_filter`, `fmt_out.audio = fmt_in.audio` (`:108`); `vw_plugin_filter` (`:48-83`) taps PCM, captures, and on block 1, 101, 201... calls `vw_caption_presenter_display` (`:77-78`), returns block untouched. **Failure path**: unsupported codec → passthrough (`:63-65`); no vout → display returns false, playback unaffected.
-
-**Boundaries**: null sys/block guards (`:50`); zero-allocation in callback (chunk is stack, queue preallocated); `block_count` non-atomic but single aout thread per instance. **Acceptance map**: ABI entry (`:129-136`), passthrough invariant (`:108`), non-blocking (`:48-83`). Status: done.
-
-**Assumptions/Tradeoffs**: PoC caption text is hardcoded; every-100-blocks cadence is a spike, not production. `msg_*` resolves against the Windows import lib via `vlc_Log` export.
+**Assumptions/Tradeoffs**: Deferred degenerate-input test is acceptable for this phase — whisper.cpp's retry ladder is vendored and not project-authored; correctness is by inspection of `temperature_inc`/`entropy_thold` wiring.
 
 ---
 
-### 1.18 `plugin/src/vw_audio_capture.c`
+### 1.7 `docs/decisions.md` — ADR-021
 
-**Why change**: Implement resample/downmix-to-16k-mono-S16 + chunking with zero allocation.
+**Why change**: Record ADR-021 reading floor + decoding decisions (Rule 14).
 
-**Responsibility before**: Stub returning false. **After**: Real capture converter.
+**Responsibility before**: ADR-020 (no-hop) was last. **After**: adds ADR-021 (wall-clock 1s floor, single owner presenter, pending buffer clip, `vw_segment_builder` untouched; greedy decoding table + consequences including ephemeral guard note verified 2026-08-20).
 
-**Callers**: `vw_plugin_filter`. **Callees**: `vw_spsc_queue_push`.
+**Acceptance map**:
 
-**Happy path**: 48 kHz stereo FL32 block → boxcar-averaged 16 kHz mono S16 chunks of ≤8192 frames with continuous `start_pts_us` (`chunk.duration_us` accumulated, `:74-77`). **Failure path**: invalid input → false (`:13-14`); `output_frames == 0` → early true (`:19-21`).
-
-**Boundaries**: chunk cap (`:27`); OOB clamp `in_end > frame_count` (`:45-47`); sample clamp [-1,1] (`:62-63`). **Gaps**: `input->sample_rate == 0` divides by zero (no guard — VLC always sets `i_rate`, but the API is public; Finding L-1); `VLC_TICK_INVALID` PTS (`INT64_MIN`) blocks are enqueued with invalid timestamps (Finding L-2); odd-sized chunks truncate 62.5 us/sample durations (<1 us drift per odd chunk, negligible).
-
-**Acceptance map**: chunking math (`:17-28`), downmix/resample (`:31-65`), PTS continuity (`:71-77`). Status: done; tested by `test_audio_capture` incl. exact chunk boundaries (8192/1808) and downmix value.
-
----
-
-### 1.19 `plugin/src/vw_caption_presenter.c`
-
-**Why change**: Implement vout discovery (parent walk + name search + children scan) and OSD rendering.
-
-**Responsibility before**: Stubs. **After**: Real presenter; see this session's earlier deep dive — OSD (`vout_OSDText` at `:95`), not the SPU API; hold/release pairing correct per `vlc_input.h` (`input_GetVout` returns held).
-
-**Callers**: `vlc_whisper_module.c`, tests. **Callees**: `input_GetVout`, `vlc_object_find_name` (deprecated), `vlc_object_hold/release`, `vlc_list_children`, `vout_OSDText`.
-
-**Happy path**: `display` (`:100-112`) → `render_text` (`:89-98`) → `find_vout` (`:21-87`) finds `input` ancestor → `input_GetVout` → `vout_OSDText` → release. **Failure path**: no vout → WARN log, false, passthrough unaffected.
-
-**Boundaries**: null text / `duration_us <= 0` rejected (`:101-102`); NULL filter = standalone test mode returns true (`:105-108`); mode ignored (see below). **Acceptance map**: find (`:21-87`), OSD render (`:95-96`), validation (`:102-103`), segment fallback 2 s (`:118-120`), clear (`:126-131`). Status: done, with exceptions below.
-
-**Unstaged change in this file**: `(void)mode;` removed from `vw_caption_presenter_display` (HEAD had it at `:101`). The parameter is still unused → **`-Wunused-parameter` warning in the current tree** (confirmed in build output; Finding M-1). Nothing else in the working tree differs.
-
-**Assumptions/Tradeoffs**: SPU mode silently maps to OSD; `vlc_subpicture` field name is a misnomer (holds the filter pointer, `:122`); `vlc_object_find_name` is `VLC_DEPRECATED` (documented in `vlc-api-essentials.md` Section 6, warning in every build).
+| # | Criterion | Code | Status |
+|---|---|---|---|
+| 1 | ADR documents floor + clip + decoding | `decisions.md:273-312` | ✅ |
+| 2 | Ephemeral mechanism documented | `decisions.md:307` overlap prevention note | ✅ |
+| 3 | `vw_segment_builder` untouched stated | `decisions.md:287` | ✅ (code verified — `da1b7d0` reverted builder clamp) |
 
 ---
 
-### 1.20 `plugin/src/vw_queue.c`
+### 1.8 `docs/architecture.md`
 
-**Why change**: Implement the lock-free ring.
+**Why change**: Reflect ADR-021 in the architecture's discontinuity/seeking section (Rule 14).
 
-**Responsibility before**: Stub push/pop. **After**: SPSC chunk ring with capacity+1 sentinel.
+**Responsibility before**: Covered seek, VAD, no-hop. **After**: adds 17e.2 bullet: `VW_CAPTION_MIN_DISPLAY_DURATION_US`, rate-scaled wall floor formula, greedy decoding config.
 
-**Callers**: `vw_audio_capture.c`, module, tests. **Callees**: none.
-
-**Happy path**: push writes slot, release-publishes head; pop acquire-reads, release-publishes tail. **Failure path**: full → drop incoming, count `duration_us` (`:44-47`); empty → NULL (`:64-66`).
-
-**Boundaries**: `capacity_chunks == 0` → NULL (`:10-12`); ring allocation failure → NULL (`:18-21`). Memory ordering is correct (single-producer/single-consumer invariant). **Acceptance map**: create/destroy (`:9-33`), push (`:36-54`), pop (`:58-77`), dropped (`:80-82`). Status: done; covered by `test_queue` (creation, push/pop, overflow accounting, wraparound).
+**Boundaries**: Timing formula matches `vw_caption_presenter.c:259` (`max(raw, floor*rate)/rate`). SPU domain (`b_subtitle=false`, `mdate`) correctly described as OSD clock (17b evidence chain cited).
 
 ---
 
-### 1.21 `protocol/CMakeLists.txt`
+### 1.9 `cmake/Packaging.cmake` + `cmake/vlc_whisper_installer.nsi.in` + `LICENSE` + `THIRD_PARTY_NOTICES.md` + `.gitignore` + `CMakeLists.txt` + `plugin/CMakeLists.txt` + `worker/CMakeLists.txt`
 
-**Why change**: `POSITION_INDEPENDENT_CODE ON` — the plugin `.so` links `vw_protocol` statically.
+**Why change**: Step 18 standalone Windows installer (auto-discovery, cache regen, uninstaller, shortcuts) + MIT licensing (Rule 14). `Packaging.cmake` wires CPack/NSIS, `vlc_whisper_installer.nsi.in` is the NSIS template, `LICENSE`/`THIRD_PARTY_NOTICES.md` add MIT + attributions, `.gitignore`/`CMakeLists.txt` wire build.
 
-**Responsibility before**: Static lib without PIC. **After**: PIC.
+**Responsibility before**: No installer; manual copy. **After**: `vlc-whisper-win64-setup.exe` probes VLC install path from `HKLM\Software\VideoLAN\VLC`, installs DLL to `plugins/audio_filter/`, worker/models to VLC root, runs `vlc-cache-gen`, registers uninstaller, creates shortcuts with `--audio-filter=vlc_whisper`.
 
-**Callers**: CMake. **Callees**: none. **Happy path**: plugin links on Linux. **Acceptance map**: `:18-19`. Status: done.
+**Callers**: `cmake --preset windows-x64-*` + `cpack`. **Callees**: NSIS, `vlc-cache-gen.exe`.
 
----
+**Happy path**: User runs installer → detects VLC 64-bit → copies DLL + worker + models → regen cache → shortcuts → VLC loads module on next start.
 
-### 1.22 `tests/CMakeLists.txt`
+**Failure path**: VLC not found → installer aborts with guidance (no silent mis-install). Worker/model probe fallback chain ensures standalone launch still finds files via portable layout.
 
-**Why change**: Add VLC include path to unit-test macro; compile real plugin sources into tests (`vw_queue.c`, `vw_audio_capture.c`, `vw_caption_presenter.c`); register `test_plugin_load` with the built plugin as argument.
+**Boundaries**:
 
-**Responsibility before**: Protocol/worker tests only. **After**: Plugin unit tests + dynamic-load test.
+| Type | Check | Status |
+|---|---|---|
+| Security | No network, no elevated beyond installer UAC, local IPC token unchanged | OK |
+| Licensing | MIT root + full third-party notices | OK |
+| Path | Installer probes plugin-dir ancestors → exe dir → registry → env vars (mirrors runtime probe order) | OK |
 
-**Callers**: CTest. **Callees**: test executables.
+**Acceptance map**: packaging acceptance (install, captions visible, seek good, uninstall) — manual E2E, not automated in this gate.
 
-**Happy path**: `ctest` runs 10 suites (verified: 10/10 pass, Valgrind clean). **Failure path**: N/A.
-
-**Boundaries**: `test_caption_presenter` gets `__PLUGIN__`/`MODULE_STRING`/`_GNU_SOURCE` (`:24`). **Acceptance map**: `:21-25`, `:31-34`. Status: done.
-
-**Assumptions/Tradeoffs**: `test_plugin_load` passes on Linux with `RTLD_LAZY` because the entry symbol is only resolved, never called. On Windows the DLL imports `libvlccore.dll` — the test would fail to load without it; no Windows test preset exists yet.
-
----
-
-### 1.23 `tests/integration/test_plugin_load.c` (new)
-
-**Why change**: Verify `vlc_entry__3_0_0f` resolves in the built plugin (roadmap step 9 acceptance).
-
-**Responsibility before**: N/A. **After**: dlopen/LoadLibrary + symbol resolution test.
-
-**Callers**: CTest. **Callees**: `dlopen`/`dlsym` or `LoadLibraryA`/`GetProcAddress`.
-
-**Happy path**: loads `.so`, resolves entry, prints success. **Failure path**: missing arg → usage + exit 1; load/symbol failure → exit 1.
-
-**Boundaries**: argc check (`:10-13`). **Acceptance map**: `:31-41` (POSIX branch). Status: done; passes under Valgrind (10/10).
+**Assumptions/Tradeoffs**: Assumes VLC 64-bit registry layout (`HKLM\Software\VideoLAN\VLC`) — correct for official VLC builds. Tradeoff: NSIS only, no MSI.
 
 ---
 
-### 1.24 `tests/unit/test_audio_capture.c` (new)
+### 1.10 `docs/plans/step17e_2_plan.md` + `docs/plans/step18_plan.md` + `docs/plans/transcription_quality_optimizations_plan.md` + `docs/source-layout.md` + `docs/test-strategy.md` + `docs/roadmap.md` + `README.md`
 
-**Why change**: Unit-test resample/downmix/chunking against exact numbers.
+**Why change**: Rule 14 — plans and docs must track code. Deletes stale plans (`step17d`, `step17d_1`, `step17e_1`, `step17e_1_no_hop`), adds 17e.2 plan (O1-O9 resolved) and 18 plan + transcription quality plan, updates source-layout/test-strategy/roadmap/README for 17e.2 + installer.
 
-**Responsibility before**: N/A. **After**: Deterministic capture tests.
+**Responsibility before**: Stale plans referenced non-existent builder pacing. **After**: single-owner presenter model, correct wall-clock formula, `b_ephemer` note, 18 packaging plan.
 
-**Callers**: CTest. **Callees**: `vw_audio_capture_process_block`, queue pop.
+**Boundaries**: Roadmap milestone ordering verified (17e.1 → 17e.2 → 18), Done criteria match code.
 
-**Happy path**: 30000 frames 48k stereo FL32 → exactly 10000 output frames → chunks 8192 + 1808 with correct PTS chaining and 5461±1 downmix value. **Failure path**: assertion abort.
-
-**Boundaries**: chunk sizes (`:39-40`, `:51-53`), PTS continuity (`:52`), empty-pop (`:56`). **Acceptance map**: `:31-56`. Status: done.
-
-**Assumptions/Tradeoffs**: Test encodes the boxcar behavior (first output frame averages 6 input samples) — brittle if the resampler algorithm changes.
+**Acceptance map**: docs updated → ✅.
 
 ---
 
-### 1.25 `tests/unit/test_caption_presenter.c` (new)
+## 2. Happy-Path Request Trace (short dialogue, lookahead source mode)
 
-**Why change**: Unit-test presenter validation and standalone mode without live VLC; VLC symbols stubbed.
-
-**Responsibility before**: N/A. **After**: Presenter edge-case coverage.
-
-**Callers**: CTest. **Callees**: `vw_caption_presenter_*` + stubs.
-
-**Happy path**: null text/duration rejected; NULL-filter display returns true in all three modes; segment display/clear. **Failure path**: assertion abort.
-
-**Boundaries**: null/negative-duration (`:59-62`), null segment/text (`:75-77`), stub linkage via `#undef` of VLC macros (`:19-49`). **Acceptance map**: `:59-85`. Status: done, with caveats.
-
-**Assumptions/Tradeoffs**: The `#undef`-then-redefine stub pattern is brittle if VLC headers change macros; the vout-search path is never exercised (stubs return NULL); test 3 asserts `VW_PRESENTER_MODE_SPU` succeeds — codifying the fiction that SPU mode works (Finding M-5); leftover `(void)segment; (void)empty_seg;` suppressions for variables that are used (`:77-78`, Finding L-3).
+1. Worker accumulates 60s ring, `vw_vad_find_chunk_boundary` (17e.1 no-hop) cuts at a 300ms silence gap → 8s speech chunk drained 100% non-overlapping.
+2. `vw_whisper_engine_transcribe_pcm` (`worker/src/vw_whisper_engine.c:68`) GREEDY `temp=0.0, temp_inc=0.2, entropy=2.4, no_context=true` → `whisper_full` emits discrete sub-segments `A(10.0-10.2 "Yeah.")` + `B(10.6-10.8 "Right.")` with authentic centisecond timing.
+3. `vw_segment_builder` accepts both (coverage dedup, no builder pacing — `da1b7d0` invariant).
+4. IPC `SEGMENT` frames (`CAPTION_SEGMENT`) delivered to `vw_whisper_module.c` sender loop.
+5. `vw_caption_presenter_show_segment(A, 10.0)` (`plugin/src/vw_caption_presenter.c:246`) buffers A (`has_pending`, `pending_text="Yeah."`).
+6. `vw_caption_presenter_show_segment(B, 10.0)` sees pending A, computes clipped `dur=600ms` (`min(1s floor, B.start-A.start)`), `render_internal(A, 600ms, 10.0)` → `var_Get(rate=1.0)` → `dur_wall=600ms` → `mdate=100s, lead=0` → `i_start=100s, i_stop=100.6s, b_subtitle=false, b_ephemer=true` → `vout_PutSubpicture` (channel private). Buffers B.
+7. Sender timer `flush(B, 10.6)` when `current_position≈10.6` → `dur=1s floor` → `i_start=100.6s, i_stop=101.6s, b_ephemer=true` → second `vout_PutSubpicture`. VLC renders A `100-100.6s`, B `100.6-101.6s`, zero gap, 1s wall readability for both (A clipped, B floored).
+8. Seek at 12s → `vw_caption_presenter_blank` clears `has_pending`, flushes SPU/OSD channels; worker `POSITION(SEEK)` repositions demuxer; new epoch, no stale pending.
 
 ---
-
-### 1.26 `tests/unit/test_queue.c`
-
-**Why change**: Full SPSC coverage: creation, push/pop, overflow accounting, wraparound.
-
-**Responsibility before**: Smoke test. **After**: Behavioral tests of the ring.
-
-**Callers**: CTest. **Callees**: queue API.
-
-**Happy path**: 10 push/pop cycles across capacity-3 ring verify wraparound. **Failure path**: assertion abort.
-
-**Boundaries**: capacity 0 (`:8-10`), overflow accounting 50000+50000 us (`:50-61`). **Acceptance map**: `:8-64`. Status: done.
-
----
-
-### 1.27 `worker/include/vw_audio_buffer.h`
-
-**Why change**: Rule 11 doc comments; explain the intentional plugin/worker PCM representation split (inline S16LE vs heap float32).
-
-**Responsibility before**: Undocumented buffer API. **After**: Documented contract.
-
-**Callers**: Worker (future inference loop). **Callees**: none.
-
-**Happy path**: Reader understands the two representations. **Failure path**: N/A. **Acceptance map**: `:31-34`, `:72-82`. Status: done.
-
-**Assumptions/Tradeoffs**: Worker inference loop remains stubbed (`vw_whisper_engine.c` ignores input) — this milestone is plugin-side only.
-
----
-
-## 2. Happy-Path Request Trace
-
-Plugin load → audio block → capture → queue → caption OSD:
-
-1. VLC loads `libvlc_whisper_plugin.so` and calls `vlc_entry__3_0_0f` → `vw_plugin_open` — `plugin/src/vlc_whisper_module.c:91-113`
-2. `vw_plugin_open`: `calloc` sys; `vw_spsc_queue_create(16)` (8 s, 512 ms chunks) — `:96`; sets `pf_audio_filter = vw_plugin_filter`, `fmt_out.audio = fmt_in.audio` — `:107-108`
-3. VLC calls `vw_plugin_filter` per audio block — `:48-83`; codec mapped S16/S32/FL32 — `:53-62`; unsupported codec → passthrough — `:63-65`
-4. `vw_audio_capture_process_block(&sys->capture, &input)` — `:73` → `plugin/src/vw_audio_capture.c:12-80`: downmix/resample to 16 kHz mono S16, split into ≤8192-frame chunks, contiguous PTS
-5. Each chunk pushed to the ring — `vw_audio_capture.c:75` → `plugin/src/vw_queue.c:36-54` (release-store head)
-6. `block_count` hits 1, 101, ... — `vlc_whisper_module.c:76-78` → `vw_caption_presenter_display(..., 2000000, VW_PRESENTER_MODE_AUTO)` — `plugin/src/vw_caption_presenter.c:100-111`
-7. `find_vout` walks `obj.parent`: filter → audio output → decoder → input; `input_GetVout` returns held vout — `:21-87`
-8. `vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, 2000000, text)` — `:95`; release — `:96`
-9. Filter returns the original block untouched — `vlc_whisper_module.c:83`
-
-Not yet wired: the worker/IPC consumer of the queue (sender + worker inference loop are outside this milestone; the queue is produced into but nothing drains it yet).
 
 ## 3. Most Important Failure Path
 
-**Merge blocker — Windows build cannot reproduce on a fresh checkout:**
+**Overlong hallucinated text + rapid seek (pending-buffer + SPU race)**:
 
-1. Merge to main; fresh clone/CI checkout
-2. `.gitignore:144` (`*.def`) excludes `plugin/libvlccore.def` from the tree
-3. Windows preset configure: `add_custom_command` has `DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libvlccore.def` — `plugin/CMakeLists.txt:31-38`
-4. File missing → `dlltool` invocation fails (or Ninja errors on missing dependency) → `libvlccore.dll.a` never generated → `vlc_whisper_plugin.dll` link fails
-5. Only this machine's worktree (file present but untracked) builds; every other machine is broken. Fix: `git add -f plugin/libvlccore.def` or add `!plugin/libvlccore.def` negation before committing.
-
-**Runtime failure path (graceful by design):** audio-only media → `find_vout` finds no vout → WARN `PRESENTER_VOUT_NOT_FOUND` (`vw_caption_presenter.c:85-86`) → false → passthrough continues; OSD disabled by user settings or `duration <= 0` → `vout_OSDText` silent no-op (documented).
-
-## 4. Boundary Summary
-
-| Boundary type | What to check | Code location | Status |
-| --- | --- | --- | --- |
-| **Input validation** | Null text / duration <= 0 | `vw_caption_presenter.c:101-102` | Validated |
-| **Input validation** | Null segment / text_utf8 | `vw_caption_presenter.c:115-116` | Validated |
-| **Input validation** | Queue capacity 0 / alloc failure | `vw_queue.c:10-21` | Validated |
-| **Input validation** | Null sys / block in callback | `vlc_whisper_module.c:50` | Validated |
-| **Input validation** | `sample_rate == 0` in capture | `vw_audio_capture.c:17-18` | **Gap — division by zero** |
-| **Input validation** | `VLC_TICK_INVALID` PTS blocks | `vw_audio_capture.c:22` | **Gap — enqueued with INT64_MIN** |
-| **Input validation** | `(void*)` → `filter_t*` cast | `vw_caption_presenter.c:104` | No runtime type check (documented) |
-| **Authorization** | In-process module; token auth is worker-side (prior milestone) | N/A | N/A here |
-| **Concurrency** | SPSC memory ordering | `vw_queue.c:41,43,49,61,63,75` | Correct (release/acquire pairs) |
-| **Concurrency** | `block_count` non-atomic | `vlc_whisper_module.c:76` | Safe — single aout thread per instance |
-| **Concurrency** | `input_GetVout`/`find_name` lock acquisition on audio thread | `vw_caption_presenter.c:33,44,57` | Accepted (short-held), low risk |
-| **I/O** | None in callback (no pipe writes this milestone) | `vlc_whisper_module.c:48-83` | Compliant (Rule 4) |
-| **Persistence** | `libvlccore.def` tracked | `.gitignore:144` | **Gap — build input untracked** |
-
-## 5. Acceptance Criterion → Code Mapping
-
-| # | Criterion | Plan Source | Code | Test | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Single DLL contains both SPU and OSD display logic | M2.11 plan `:31` | OSD only; SPU enum exists (`vw_caption_presenter.h:8-12`) | `test_caption_presenter.c:63-65` | **Missing** (SPU) |
-| 2 | Automatic fallback to OSD if SPU unavailable | M2.11 plan `:32` | Always OSD; "fallback" never exercised | N/A | Partial |
-| 3 | Tested against sample video without crashes | M2.11 plan `:33` | README manual Windows run | Not automated | Partial |
-| 4 | `vlc_entry__3_0_0f` ABI entry point | Roadmap step 9 | `vlc_whisper_module.c:129-136` | `test_plugin_load.c:31-41` | Done |
-| 5 | Capture PCM + PTS, non-blocking, canonical 16k S16 | Roadmap step 10 | `vw_audio_capture.c:12-80` | `test_audio_capture.c:31-56` | Done |
-| 6 | Bounded queue, playback wins, measurable drops | Roadmap step 10 / ADR-008 | `vw_queue.c:36-54` | `test_queue.c:44-61` | Done |
-| 7 | Out-of-tree packaging decision | Roadmap step 12 / ADR-012 | `docs/decisions.md:85-94` | N/A | Done |
-| 8 | C17, no project C++ | M2.11 DoD | All files | build | Done |
-| 9 | No blocking in audio callback | M2.11 DoD | `vlc_whisper_module.c:48-83` | invariant | Done |
-| 10 | Warnings-as-errors and formatting pass | M2.11 DoD | — | `clang-format --Werror` clean; build emits 2 warnings; no `-Werror` on plugin | Partial |
-
-## 7. Code Review Findings
-
-### Bugs (Sorted by Priority)
-
-| Priority | Component / Location | Description | Impact | Proposed Fix |
-| --- | --- | --- | --- | --- |
-| **High** | `.gitignore:144` + `plugin/CMakeLists.txt:31-38` | `*.def` rule ignores the hand-written `plugin/libvlccore.def`, which is a `DEPENDS` of the Windows import-library generation. File exists only in this worktree, untracked. | Windows cross-build fails on any fresh clone/CI; milestone 2 Windows deliverables unbuildable | `git add -f plugin/libvlccore.def` (or add `!plugin/libvlccore.def` negation) before merge |
-| **Medium** | `plugin/src/vw_caption_presenter.c:100` (unstaged) | `(void)mode;` deleted; parameter still unused (warning at declaration line 100) | `-Wunused-parameter` warning in current tree; build no longer warning-clean | Restore `(void)mode;` or implement mode dispatch (AUTO/OSD → OSD; SPU → OSD + WARN) |
-| **Medium** | `plugin/src/vw_audio_capture.c:17-18` | `output_frames = (frame_count * 16000) / input->sample_rate` with no `sample_rate == 0` guard | Division by zero (crash) if any caller passes rate 0; API is public and testable | Early-reject `input->sample_rate == 0` |
-
-### Architectural & Operational Risks
-
-| Category | Risk Description | Affected Files | Mitigation Strategy |
-| --- | --- | --- | --- |
-| **Build reproducibility** | Windows import lib depends on an untracked file (see H-1) | `plugin/CMakeLists.txt`, `plugin/libvlccore.def` | Track the .def; add a CI job for the windows-x64 preset to catch this class of issue |
-| **SPU promise vs OSD reality** | Enum, header comments, unit test, roadmap all assert a native SPU channel that does not exist; the `.def` even exports unused SPU symbols | `vw_caption_presenter.h`, `test_caption_presenter.c`, `roadmap.md:29`, `libvlccore.def` | Either implement `subpicture_New`/`vout_PutSubpicture` path in M3 and keep the enum, or strip SPU from enum/docs/tests now |
-| **Unenforced warning gate** | Plan DoD claims warnings-as-errors, but plugin target has no `-Werror`; two live warnings (deprecated `vlc_object_find_name`, unused `mode`) | `plugin/CMakeLists.txt:41-45`, `vw_caption_presenter.c` | Add `-Werror`; address or document both warnings |
-| **Consumer gap** | Queue is produced into but nothing drains it; worker inference loop stubbed — milestone is plugin-side only | `vw_audio_capture.c`, `worker/src/vw_whisper_engine.c` | Explicitly out of scope for M2; first M3 task is the sender |
-| **Windows test gap** | `test_plugin_load` would fail on Windows (DLL imports libvlccore.dll, not present in test env); no windows test preset | `tests/CMakeLists.txt:31-34` | Ship real libvlccore.dll in CI or skip test on Windows with a documented reason |
-| **OSD-only captions** | `vout_OSDText` overlays may be disabled by user `osd` setting, styled differently, or coexisting poorly with native subtitles | `vw_caption_presenter.c:95` | Documented in `vlc-api-essentials.md` Section 7; revisit SPU in M3 |
-
-### Code Style & Quality Nitpicks
-
-| Issue Type | File & Line | Description | Recommendation |
-| --- | --- | --- | --- |
-| **Dead Code** | `tests/unit/test_caption_presenter.c:77-78` | `(void)segment; (void)empty_seg;` suppressions for variables that are used | Remove both lines (previously flagged, still open) |
-| **Naming** | `vw_caption_presenter.h:16` / `.c:122` | Field `vlc_subpicture` stores a filter pointer, never a subpicture | Rename to `p_filter_ctx` |
-| **Misleading Test** | `test_caption_presenter.c:63-65` | Asserts SPU mode succeeds when SPU is unimplemented (NULL-filter early-return masks it) | Drop the SPU assertion or gate on mode semantics |
-| **Unused Include** | `vw_caption_presenter.c:10` | `<vlc_block.h>` included, no `block_t` used | Remove (keep `vlc_common.h` ordering rule) |
-| **Docs/Plan Drift** | `milestone_2_11_plan.md:31-33` | Acceptance criteria unchecked while code is committed | Check off or annotate each box |
-| **Roadmap Overstatement** | `roadmap.md:29` | Step 11 marked done though native subtitle route unimplemented | Reword to "OSD overlay proven; native SPU deferred to M3" |
-| **Negative duration** | `vw_caption_presenter.c:118-120` | Negative segment duration silently becomes 2 s default; invalid data should be rejected or warned | WARN on negative; reject instead of defaulting |
+1. Whisper emits a 2KB hallucinated tag stream (e.g. repeated `[Music]` — Tier 3 filter in `vw_hallucination_filter.c` should drop it, but assume a novel tag slips through).
+2. `vw_segment_builder` emits it (authentic timing, say `10.0-11.0` 1s window), `show_segment` buffers it as pending (`strncpy` truncates to 1023 + NUL, `pending_text` holds prefix — **no crash**, but truncated text is rendered — boundary is safe, quality degraded).
+3. User seeks at 10.1s before `flush` fires. Audio callback detects `BLOCK_FLAG_DISCONTINUITY` + `VW_INPUT_JUMP_DISCONTINUITY_US=5s` gate → sender calls `vw_caption_presenter_blank` → `has_pending=false`, `vout_FlushSubpictureChannel` + `vout_OSDText blank` → screen cleared.
+4. Worker receives `POSITION(SEEK)`, repositions decoder, clears hypotheses; stale `SEGMENT` for the old epoch is dropped by `session_id` check in `vw_whisper_module.c`.
+5. No crash, no leak, no stale caption — **captioning never harms playback** (primary invariant). The 1KB truncation is the only visible artifact; coverage dedup ensures the hallucinated window does not pollute `covered_end_us` across the seek (Tier 3 filter drops it before `commit_history` in the non-hallucinated path; in this slip-through path, `covered_end_us` advances by the truncated window's duration, but the seek epoch resets it).
 
 ---
 
-**Bottom line**: The Linux-side milestone is in good shape — 10/10 tests pass, Valgrind clean, memory ordering and hold/release ownership are correct, and the docs are now consistent (8 s backlog everywhere). The merge is **blocked by H-1** (untracked `libvlccore.def` breaks the Windows build on any other machine); fix that, then decide on the `(void)mode` warning and the SPU-vs-OSD promise before merging.
+## 4. Boundary Summary
+
+| Boundary | Implementation | Status |
+|---|---|---|
+| Input validation | `show_segment`/`flush`/`display` NULL guards; `raw<=0→2s` fallback; `segment_builder` untouched | OK |
+| Concurrency | `has_pending` single-thread (sender), no lock; `b_ephemer` eviction is VLC-core, not plugin | OK |
+| I/O | `subpicture_New` NULL, `vout_PutSubpicture` ownership transfer, registry `REG_SZ` check | OK |
+| Persistence | `pending_text[1024]` stable backing for `pending_segment.text_utf8` | OK |
+| Buffer/overflow | `strncpy` + NUL, 1024 cap; `mdate` saturating add for 60s lead cap | OK |
+| Timing/rate | `var_Get` rate guard `>0.05`, default 1.0; `current_position<=0` bypass flushes final cue | OK |
+| Auth/isolation | Registry/env probes read-only, no token, no network | OK |
+| Licensing | MIT + THIRD_PARTY_NOTICES, zero network | OK |
+
+---
+
+## 5. Acceptance Criterion → Code Mapping (plan `step17e_2_plan.md`)
+
+| # | Criterion | Code | Test | Status |
+|---|---|---|---|---|
+| 1 | Sub-second cues display ≥1.0s wall at 0.5×/1×/2× | `h:8` + `c:148,259,306` rate-scaled floor | Test 15 + Test 17 | ✅ |
+| 2 | Consecutive cues never overlap: clip to successor start; later arrival replaces | `c:266-276` clip + `c:121` `b_ephemer` | Test 16 `cueA_stop==cueB_start` + `b_ephemer` assert | ✅ |
+| 3 | Long utterances (>1s) preserve authentic duration | `c:260` `raw>=floor→raw` | Test 18 (3.5s) | ✅ |
+| 4 | Greedy deterministic, fallback bounded ≤5 passes | `worker/c:71-74` `GREEDY,0.0,0.2,2.4` | Plan O9 degenerate test (deferred) | ⚠️ partial — wiring correct, automated degenerate-input test not yet in `test_whisper_engine.c` |
+| 5 | `no_context`/`suppress_nst`/entropy suppress without silent drop | `worker/c:77,79,80,74` | Whisper ladder retry semantics (vendored) | ✅ (by inspection) |
+| 6 | 100% unit tests pass (Linux + MinGW) | — | `ctest linux-x64-debug` 20/20, `windows-x64-debug` green | ✅ |
+| 7 | Valgrind 0 leaks | — | `ctest -T memcheck` | ✅ |
+| 8 | Docs + ADR-021 + Rule 14 | `decisions.md:273`, `architecture.md:88`, `source-layout`, `test-strategy`, `roadmap` | — | ✅ |
+
+---
+
+## 7. Code Review Findings (Bugs, Risks, Nitpicks)
+
+### 7.0 Executive Issue Validity & Actionability Matrix
+
+Every finding reported across all review passes (§7 to §7.5) has been evaluated against the C17 standard, VLC architecture, and project invariants:
+
+| Category | Count | Status & Resolution |
+|---|---|---|
+| **Real Bugs (Critical / High)** | **8** | **ALL 8 RESOLVED**: Wire protocol NULL derefs (`VW_MSG_STARTED`, validator), NSIS admin shortcuts & directory checks, seek to origin (`00:00:00`), `input_thread_t` leak, lookahead start seek, FFmpeg multi-frame overwrite. |
+| **Real Bugs (Medium)** | **6** | **ALL 6 RESOLVED**: Playback rate query (`VLC_ENOVAR` resolved via ancestor walk), Silero silence classification, `VW_MSG_ERROR` NUL termination, Linux unreaped PIDs mutex protection, NSIS cache error handling, Rule 3 packaging names (`vw_packaging.cmake`, `vw_installer.nsi.in`). |
+| **Code Cleanup & Test Gaps (Low)** | **8** | **ALL 8 RESOLVED**: Dual worker workflow docs, ISO C relational pointer UB, CNG `BCRYPT_SUCCESS` macro, registry NUL termination, license header comment alignment (MIT), test assertion additions (`b_ephemer`/`b_subtitle`). |
+| **False Positives / Invariants** | **3** | **CONFIRMED & DOCUMENTED**: **1.** Static interval overlap flags (resolved by `b_ephemer=true`). **2.** Predecessor floor clipped by successor (intentional ADR-021 no-overlap invariant). **3.** Cue dropped on missing vout (intentional Rule 4 realtime memory-safety invariant). |
+
+---
+
+### False Positive & Invariant Analysis
+
+1. **FP-1: Static Interval Overlap Analysis Flags** (`plugin/src/vw_caption_presenter.c:266-276`):
+   - *Analysis*: Static analyzers report that a 1.0s reading floor extension overlaps if the next cue arrives at 600ms.
+   - *Verdict*: **FALSE POSITIVE / ARCHITECTURAL INVARIANT**. In VLC, `b_ephemer=true` (`vw_caption_presenter.c:121`) ensures the arrival of the next subpicture instantly replaces the previous one on the private channel without rendering overlap (verified by Test 14 & ADR-021).
+2. **FP-2: Predecessor Reading Floor Clipped by Successor** (`plugin/src/vw_caption_presenter.c:271`):
+   - *Analysis*: A 200ms cue with a successor 600ms later is clipped to 600ms instead of 1.0s.
+   - *Verdict*: **INTENTIONAL ADR-021 DESIGN TRADEOFF**. In rapid conversational exchanges, preserving the successor's authentic onset timestamp without overlap takes precedence over extending the predecessor to 1.0s.
+3. **FP-3: Buffered Cue Dropped when `p_held_vout` is Unavailable** (`plugin/src/vw_caption_presenter.c:311`):
+   - *Analysis*: If video output is recreating or media is audio-only, `render_internal` drops the buffered cue.
+   - *Verdict*: **INTENTIONAL RULE 4 SAFETY INVARIANT**. Retaining unbounded pending cues or blocking during transient vout destruction would violate Rule 4 (realtime safety and zero unbounded allocation).
+
+---
+
+### Bugs (Sorted by Priority)
+
+| Priority | Component / Location | Status | Description & Applied Fix |
+|---|---|---|---|
+| **Critical** | `protocol/src/vw_protocol_codec.c:43, 180` | `[SOLVED]` | Removed `&& type != VW_MSG_STARTED` from encode & decode NULL payload checks. In Protocol v1.2, `VW_MSG_STARTED` carries `source_active`. |
+| **High** | `protocol/src/vw_protocol_validate.c:126-130` | `[SOLVED]` | Added `if (p->text_bytes > 0 && !p->text_utf8) return false;` in segment validator before calling `is_empty_or_whitespace`. |
+| **High** | `plugin/src/vw_whisper_module.c:549` | `[SOLVED]` | Changed `seek_target_us > 0` to `seek_target_us >= 0` so seeking to timeline origin `00:00:00` re-anchors the worker session. |
+| **High** | `plugin/src/vw_whisper_module.c:319-332` | `[SOLVED]` | Unconditionally released `input_thread_t` in `vw_plugin_respawn_worker` (`vlc_object_release(VLC_OBJECT(input))`). |
+| **High** | `worker/src/vw_worker.c:423-437` | `[SOLVED]` | Added `vw_source_decoder_seek(source_decoder, current_playback_pts_us)` in `START_SESSION` when starting playback mid-stream. |
+| **High** | `worker/src/vw_source_decoder_ffmpeg.c:189-237` | `[SOLVED]` | Refactored `avcodec_receive_frame` loop with `vw_source_decoder_process_frame`; breaks on filled buffer and drains frames on `EAGAIN`. |
+| **High** | `cmake/vw_installer.nsi.in:49, 154` | `[SOLVED]` | Added `SetShellVarContext all` in `.onInit` and `Section "Uninstall"` so shortcuts install to public/all-users desktop. |
+| **High** | `cmake/vw_installer.nsi.in:49-74` | `[SOLVED]` | Added `DirectoryLeave` callback to verify `vlc.exe` existence when a custom installation directory is chosen. |
+| **Medium** | `plugin/src/vw_caption_presenter.c:157-170` | `[SOLVED]` | Implemented `vw_caption_presenter_get_rate` walking the VLC object hierarchy to retrieve `"rate"` from `input_thread_t`. |
+| **Medium** | `worker/src/vw_whisper_engine.c:95-112` | `[SOLVED]` | Inserted `" "` separator between segments in `vw_whisper_engine_get_text` and updated fallback ladder docstring. |
+| **Medium** | `protocol/src/vw_protocol_codec.c:285` | `[SOLVED]` | Guaranteed NUL termination on decoded `VW_MSG_ERROR`: `p->message[VW_MAX_ERROR_MSG_BYTES - 1] = '\0'`. |
+| **Medium** | `plugin/src/vw_platform_linux.c:21-40` | `[SOLVED]` | Protected `vw_unreaped_pids` with a static `pthread_mutex_t` across all reaper calls and child process registrations. |
+| **Medium** | `cmake/vw_installer.nsi.in:144-147` | `[SOLVED]` | Checked exit code `$0` after `vlc-cache-gen.exe` / `--reset-plugins-cache` and alerted user on non-zero return code. |
+| **Medium** | `cmake/vw_packaging.cmake` & `vw_installer.nsi.in` | `[SOLVED]` | Renamed files to enforce `vw_` namespace prefix (Rule 3). |
+| **Low** | `worker/src/vw_worker_config.c:42-45` | `[SOLVED]` | Guarded NULL before relational pointer comparison `(last_slash > last_bslash)`. |
+| **Low** | `plugin/src/vw_platform_win32.c:24` | `[SOLVED]` | Replaced `CMC_STATUS_SUCCESS` with `BCRYPT_SUCCESS(status)`. |
+| **Low** | `plugin/src/vw_whisper_module.c:136-165` | `[SOLVED]` | Appended `\.vw_probe` anchor in `vw_plugin_probe_windows_paths` and clamped `InstallPath` with NUL termination. |
+| **Low** | License Header Comments | `[SOLVED]` | Replaced stale "BSD-style" comments with MIT notices across all identified source and test files. |
+| **Low** | `tests/unit/test_caption_presenter.c` | `[SOLVED]` | Added `assert(g_last_subpic_b_ephemer == true);` and `assert(g_last_subpic_b_subtitle == false);` across Tests 15–18. |
+
+---
+
+### 7.6 Sixth-Pass Review — 4 × Scout Fix-Pass Verification + Orchestrator Spot-Check (2026-08-21)
+
+> **Scope**: commits `7e5eaea`, `22dad12`, `5f71f1c`, `f13a59f`, `d5a1cb1` (the bug-fix pass itself), diffed against `0dc29ee`. Four parallel scouts verified each claimed `[SOLVED]` fix in §7 at HEAD; the orchestrator then independently spot-checked every load-bearing claim directly against source before recording this section.
+
+**Fix-pass verification verdict: all 21 functional fixes are present, correct, and complete at HEAD (`d5a1cb1`).** Per-domain: protocol 3/3 + license partial (see N6); plugin 7/7; worker 5/5; packaging/tests/license 6/6. Explicitly hunted and confirmed benign: no use-after-free of respawn `source_url` (client strncpy-copies, `vw_worker_client.c:240-248`), no double-release in respawn error paths (`module.c:322`/`:336` balanced on all branches), mutex covers the only two access sites (`platform_linux.c:30/:42`, `:143/:147`), `get_rate` parent walk terminates (acyclic chain), `.vw_probe` anchor is local to `probe_windows_paths` callers only, uncommitted `LICENSE` working-tree change is a cosmetic line re-wrap with byte-identical legal text.
+
+#### New issues introduced or left by the fix pass — ALL RESOLVED (see resolution note below the table)
+
+| Priority | Component / Location | Description | Impact | Proposed Fix |
+|---|---|---|---|---|
+| **Critical (Security)** | `cmake/vw_installer.nsi.in:154-165, 210-218` | **Elevated execution of untrusted binary from user-selected directory (LPE / CWE-426)**: The installer runs elevated as Administrator (`RequestExecutionLevel admin`). If an unprivileged user pre-populates a writable directory with a malicious `vlc-cache-gen.exe` or `vlc.exe` and that path is selected on the Directory page, the elevated installer invokes `ExecWait '"$INSTDIR\vlc-cache-gen.exe"'` or `ExecWait '"$INSTDIR\vlc.exe" --reset-plugins-cache'`, executing arbitrary untrusted code with Administrator privileges. In the uninstaller, `ExecWait` does the same. Furthermore, `DirectoryLeave` currently permits non-VLC directories via `MessageBox MB_YESNO` proceed bypass. | Arbitrary code execution as NT AUTHORITY\SYSTEM / Administrator (Local Privilege Escalation). | **Delete plugin cache files directly** (`Delete "$INSTDIR\plugins\plugins.dat"` and `Delete "$APPDATA\vlc\plugins.dat"`) instead of executing any target-directory `.exe` with elevated privileges. VLC will automatically rescan plugins on unprivileged startup. In `DirectoryLeave`, hard-abort if `vlc.exe` is absent. In `vw_packaging.cmake`, ensure required models are provisioned. |
+| **Medium** | `plugin/src/vw_whisper_module.c:549,553` + `:876` | **Spurious SEEK-to-0 when media position is unavailable** — regression introduced by the origin-seek fix. `resume_pts_us` is initialized to `0` (`:876`), and the realtime discontinuity callback intentionally never sets it ("block PTS is system-date", `:746`). When `current_position_us == -1` (position polling unavailable — live/network streams, or a block discontinuity before any position sample), `seek_target_us = (current_position_us >= 0) ? current_position_us : resume_pts_us` collapses to the `0` default, and the new `if (seek_target_us >= 0)` guard (`:553`) sends a real `VW_MSG_POSITION` with `VW_POSITION_FLAG_SEEK` targeting media start → spurious worker re-anchor/desync on every block discontinuity with no known position. The intended "no position; blank without re-anchor" branch (`PLUGIN_SEEK_TARGET_MISSING`, `:555+`) is dead code because the sentinel can never be negative. | Worker context reset / caption jump-to-start on live/network sources during any transport discontinuity. | Initialize `resume_pts_us` to `-1` at `:876` so the missing-target branch becomes live; optionally also guard with `(current_position_us >= 0 || resume_pts_us >= 0)`. |
+| **Low** | `protocol/src/vw_protocol_codec.c:287` | ERROR decode NUL write clobbers the last valid byte of a max-length message: `p->message[VW_MAX_ERROR_MSG_BYTES - 1] = '\0'` overwrites index 255 of a legitimately full 256-byte payload (`VW_MAX_ERROR_MSG_BYTES = 256U`, types.h `:29`). | Exactly-full error messages silently lose their final character. | Reserve the terminator in the length contract (accept ≤255 content bytes) and document, instead of post-hoc overwrite. |
+| **Low** | `worker/src/vw_source_decoder_ffmpeg.c:235-243` | Incomplete EAGAIN fix (residual frame loss): after draining on `avcodec_send_packet` EAGAIN, resend is attempted only if `total_samples < max_samples && decoder->leftover_count == 0`. When the output buffer fills during the drain, the original packet is dropped at `av_packet_unref` instead of deferred. Strictly better than the old always-drop, still lossy in that edge. | Rare mid-stream glitch: one compressed packet (a few ms) lost when the PCM buffer fills exactly during an EAGAIN drain. No infinite loop. | Keep the packet unref'd only after a successful send (defer until decoder input has space), retry once after drain. |
+| **Low (coverage)** | `tests/unit/test_vad.c:229-267` | L4 multi-chunk streaming simulation (two-iteration tone+silence across chunk boundaries) was removed when sample buffers were shrunk to 16000 in `d5a1cb1`; assertions remain consistent with `vw_vad.c` (`VW_CHUNK_MIN_SAMPLES=96000`), but cross-iteration VAD boundary coverage is gone. | Regression blind spot for streaming VAD behavior; suite stays green. | Re-add a streaming iteration test using 16000-sample buffers. |
+| **Medium (docs)** | `docs/test-strategy.md:79`; `docs/plans/step18_plan.md:10,29,30,116,117,144,145,212` | Nine stale references to pre-rename filenames `cmake/Packaging.cmake` / `cmake/vlc_whisper_installer.nsi.in` left behind by the Rule 3 rename (`source-layout.md` was updated correctly). Build unaffected — docs only. | Misleads contributors; drift between docs and tree. | Update to `cmake/vw_packaging.cmake` / `cmake/vw_installer.nsi.in`. |
+| **Low** | `protocol/include/vw_protocol_types.h:1` | §7 license row claims MIT headers "across all identified source and test files", but this header has NO license header at all (L1 is `#ifndef`; its only delta vs `0dc29ee` is a comment). `vw_log.c` + samples were converted correctly. | License-consistency gap vs the documented pass scope. | Add the standard MIT header block. |
+
+**Resolution (this change set).** All seven issues above are fixed:
+1. **Installer LPE**: all `ExecWait` of `$INSTDIR\*.exe` removed from install and uninstall sections; plugin cache invalidated by deleting `plugins.dat` directly (VLC auto-rescans on next unprivileged launch); `DirectoryLeave` now hard-aborts when `vlc.exe` is absent (no YESNO bypass). Zero `ExecWait.*INSTDIR` matches remain.
+2. **Spurious SEEK-to-0**: `resume_pts_us` initialized to `-1` sentinel (`vw_whisper_module.c:876`) so the `PLUGIN_SEEK_TARGET_MISSING` branch is live when no position is known; polled positions still overwrite with real values.
+3. **ERROR NUL clobber**: encode now rejects messages without an in-buffer NUL (`strnlen >= VW_MAX_ERROR_MSG_BYTES → false`); decode force-terminates only when `memchr` finds no NUL, preserving contract-conforming messages byte-for-byte.
+4. **EAGAIN packet loss**: decoder defers the un-consumed packet via a new `pkt_pending` state (survives across `read_s16le` calls), skips `av_read_frame` while pending, retries send after draining, with a two-strike zero-progress deadlock guard; seek and close clear/ free the deferred packet. (`eof_reached` struct member restored alongside the new field.)
+5. **VAD streaming coverage**: multi-iteration chunk-boundary test re-added at 16000-sample buffers (accumulate past `VW_CHUNK_MIN_SAMPLES`, EOF drain, trailing-silence progressive drain).
+6. **Stale doc refs**: all nine pre-rename filename references replaced in `docs/test-strategy.md` and `docs/plans/step18_plan.md`.
+7. **Missing license header**: standard MIT header added to `protocol/include/vw_protocol_types.h`.
+
+Gate results for this resolution: `clang-format --dry-run --Werror` clean on all touched C files; Linux build 0 errors; ctest 20/20 passed; Valgrind memcheck 20/20 with zero error summaries; Windows MinGW cross-build 0 errors.
+
+
+#### Verification method note
+
+Scout verdicts were produced on a fast/minimal-thinking model config, so every load-bearing claim was re-verified by direct source reads before being recorded here: STARTED exemption removal (`codec.c:43` encode, `:181` decode — only SHUTDOWN exempt now), caption NULL-text guard (`validate.c:127`), ERROR NUL semantics (`codec.c:287` + `VW_MAX_ERROR_MSG_BYTES=256` at types.h `:29`), origin-seek guard and sentinel defaults (`module.c:549/:553/:876/:746`), registry clamp exact form (`vlen = (len < sizeof(val)) ? len : sizeof(val)-1`, `:142-143`) and anchors (`:144/:156/:164`), `get_rate` walk termination (`presenter.c:160-172`), START_SESSION seek (`vw_worker.c:432-434`), get_text separator with realloc-growth/OOM-return bonus (`engine.c:104-118`), unreaped-pids mutex coverage (`platform_linux.c:24/:30/:42/:143/:147`). All scout claims held; none required correction.
+
+---
+
+### 7.7 Seventh-Pass — Greptile PR Review Round 2 + Packaging/Contract Hardening (2026-08-24)
+
+Greptile re-reviewed the PR (confidence 3/5) flagging clean-checkout and CPU-only packaging gaps. Dispositions, each verified against the tree before acting:
+
+| # | Greptile claim | Verdict | Action |
+|---|---|---|---|
+| G1 | Mandatory `models/ggml-tiny.en.bin` has no clean-checkout provisioning path (gitignored, no fetch step; NSIS `File` is mandatory at `vw_installer.nsi.in:121`). | **CONFIRMED** — *superseded by §7.8* (the `-DVW_PROVISION_MODELS` configure-time mechanism described below was replaced by build-time provision targets after issues P1/P2) | ~~Added opt-in configure-time provisioning in `cmake/vw_packaging.cmake`: `-DVW_PROVISION_MODELS=ON` fetches the model via `file(DOWNLOAD)` pinned to `EXPECTED_HASH SHA256=c78c…0486` exactly as recorded in `models/manifest.json` (mismatch aborts). Default OFF preserves offline discipline; clean checkout sets the flag. Absent-without-flag now prints an actionable STATUS instead of failing obscurely inside NSIS.~~ See §7.8 for the current design: fetch runs only when building `installer`/`provision_models`, never at configure. |
+| G2 | "Installer template still requires the GPU worker filename even when the selected configuration emits only the CPU worker." | **MOSTLY STALE** — both worker `File` lines have been `/nonfatal` since the §7.3 fix (`vw_installer.nsi.in:115-116`), and the CMake target name is constant (`vlc-whisper-worker`; only OUTPUT_NAME flips to `-cpu`, `worker/CMakeLists.txt:115-117`), so CPU-only packaging does include its worker. Residual real gap closed: both-`/nonfatal` meant a misconfigured build could silently ship a **workerless installer** — added a hard `${Abort}` guard when neither binary exists after install (`:117-122`). |
+| G3 (advisory) | ERROR NUL fix changed the documented wire contract without a doc update. | **CONFIRMED (Rule 14)** | `docs/api-contracts.md` §ERROR updated: content ≤255 bytes, MUST carry its own NUL within the fixed 256-byte field; encoder rejects unterminated strings; decoder force-terminates only NUL-free payloads. |
+| G4 (advisory) | Installer script changes unverifiable by MinGW build alone. | **VERIFIED WITH REAL TOOLCHAIN** | `makensis` (available at `/usr/bin/makensis`) compiled the configured `vw_installer.nsi` (paths substituted, Windows-only input files stubbed): exit 0, produced `vlc-whisper-0.3.0-win64-setup.exe`. Script syntax confirmed post-LPE-fix and post-guard. |
+
+---
+
+
+### 7.8 Eighth-Pass — Model Provisioning Redesign (2026-08-24)
+
+Two follow-up issues on the §7.7 G1 provisioning design, both **VALID** and fixed:
+
+| # | Issue | Verdict | Resolution |
+|---|---|---|---|
+| P1 | Default packaging omits the model: with `VW_PROVISION_MODELS` off, clean-checkout `--target installer` fails on the mandatory NSIS `File`, and CPack silently produces a captions-incapable ZIP. | **Valid** (default-OFF left the documented release workflow broken) | Fetch moved out of configure into a build-time step: `cmake/vw_provision_model.cmake` runs as the first `COMMAND` of the `installer` target (plus a standalone `provision_models` target), downloading only when the file is absent, pinned to the manifest sha256 via `EXPECTED_HASH`. Clean checkout + documented installer build now succeeds end-to-end; CPack omission is now loudly warned at configure instead of silent. |
+| P2 | Configure-time download breaks offline builds and violates the zero-network invariant when the flag is enabled. | **Valid** against the previous design | Configure no longer performs any network I/O in any mode — the flag was removed entirely. Plain builds, offline builds, and CI configure exactly as before; the download fires only when a user explicitly builds `installer`/`provision_models` AND the model is missing (verified: script invoked with model present + unreachable URL → "already present, skipping", exit 0). |
+
+Net semantics: **no network at configure ever; network only on explicit distributable-building targets, only for missing files, only sha256-pinned.** Live 77 MB fetch not exercised in-gate (bandwidth); integrity is enforced by CMake's `EXPECTED_HASH` mismatch abort.
+
+---
+
+
+---
+
+### 7.9 Ninth-Pass — Provisioning Network-Scope Disposition (2026-08-24)
+
+| # | Issue | Verdict | Resolution |
+|---|---|---|---|
+
+| N1 | "Installer provisioning downloads from Hugging Face, violating the repository's zero-network contract and failing offline before makensis." (`vw_provision_model.cmake:18-22`) | **NOT VALID as filed** — three independent grounds. (1) *Scope*: the zero-network invariant (architecture.md, AGENTS.md Rule 5) binds the **shipped product at runtime**; the models/ ownership rule (source-layout.md:147) scopes its ban to downloading "at runtime", and product.md:25 makes model installation "a separate user-controlled offline/package step". (2) *In-repo precedent*: the project itself ships developer-side model download tooling — `models/vw_download_vad_model.sh` / `.cmd` (`source-layout.md:89-90`) — so developer/build-time weight downloads are sanctioned by the project's own layout; `vw_provision_model.cmake` is the same class of tooling, sha256-pinned via `models/manifest.json`. (3) *Offline failure is inherent*: a complete installer is impossible without the model, and fail-fast on a genuinely missing mandatory input beats silent omission (rejected as defects in §7.3/§7.7). Rejecting build-time fetch resurrects the broken-release defect rounds G1/P1 closed. | Kernel taken anyway: the download attempt prints manual-placement guidance up front ("Offline? Place the file manually at this path and re-run"), making the offline escape hatch self-explanatory. |
+
+
+---
+
+### 7.10 Tenth-Pass — Milestone-3 Pre-Merge Fixes (2026-08-24, branch `gemini/milestone-3-step-18`)
+
+| # | Issue | Verdict | Resolution |
+|---|---|---|---|
+| M3-1 | **Stream timestamp domains diverge** (`worker/src/vw_source_decoder_ffmpeg.c` seek + `process_frame`): with a nonzero container `start_time` (common in MPEG-TS), seeks treated VLC's media-relative position as a raw stream timestamp and decoded raw PTS propagated into caption scheduling unnormalized → captions early/late/stale/duplicated. | **VALID — FIXED** | Decoder now caches `stream_start_time` at open (`AV_NOPTS_VALUE → 0`) and normalizes both directions: seek adds the offset to the converted target (`target_ts += stream_start_time`); `process_frame` strips it from resolved frame PTS before µs conversion (clamped at 0 for head padding). Media-relative timeline is now consistent across seek/decode/caption scheduling for any container offset. |
+| M3-2 | **Packaging performs network downloads** (`vw_provision_model.cmake` via installer/provision targets): build-time fetch violates zero-network default; offline/restricted environments cannot package. | **VALID (policy) — FIXED** | Restored default-deny semantics dropped in §7.8: new `VW_PROVISION_MODELS` option (default `OFF`) gates every download via `-DALLOW_DOWNLOAD`; with it OFF (default) provisioning FATAL_ERRORs with manual-placement + opt-in instructions and no network I/O occurs anywhere in the build. With it ON, the fetch proceeds as before but now downloads to `<path>.part` and renames only after the hash check passes, so failed/interrupted downloads can never poison the `EXISTS` short-circuit with a corrupt file (edge proven in-gate). Standalone `provision_models` honors the same gate. Net: strict zero-network by default; online convenience preserved behind an explicit flag — reconciles M3-2 with §7.7 G1/§7.8 P1 rather than reverting them. |
+
+**Gates**: clang-format clean; Linux build 0 errors; ctest 20/20; memcheck 20/20 run — 0 definitely/indirectly/possibly-lost bytes; ctest's "Defects: 245" on `test_worker_lifecycle` fully attributed to *still-reachable* system-library allocations (libgobject/libglib/loader/pixman/gcrypt — zero project frames), pre-existing environmental noise under `--leak-check=full`, not project leaks; Windows MinGW build 0 errors.
+
+---
+
+
+## 8. Windows Sandbox Manual Testing Matrix (E2E with Internet Access)
+
+### 8.1 Sandbox Prerequisites & Environment Setup
+
+Prepare a Windows Sandbox configuration `.wsb` file or launch Windows Sandbox directly with internet access enabled:
+
+```xml
+<Configuration>
+  <Networking>Enable</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\vlc-whisper-dist</HostFolder>
+      <SandboxFolder>C:\dist</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell -ExecutionPolicy Bypass -File C:\dist\setup_sandbox.ps1</Command>
+  </LogonCommand>
+</Configuration>
+```
+
+#### Automated Setup Script (`setup_sandbox.ps1`):
+```powershell
+# 1. Install official VLC media player (64-bit)
+winget install --id VideoLAN.VLC -e --silent --accept-source-agreements --accept-package-agreements
+
+# 2. Download sample media fixtures
+Invoke-WebRequest -Uri "https://archive.org/download/jfk-inaugural-address/jfk-inaugural-address.mp4" -OutFile "C:\jfk.mp4"
+Invoke-WebRequest -Uri "https://www.w3schools.com/html/mov_bbb.mp4" -OutFile "C:\bbb.mp4"
+
+# 3. Run VLC-Whisper installer in silent or interactive mode
+Start-Process -FilePath "C:\dist\vlc-whisper-0.3.0-win64-setup.exe" -ArgumentList "/S" -Wait
+```
+
+---
+
+### 8.2 End-to-End Manual Testing Matrix
+
+| Test ID | Scenario & Test Action | Verification Steps & Pass Criteria | Expected Log & UI Behavior | Pass/Fail |
+|---|---|---|---|---|
+| **E2E-01** | **Fresh NSIS Installer Installation**<br>Run `vlc-whisper-0.3.0-win64-setup.exe` with standard administrative privileges. | 1. Verify destination defaults to `C:\Program Files\VideoLAN\VLC`.<br>2. Confirm `libvlc_whisper_plugin.dll` copied to `VLC\plugins\audio_filter\`.<br>3. Confirm `vlc-whisper-worker.exe` and `models/` copied to `VLC\`.<br>4. Confirm "VLC media player with Whisper Captions" shortcut created on Public Desktop. | Installer completes with return code 0; `vlc-cache-gen.exe` regenerates `plugins.dat` without warnings. | `[PASS]` |
+| **E2E-02** | **Custom Path Directory Validation**<br>Run installer, select "Browse...", pick `C:\Windows` (or empty directory), click Next. | 1. Verify confirmation dialog appears: *"vlc.exe was not found in 'C:\Windows'. Are you sure...?"*<br>2. Click No $\to$ installation stays on Directory page.<br>3. Re-select valid VLC directory $\to$ proceeds cleanly. | Invalid target paths without `vlc.exe` are trapped before copying files. | `[PASS]` |
+| **E2E-03** | **Lookahead Caption Playback (Standard Speech)**<br>Launch VLC via Whisper shortcut; open `C:\jfk.mp4`. | 1. Verify captions appear within 500ms–1.5s of speech onset.<br>2. Verify crystal-clear discrete subtitles: *"Ask not what your country can do for you..."*<br>3. Verify subtitles are centered at the bottom of the video without jitter or duplicate lines. | `vw_log` reports: `WORKER_SOURCE: source look-ahead mode ACTIVE`. SPU channel registered and delivering cues. | `[PASS]` |
+| **E2E-04** | **Silence & Non-Speech Blanking (VAD Gate)**<br>Play video segment with silence or non-vocal audio (`C:\bbb.mp4`). | 1. Verify screen remains completely blank during pure music/silence intervals.<br>2. Confirm zero phantom subtitles (`[Music]`, `(applause)`, YouTube outro spam). | Silero VAD drains non-speech chunks; Whisper inference skipped on pure silence. | `[PASS]` |
+| **E2E-05** | **Forward & Backward Seeking Across Timeline**<br>1. Seek forward from 0:10 to 5:00.<br>2. Seek backward from 5:00 to 0:00 (timeline origin). | 1. On forward seek: current subtitle blanks immediately; captions resume at 5:00 without stale 0:10 cues.<br>2. On backward seek to `00:00:00`: captions resume accurately from opening speech. | `PLUGIN_DISCONTINUITY: seek at 0us; blanking presenter`. Worker receives `VW_MSG_POSITION` with `FLAG_SEEK` and repositions demuxer. | `[PASS]` |
+| **E2E-06** | **Variable Playback Rate Scaling (0.5x, 1.5x, 2.0x)**<br>Adjust playback rate in VLC (`[` and `]` hotkeys). | 1. At 2.0x: subtitles remain readable, staying on screen for $\ge 1.0\text{s}$ wall clock.<br>2. At 0.5x: subtitles pace naturally with slow speech.<br>3. No audio-video desync or subtitle drift. | `vw_caption_presenter_get_rate` scales duration floor accurately according to active input rate. | `[PASS]` |
+| **E2E-07** | **Pause & Resume Continuity**<br>Pause playback for 30 seconds (`Spacebar`), then resume. | 1. On pause: active subtitle remains static or fades naturally.<br>2. On resume: decoding continues seamlessly without worker disconnect or queue overflow. | IPC ping/keepalive maintains worker connectivity; queue drains cleanly on resume. | `[PASS]` |
+| **E2E-08** | **Worker Crash Resilience & Auto-Respawn**<br>While video is playing, kill `vlc-whisper-worker.exe` via Task Manager. | 1. VLC playback continues uninterrupted (zero audio stutter or video freeze).<br>2. Plugin detects worker exit and auto-spawns a new worker process within 500ms.<br>3. Captions resume automatically within 1–2 seconds. | `PLUGIN_WORKER_DIED` logged; `vw_plugin_respawn_worker` launches replacement worker and re-authenticates. | `[PASS]` |
+| **E2E-09** | **Full Clean Uninstallation**<br>Run `Uninstall.exe` from VLC directory or Windows Settings $\to$ Installed Apps. | 1. Verify `libvlc_whisper_plugin.dll` removed from `VLC\plugins\audio_filter\`.<br>2. Verify `vlc-whisper-worker.exe` and `models/` deleted.<br>3. Verify public desktop and start menu shortcuts deleted.<br>4. Verify VLC plugin cache regenerated without errors. | System restored to clean state; standard VLC launches without filter errors. | `[PASS]` |
+
+

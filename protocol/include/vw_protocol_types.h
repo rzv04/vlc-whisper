@@ -1,3 +1,6 @@
+// Copyright 2026 VLC-Whisper Contributors. All rights reserved.
+// Use of this source code is governed by the MIT License that can be found in the LICENSE file.
+
 #ifndef VW_PROTOCOL_TYPES_H_
 #define VW_PROTOCOL_TYPES_H_
 
@@ -11,8 +14,8 @@
 //   Offset 20: uint8_t payload[payload_length]  ← serialized vw_msg_xxx_t fields
 //
 // header.type selects which struct serializes/deserializes the payload bytes.
-// Zero-payload messages (VW_MSG_SHUTDOWN, VW_MSG_STARTED) have payload_length=0
-// and no struct — the codec handles them as empty payloads.
+// Zero-payload message (VW_MSG_SHUTDOWN) has payload_length=0
+// and no struct — the codec handles it as an empty payload.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -20,20 +23,49 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 0U
+#define VW_PROTOCOL_VERSION_MINOR 2U
+#define VW_CLIENT_VERSION "1.2.0"
+#define VW_CLIENT_VERSION_LENGTH 5U
+#define VW_WORKER_VERSION "1.2.0"
+#define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
 #define VW_MAX_MODEL_ID_BYTES 64U        // Model identifier string limit
+#define VW_MAX_SOURCE_URL_BYTES 1024U    // Max source MRL / file path length
 #define VW_AUTH_TOKEN_BYTES 32U          // Local IPC 32-byte secret authentication token
+#define VW_SESSION_ID_BYTES 16U          // Local IPC session identifier size in bytes
 #define VW_MAX_TEXT_BYTES 1024U          // Max caption text length in bytes (UTF-8)
+// Filesystem path bound shared by plugin and worker (plugin passes --model via argv; both sides
+// must agree). ≥ the OS max path length per platform so no valid configured path is rejected:
+// Linux PATH_MAX is 4096 bytes; Windows long paths (\\?\ prefix) allow up to 32767 chars.
+#ifdef _WIN32
+#define VW_PATH_MAX_BYTES 32768U
+#else
+#define VW_PATH_MAX_BYTES 4096U
+#endif
 
 // Capability flags (bitfield)
 #define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)
 #define VW_CAPABILITY_PARTIAL_SEGMENTS (1U << 1)
 #define VW_CAPABILITY_SEEK_RESET (1U << 2)
+#define VW_CAPABILITY_SOURCE_MODE (1U << 3)
 
 // Source kind enum
-typedef enum vw_source_kind { VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
+typedef enum vw_source_kind { VW_SOURCE_LIVE_AUDIO = 0, VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
+
+// Error codes for VW_MSG_ERROR frames
+typedef enum vw_error_code {
+  E_PROTOCOL_VERSION = 1,
+  E_AUTH = 2,
+  E_MODEL_MISSING = 3,
+  E_MODEL_INVALID = 4,
+  E_AUDIO_FORMAT = 5,
+  E_BACKPRESSURE = 6,
+  E_DISCONTINUITY = 7,
+  E_WORKER_CRASH = 8,
+  E_INTERNAL = 9,
+  E_SOURCE_OPEN = 10
+} vw_error_code_t;
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
@@ -50,7 +82,8 @@ typedef enum vw_message_type {
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
   VW_MSG_SHUTDOWN = 11,  // zero-payload: instruct worker to exit
-  VW_MSG_STARTED = 12    // zero-payload: worker confirms session started
+  VW_MSG_STARTED = 12,   // worker confirms session started; carries uint8_t source_active
+  VW_MSG_POSITION = 13   // plugin sends media playback position and pacing updates
 } vw_message_type_t;
 
 typedef struct vw_frame_header {
@@ -63,7 +96,7 @@ typedef struct vw_frame_header {
 #pragma pack(pop)
 
 typedef struct vw_session_id {
-  uint8_t bytes[16];
+  uint8_t bytes[VW_SESSION_ID_BYTES];
 } vw_session_id_t;
 
 // Payload Structs — each serialized as the payload bytes following vw_frame_header_t.
@@ -73,7 +106,7 @@ typedef struct vw_session_id {
 typedef struct vw_msg_hello {
   uint16_t min_major;
   uint16_t max_major;
-  uint8_t token[VW_AUTH_TOKEN_BYTES];
+  uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
   uint16_t client_version_length;
   char* client_version;
 } vw_msg_hello_t;
@@ -95,7 +128,31 @@ typedef struct vw_msg_start {
   char model_id[VW_MAX_MODEL_ID_BYTES];
   char language[16];
   uint16_t source_kind;
+  uint16_t source_url_len;
+  char source_url[VW_MAX_SOURCE_URL_BYTES];
 } vw_msg_start_t;
+
+typedef struct vw_msg_started {
+  uint8_t source_active;  // 1 if source file lookahead mode active; 0 if live streaming mode
+} vw_msg_started_t;
+
+// STARTED source_active values
+#define VW_SOURCE_ACTIVE_INACTIVE 0U
+#define VW_SOURCE_ACTIVE_ACTIVE 1U
+
+#define VW_MSG_STARTED_PAYLOAD_BYTES 1U
+
+// Position update flags (bitfield)
+#define VW_POSITION_FLAG_SEEK (1U << 0)
+#define VW_POSITION_FLAG_PAUSED (1U << 1)
+
+typedef struct vw_msg_position {
+  vw_session_id_t session_id;
+  int64_t current_pts_us;
+  int64_t input_time_us;
+  float playback_rate;
+  uint32_t flags;
+} vw_msg_position_t;
 
 typedef struct vw_msg_audio {  // plugin to worker
   vw_session_id_t session_id;
@@ -109,6 +166,13 @@ typedef struct vw_msg_control {
   vw_session_id_t session_id;
   uint16_t reason;
 } vw_msg_control_t;
+
+// Control-message reason codes (vw_msg_control_t.reason), per docs/api-contracts.md.
+#define VW_CTRL_REASON_USER_PAUSE 1U          // PAUSE: user paused playback
+#define VW_CTRL_REASON_USER_RESUME 1U         // RESUME: user resumed playback
+#define VW_CTRL_REASON_USER_STOP 1U           // STOP: user stopped the session
+#define VW_CTRL_REASON_SEEK_DISCONTINUITY 2U  // STOP: seek or discontinuity — new session epoch
+#define VW_CTRL_REASON_MEDIA_END 3U           // STOP: media ended
 
 typedef struct vw_msg_status {
   vw_session_id_t session_id;
@@ -135,5 +199,9 @@ typedef struct vw_caption_segment {  // worker to plugin
   char* text_utf8;
   uint16_t text_bytes;
 } vw_caption_segment_t;
+
+// Wire size of vw_caption_segment_t's fixed fields (session 16 + id 8 + start 8 + end 8 + is_final 1 + text_bytes 2),
+// used by emitters to size the encode buffer for a max-length caption segment.
+#define VW_CAPTION_SEGMENT_FIXED_BYTES 43
 
 #endif  // VW_PROTOCOL_TYPES_H_

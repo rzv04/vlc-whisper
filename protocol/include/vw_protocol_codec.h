@@ -20,6 +20,7 @@ bool vw_protocol_decode_header(const uint8_t* buffer, size_t buffer_size, vw_fra
 bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uint8_t* buffer, size_t buffer_size,
                                 size_t* out_written);
 bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, size_t buffer_size, void* out_payload);
+// Validate the payload struct for a given message type. Returns true if valid, false otherwise.
 bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload);
 
 #endif  // VW_PROTOCOL_CODEC_H_
