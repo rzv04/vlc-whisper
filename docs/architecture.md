@@ -134,8 +134,9 @@ directory, so the plugin never performs network I/O.
 The Lua settings dialog may perform bounded local existence checks for a selected catalog filename in the bundled
 `models/` directory and the per-user download directory. It does not hash large files on VLC's UI thread; the worker
 remains responsible for SHA-256 verification during download. VLC 3.0's Lua widgets expose neither dropdown-change
-callbacks nor button enabled/disabled state, so `.en` language enforcement and model availability presentation are
-refreshed by dialog construction and bounded action callbacks.
+callbacks nor button enabled/disabled state, so `.en` language enforcement occurs on Apply while model availability
+presentation is refreshed by dialog construction and bounded action callbacks. The full language list remains visible
+while a model is being selected because Lua cannot react to dropdown changes.
 
 `MODEL_PROGRESS(IDLE)` is an initial state snapshot emitted before the worker's asynchronous downloader changes to
 `DOWNLOADING`; it is not a failed or completed command. The plugin sender keeps the pending catalog-id correlation

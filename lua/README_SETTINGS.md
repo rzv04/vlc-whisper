@@ -6,14 +6,14 @@ or performs network I/O. No translation.
 
 ## Files
 
-- `lua/extensions/vlc_whisper_settings.lua` — the extension (descriptor `VLC-Whisper Settings`, dialog with Engine/Model/Language/Threads + Detected-backend status label).
+- `lua/extensions/vlc_whisper_settings.lua` — the extension (descriptor `VLC-Whisper Settings`, dialog with Engine/Model/Language/Threads (CPU engine) + Detected-backend status label).
 
 ## Config keys (plugin registers; Lua writes via `vlc.config.set`)
 
 - `whisper-backend` — `"auto"` (default) | `"gpu"` | `"cpu"`
 - `model-path` — relative path under `models/`, e.g. `models/ggml-tiny.bin` (bundled `tiny` is the default; an explicit user selection remains authoritative and may be absent until downloaded)
 - `whisper-language` — `"en"` (default) | `ro` | `tr` | `de` | `fr` | `es` — **no `auto`** entry in this dialog; automatic language selection is a later UI step
-- `whisper-threads` — integer `1..16`, default `4` (clamped on Apply)
+- `whisper-threads` — CPU-engine thread count, integer `1..16`, default `4` (clamped on Apply)
 - `whisper-backend-active` — read-only mirror written by plugin when `STATUS` v1.3 `resolved_backend` drains (`gpu`/`cpu`); Lua reads it for the status label
 
 Language/dropdown wiring: `Apply` does `tonumber` + clamp `1..16` for threads, then `vlc.config.set` ×4 (model-path
@@ -25,9 +25,9 @@ VLC 3.0's Lua dropdown API has no selection setter: it selects the first value a
 the persisted engine, model, and language choice first, followed by the remaining choices; the order may change after
 each Apply, but `get_value()` still returns the stable numeric choice ID.
 
-English-only models (`tiny.en` and `base.en`) expose only `English (en)` and always write `en` on Apply. VLC 3.0
-also has no dropdown-change callback, so changing Model updates the Language list after Apply or Download (or when the
-dialog is reopened), not while the dropdown is merely open. The same pinned API has no button enabled/disabled method;
+English-only models (`tiny.en` and `base.en`) keep the full language list visible because VLC 3.0 has no dropdown-change
+callback. Apply always writes `en` for those models, even if another language was selected. The same pinned API has no
+button enabled/disabled method;
 the Download button changes to **Re-download Selected Model** when a file is already present and its callback remains
 safe to invoke.
 
@@ -89,7 +89,7 @@ directory, including incomplete `.part` files.
    With the bundled multilingual `tiny` model, `ro` is a valid transcription language. The dialog still has no
    `auto` entry.
 
-5. Select `tiny.en` or `base.en`. The Language dropdown contains only `English (en)` after Apply or Download, and Apply writes `whisper-language=en` even if a stale non-English value was previously stored.
+5. Select `tiny.en` or `base.en`. The full Language dropdown remains visible, but Apply writes `whisper-language=en` even if a non-English value was selected.
 
 6. Change **Engine** to `gpu` on a machine without Vulkan, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` mirrored into `whisper-backend-active`).
 

@@ -40,8 +40,8 @@ Golden expected text should tolerate model-version variance only through explici
 - Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises.
 - Existing subtitle track and VLC-whisper behavior follow the documented coexistence policy.
 - Lua settings acceptance: opening the single dialog reports bundled/per-user model presence; `tiny.en` and `base.en`
-  force `en` after Apply or Download; existing files offer re-download without blocking VLC; language choices persist
-  after closing and reopening the dialog.
+  force `en` on Apply while the full language list remains visible; existing files offer re-download without blocking
+  VLC; language choices persist after closing and reopening the dialog.
 
 ### Automated failure-path coverage
 

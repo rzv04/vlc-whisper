@@ -319,7 +319,7 @@ It exposes four controls that map directly to the plugin’s config namespace:
 | Engine (backend) | `whisper-backend` | `auto` (default) · `gpu` (Vulkan) · `cpu` |
 | Model | `model-path` | dropdown labels map to **relative** paths under `models/`: `tiny.en` → `models/ggml-tiny.en.bin`, `tiny` → `models/ggml-tiny.bin`, `base.en` → `models/ggml-base.en.bin`, `base` → `models/ggml-base.bin`, `small` → `models/ggml-small.bin`, `medium` → `models/ggml-medium.bin`, `large` → `models/ggml-large-v3.bin` (selection allowed even if file absent; missing file disables captions with `E_MODEL_MISSING` until provisioned — see 19c) |
 | Language | `whisper-language` | `en` (default) · `ro` · `tr` · `de` · `fr` · `es` — **no `auto` entry** in this dialog; the bundled `tiny` is multilingual, but automatic language selection remains a later UI step |
-| Threads | `whisper-threads` | integer `1..16`, default `4` (clamped on Apply) |
+| Threads (CPU engine) | `whisper-threads` | CPU-engine thread count, integer `1..16`, default `4` (clamped on Apply) |
 | Detected backend (read-only) | `whisper-backend-active` | informational label refreshed on dialog open; shows `gpu` or `cpu` as resolved by the worker (`STATUS` v1.3 `resolved_backend`) after the first session `STARTED` |
 
 The dialog puts current engine, model, and language values first on open via `vlc.config.get` (nil-safe defaults
@@ -330,9 +330,9 @@ bundled `tiny`; an explicit user-selected `model-path` remains authoritative. `A
 + clamp `1..16`), writes all four keys via `vlc.config.set`, and logs `[VLC-Whisper] applied …` lines (filter
 `Tools > Messages`).
 
-Selecting `tiny.en` or `base.en` restricts Language to `English (en)` and Apply forces `whisper-language=en`. VLC
-3.0 exposes no dropdown-change callback, so this restriction refreshes after Apply or Download, or on the next dialog
-open. The dialog checks selected model filenames in the bundled `models\` directory and per-user download directory
+Selecting `tiny.en` or `base.en` keeps the full Language list visible, but Apply forces `whisper-language=en`. VLC
+3.0 exposes no dropdown-change callback, so the dialog cannot update the Language list while Model is being selected.
+The dialog checks selected model filenames in the bundled `models\` directory and per-user download directory
 before showing the availability state; Lua does not hash large files, while the worker verifies SHA-256 during download.
 VLC 3.0 also exposes no widget enabled/disabled method, so an existing model changes the button caption to
 `Re-download Selected Model` rather than disabling it.

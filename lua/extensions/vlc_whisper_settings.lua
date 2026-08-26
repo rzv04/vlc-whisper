@@ -221,13 +221,9 @@ local function populate_dropdown(widget, labels, selected_id)
   end
 end
 
-local function refresh_language_dropdown(model_id, selected_id)
+local function refresh_language_dropdown(_model_id, selected_id)
   if w_language == nil then return end
   w_language:clear()
-  if model_is_english_only(model_id) then
-    w_language:add_value(language_labels[1], 1)
-    return
-  end
   populate_dropdown(w_language, language_labels, selected_id or 1)
 end
 
@@ -412,8 +408,8 @@ local function build_dialog()
   w_language = dlg:add_dropdown(2, 3, 3, 1)
   refresh_language_dropdown(sel_model, sel_language)
 
-  -- Row 4: Threads -- text input (VLC Lua has no spinbox widget).
-  dlg:add_label("Threads:", 1, 4, 1, 1)
+  -- Row 4: CPU threads -- text input (VLC Lua has no spinbox widget).
+  dlg:add_label("Threads (CPU engine):", 1, 4, 1, 1)
   w_threads = dlg:add_text_input(cur_threads, 2, 4, 3, 1)
 
   -- Row 5: Action Buttons (Apply & Download Selected Model)
@@ -440,7 +436,7 @@ function descriptor()
     url = "https://github.com/rzv04/vlc-whisper",
     shortdesc = "VLC-Whisper Settings",
     description = "Settings GUI for VLC-Whisper (Lua extension). "
-      .. "Engine/Model/Language dropdowns + Threads input. "
+      .. "Engine/Model/Language dropdowns + Threads (CPU engine) input. "
       .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
       .. "plugin polls config and respawns worker mid-play (brief caption gap); download progress is rendered by C. "
       .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
@@ -466,7 +462,7 @@ function activate()
   w_download = nil
   build_dialog()
   dlg:show()
-  vlc.msg.info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads)")
+  vlc.msg.info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads (CPU engine))")
   return true
 end
 
