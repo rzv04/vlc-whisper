@@ -2,6 +2,7 @@
 #define VW_WORKER_CONFIG_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "vw_protocol_types.h"
@@ -28,5 +29,9 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 // Parses command-line arguments into the worker configuration structure, performing syntax validation and
 // auto-discovering VAD model files. Returns 0 on success or 2 on error.
 int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** argv);
+
+// Resolves relative model paths against --model-dir while preserving absolute and existing paths during worker
+// initialization without changing user configuration or selection.
+bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char* out, size_t out_size);
 
 #endif  // VW_WORKER_CONFIG_H_

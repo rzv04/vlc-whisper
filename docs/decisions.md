@@ -407,7 +407,9 @@ The question is where and under what conditions that egress is permitted.
    (`%LOCALAPPDATA%\vlc-whisper\models` on Windows, `${XDG_DATA_HOME:-$HOME/.local/share}/vlc-whisper/models`
    on Linux; `--model-dir` override), created on demand. Stale `*.part` files are deleted at worker start;
    downloads write to `<dest>/<filename>.part` and are atomically renamed on success. Resolve order:
-   explicit `model-path` → install `models/` → per-user dir.
+   explicit `model-path` → install `models/` → per-user dir. If a relative selected path is still configured after
+   download, worker startup also matches its filename under `--model-dir`; the Windows uninstaller removes the
+   app-owned `%LOCALAPPDATA%\vlc-whisper` model directory.
 5. **No-wait UI boundary.** The single Lua settings dialog performs bounded config writes and returns immediately.
    The plugin sender thread consumes worker progress and renders it on a dedicated C-managed SPU channel. Caption
    blanking on pause/seek does not flush that channel, so the download continues while media is paused; abort,

@@ -183,7 +183,7 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_vad.c`             | Voice-activity detection state and window decisions                |
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
 | `vw_segment_builder.c` | Ordered timed segments, final-subtitles dedup, dynamic queue growth |
-| `vw_worker_config.c`   | Validate model path, initial `en` language, and safe defaults      |
+| `vw_worker_config.c`   | Validate model path, resolve downloaded relative paths, initial `en` language, and safe defaults |
 | `vw_sha256.h`          | Streaming SHA-256 computation for model download verification      |
 | `vw_sha256.c`          | Incremental SHA-256 implementation, streaming hash while writing .part |
 | `vw_model_catalog.h`   | Committed model catalog (7 models, pinned sha256/bytes, Hugging Face URLs) |

@@ -196,7 +196,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
     return 1;
   }
 
-  vw_whisper_engine_t* engine = vw_whisper_engine_init(config->model_path, config->backend, config->gpu_device);
+  char resolved_model_path[VW_PATH_MAX_BYTES];
+  const char* effective_model_path = config->model_path;
+  if (vw_worker_config_resolve_model_path(config, resolved_model_path, sizeof(resolved_model_path))) {
+    effective_model_path = resolved_model_path;
+    if (strcmp(effective_model_path, config->model_path) != 0) {
+      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE", "resolved model '%s' via model directory to '%s'",
+                   config->model_path, effective_model_path);
+    }
+  }
+  vw_whisper_engine_t* engine = vw_whisper_engine_init(effective_model_path, config->backend, config->gpu_device);
   if (engine) {
     vw_whisper_engine_set_language(engine, config->language);
     vw_whisper_engine_set_n_threads(engine, config->n_threads);
@@ -206,7 +215,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   vw_log_event(
       engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
       engine ? "whisper engine loaded from '%s'" : "whisper engine init FAILED for '%s' (model missing/invalid)",
-      config->model_path);
+      effective_model_path);
   struct whisper_vad_context* vad_ctx = NULL;
   if (config->vad_model_path[0] != '\0') {
     vad_ctx = vw_vad_init_default(config->vad_model_path);

@@ -4,6 +4,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool vw_worker_config_file_exists(const char* path) {
+  if (!path || !path[0]) return false;
+  FILE* file = fopen(path, "rb");
+  if (!file) return false;
+  fclose(file);
+  return true;
+}
+
+static bool vw_worker_config_is_absolute_path(const char* path) {
+  if (!path || !path[0]) return false;
+#ifdef _WIN32
+  return path[0] == '\\' || (path[1] != '\0' && path[1] == ':');
+#else
+  return path[0] == '/';
+#endif
+}
+
+static const char* vw_worker_config_basename(const char* path) {
+  if (!path) return NULL;
+  const char* base = path;
+  for (const char* cursor = path; *cursor; cursor++) {
+    if (*cursor == '/' || *cursor == '\\') base = cursor + 1;
+  }
+  return base;
+}
+
 // Parse a 64-char hex string into a 32-byte token. Returns true on success.
 static bool vw_token_from_hex(const char* hex, uint8_t out[VW_AUTH_TOKEN_BYTES]) {
   if (strlen(hex) != VW_AUTH_TOKEN_BYTES * 2) return false;  // must be exactly 64 hex chars
@@ -211,4 +237,28 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
   vw_worker_config_autodiscover_vad(config);
 
   return 0;
+}
+
+bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char* out, size_t out_size) {
+  if (!config || !out || out_size == 0 || !config->model_path[0]) return false;
+  if (vw_worker_config_file_exists(config->model_path)) {
+    if (strlen(config->model_path) >= out_size) return false;
+    snprintf(out, out_size, "%s", config->model_path);
+    return true;
+  }
+  if (vw_worker_config_is_absolute_path(config->model_path) || !config->model_dir[0]) return false;
+
+  const char* filename = vw_worker_config_basename(config->model_path);
+  if (!filename || !filename[0]) return false;
+  size_t dir_len = strlen(config->model_dir);
+  size_t file_len = strlen(filename);
+  bool needs_separator = dir_len > 0 && config->model_dir[dir_len - 1] != '/' && config->model_dir[dir_len - 1] != '\\';
+  size_t required = dir_len + (needs_separator ? 1 : 0) + file_len + 1;
+  if (required > out_size) return false;
+#ifdef _WIN32
+  snprintf(out, out_size, "%s%s%s", config->model_dir, needs_separator ? "\\" : "", filename);
+#else
+  snprintf(out, out_size, "%s%s%s", config->model_dir, needs_separator ? "/" : "", filename);
+#endif
+  return vw_worker_config_file_exists(out);
 }

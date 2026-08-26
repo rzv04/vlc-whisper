@@ -18,6 +18,8 @@ An explicit download request made before or during playback reaches the live wor
   - Log request observation, relay, worker progress, terminal failure, destination, and activation outcomes without logging tokens, PCM, or transcripts.
   - Ensure the plugin does not repeatedly reissue a stale request or lose a request during the initial missing-model START failure.
   - Ensure verified completion maps to the exact per-user path passed to the worker and triggers model activation/respawn.
+  - Ensure a worker restarted after download resolves the existing relative selected path against `--model-dir`.
+  - Ensure the Windows uninstaller removes only the app-owned per-user downloaded-model directory, including partial files.
   - Add regression coverage for control-edge handling, terminal progress, activation failure, and persisted-path selection where test seams permit.
   - Update user-facing and architectural documentation with the actual Windows paths and troubleshooting evidence.
 - Out of scope:
@@ -54,7 +56,9 @@ An explicit download request made before or during playback reaches the live wor
 - [ ] A request during playback produces plugin and worker diagnostic entries and bounded progress frames.
 - [ ] The verified file exists in `%LOCALAPPDATA%\\vlc-whisper\\models` on Windows and the exact path is logged.
 - [ ] DONE activates the downloaded model and captions can start without VLC restart.
+- [x] A worker restarted after download loads the verified file from the per-user directory even when config still contains the relative catalog path.
 - [ ] Failed/aborted downloads do not repeatedly restart or block media playback.
+- [x] Windows uninstall removes `%LOCALAPPDATA%\\vlc-whisper\\models` and leaves unrelated user data untouched.
 - [x] Automated native tests pass for downloader, worker IPC/control, lifecycle, presenter, and plugin loading; the
   remaining initial-IDLE-to-DONE activation assertion requires the Windows VLC integration seam.
 - [x] Documentation describes runtime storage and worker-log locations.
@@ -66,6 +70,7 @@ An explicit download request made before or during playback reaches the live wor
 - Run `clang-format --dry-run --Werror` on changed C/H files.
 - Run `cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug && ctest --preset linux-x64-debug`.
 - Run `ctest --test-dir build/linux-x64-debug -T memcheck`.
+- Check the NSIS uninstall script and, when `makensis` is available, compile the installer script.
 - Manual Windows VLC 3.0.23 test: request `tiny.en` before playback, inspect `%TEMP%\\vlc-whisper-worker.log`, verify the `.part`→final rename in `%LOCALAPPDATA%\\vlc-whisper\\models`, observe activation and captions, then repeat during playback and with Abort.
 
 ## Definition of done
@@ -77,7 +82,7 @@ An explicit download request made before or during playback reaches the live wor
 - [x] Required format, build, test, and Valgrind checks pass; Valgrind reports no definite, indirect, or possible
   leaks (only still-reachable allocations from system/runtime libraries).
 - [x] Documentation and roadmap state match the implementation.
-- [ ] Changes are committed on the current branch and not pushed.
+- [x] Changes are committed on the current branch and not pushed.
 
 ## Evidence
 
@@ -88,6 +93,12 @@ An explicit download request made before or during playback reaches the live wor
   run passed it.
 - Lua checks: `luac -p lua/extensions/vlc_whisper_settings.lua` passed; static no-wait scan found no `os.clock`,
   `dlg:update`, `os.execute`, network, wait loop, or repeat construct in the extension.
+- Path-resolution regression: `test_worker_config` creates a model file outside the configured relative path and
+  confirms the worker-config resolver selects the same filename under `--model-dir`; both worker integration targets
+  link the shared resolver and the full native suite passes 21/21.
+- Packaging check: the Windows cross-release `installer` target compiled the generated NSIS script successfully and
+  includes scoped cleanup for `%LOCALAPPDATA%\\vlc-whisper\\models`; it emitted only the existing nonfatal warning for
+  the optional CPU worker artifact.
 - Manual Windows evidence: not yet available in this Linux workspace.
 - Known limitation: end-to-end WinHTTP, VLC Lua config registration timing, SPU rendering, and installed-binary version
   matching require the pinned Windows VLC environment. The Windows check must inspect `%LOCALAPPDATA%\\vlc-whisper\\models`

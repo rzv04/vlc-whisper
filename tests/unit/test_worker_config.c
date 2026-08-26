@@ -2,7 +2,22 @@
 // Covers the --token/--pipe/--model success paths and the worker argv startup
 // failure paths: malformed --token (bad length / non-hex), unknown option,
 // dangling flag with no value, and NULL config (all map to exit code 2).
+#include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+#define VW_TEST_MKDIR(path) _mkdir(path)
+#define VW_TEST_RMDIR(path) _rmdir(path)
+#define VW_TEST_PID() _getpid()
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define VW_TEST_MKDIR(path) mkdir(path, 0700)
+#define VW_TEST_RMDIR(path) rmdir(path)
+#define VW_TEST_PID() getpid()
+#endif
 
 #include "vw_test.h"
 #include "vw_worker_config.h"
@@ -222,6 +237,34 @@ int main(void) {
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_dir) == 0);
     EXPECT_EQ_STR(cfg.model_dir, "/tmp/vlc-whisper/models");
   }
+
+  // --- model lookup: relative configured path resolves by filename in --model-dir ---
+  {
+    char model_dir[64];
+    char model_file[112];
+    snprintf(model_dir, sizeof(model_dir), "vw_test_model_dir_%ld", (long)VW_TEST_PID());
+#ifdef _WIN32
+    snprintf(model_file, sizeof(model_file), "%s\\ggml-tiny.en.bin", model_dir);
+#else
+    snprintf(model_file, sizeof(model_file), "%s/ggml-tiny.en.bin", model_dir);
+#endif
+    EXPECT(VW_TEST_MKDIR(model_dir) == 0);
+    FILE* model = fopen(model_file, "wb");
+    EXPECT(model != NULL);
+    if (model) fclose(model);
+
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    snprintf(cfg.model_path, sizeof(cfg.model_path), "%s", "models/ggml-tiny.en.bin");
+    snprintf(cfg.model_dir, sizeof(cfg.model_dir), "%s", model_dir);
+    char resolved[VW_PATH_MAX_BYTES];
+    EXPECT(vw_worker_config_resolve_model_path(&cfg, resolved, sizeof(resolved)));
+    EXPECT_EQ_STR(resolved, model_file);
+
+    EXPECT(remove(model_file) == 0);
+    EXPECT(VW_TEST_RMDIR(model_dir) == 0);
+  }
+
   // --- failure: --model-dir oversize, missing arg ---
   {
     vw_worker_config_t cfg;

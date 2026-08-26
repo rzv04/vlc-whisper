@@ -129,7 +129,7 @@ Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADI
 
 ### Model storage
 
-Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. Privacy carve-out: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
+Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. At worker startup, an existing configured path wins; when a relative configured path is absent, its filename is also tried under `--model-dir`, allowing a downloaded catalog model to load after a worker restart. Privacy carve-out: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
 
 The worker records model-download diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory). The plugin logs `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`, `PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` through VLC Messages. These diagnostics may include bounded local paths and byte counters, but never auth tokens, PCM, transcripts, or network credentials.
 

@@ -134,7 +134,9 @@ directory, so the plugin never performs network I/O.
 `MODEL_PROGRESS(IDLE)` is an initial state snapshot emitted before the worker's asynchronous downloader changes to
 `DOWNLOADING`; it is not a failed or completed command. The plugin sender keeps the pending catalog-id correlation
 through that snapshot and activates the exact verified per-user path only after `DONE`. The worker writes diagnostic
-events to its temp log, while the plugin mirrors bounded progress and lifecycle events to VLC Messages.
+events to its temp log, while the plugin mirrors bounded progress and lifecycle events to VLC Messages. On startup,
+the worker first uses an existing configured model path; if that relative path is absent, it tries the same filename
+under `--model-dir` so a verified per-user download is loadable by the next worker instance.
 
 Incoming audio frames carry:
 
@@ -188,7 +190,7 @@ Transcribed segments carry:
 
 ## Deployment & Packaging
 
-- **Windows Installer (NSIS)**: Standalone installer (`vlc-whisper-win64-setup.exe`) auto-detects VLC 64-bit installation paths from `HKLM\Software\VideoLAN\VLC`, installs the plugin DLL to `<VLC>\plugins\audio_filter\`, worker executable and models to `<VLC>\`, regenerates VLC's plugin cache (`vlc-cache-gen.exe`), registers an uninstaller, and creates shortcuts (`vlc.exe --audio-filter=vlc_whisper`).
+- **Windows Installer (NSIS)**: Standalone installer (`vlc-whisper-win64-setup.exe`) auto-detects VLC 64-bit installation paths from `HKLM\Software\VideoLAN\VLC`, installs the plugin DLL to `<VLC>\plugins\audio_filter\`, worker executable and models to `<VLC>\`, regenerates VLC's plugin cache (`vlc-cache-gen.exe`), registers an uninstaller, removes the app-owned `%LOCALAPPDATA%\vlc-whisper\models` download directory during uninstall, and creates shortcuts (`vlc.exe --audio-filter=vlc_whisper`).
 - **Path Resolution Hierarchy**:
   1. Plugin DLL directory ancestors (`plugins/audio_filter` $\to$ `plugins` $\to$ `<VLC_ROOT>`).
   2. VLC process executable directory (`GetModuleFileNameA(NULL)`).

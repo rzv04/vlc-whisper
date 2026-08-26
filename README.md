@@ -403,6 +403,9 @@ The worker logs its model path, download destination, HTTP failures, SHA-256 res
 worker snapshot; it is not cancellation. A completed file should be under `%LOCALAPPDATA%\vlc-whisper\models\`,
 not the installed VLC `models\` directory. If the Lua dialog reports that the control value was not retained,
 restart VLC and retry after confirming the extension and plugin came from the same build.
+On the next worker launch, a relative selected path such as `models\ggml-tiny.en.bin` is matched by filename against
+that per-user directory, so the downloaded model can load without changing the installed VLC directory. The Windows
+uninstaller removes this app-owned per-user model directory, including incomplete `.part` files.
 
 ## Manual Plugin Installation (Windows Developer Workflow)
 

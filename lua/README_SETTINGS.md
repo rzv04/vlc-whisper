@@ -38,7 +38,9 @@ For Windows troubleshooting, the final model path is `%LOCALAPPDATA%\vlc-whisper
 the install-time `models\` directory. The worker writes transfer, SHA-256, and atomic-rename diagnostics to
 `%TEMP%\vlc-whisper-worker.log`; VLC Messages shows the plugin-side `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`,
 `PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` events. The first `idle:<model>` progress event is only an initial
-snapshot and must not be interpreted as download completion or cancellation.
+snapshot and must not be interpreted as download completion or cancellation. On the next worker launch, a relative
+selected path is matched by filename against the per-user directory. The Windows uninstaller removes that app-owned
+directory, including incomplete `.part` files.
 
 ## Windows manual test (verbatim)
 
