@@ -21,6 +21,10 @@ set to `models/<chosen>.bin` relative path) and logs `[VLC-Whisper] applied …`
 ~2 s; any diff vs last-applied snapshot → `vw_plugin_respawn_worker()` (brief caption gap, then resumes on a new
 epoch). All four currently apply via respawn (live per-call for language/threads is a future optimization).
 
+VLC 3.0's Lua dropdown API has no selection setter: it selects the first value added. The extension therefore adds
+the persisted engine, model, and language choice first, followed by the remaining choices; the order may change after
+each Apply, but `get_value()` still returns the stable numeric choice ID.
+
 ## Model download behavior
 
 The existing single dialog and menu expose **Download selected model** and **Abort model download**. Each Lua
@@ -63,7 +67,7 @@ directory, including incomplete `.part` files.
 
 2. Open `Tools > Messages`, set **Verbosity** to `2` (Debug) — or launch with `vlc.exe -vvv --audio-filter=vlc_whisper`.
 
-3. Play any media. Open `View > VLC-Whisper Settings` (on some skins `Tools > Extensions > VLC-Whisper Settings`). The dialog preselects current values via `vlc.config.get`; the **Detected backend** label initially shows `(pending — start playback)` and switches to `gpu` or `cpu` after the first session `STARTED` / `STATUS` `resolved_backend`.
+3. Play any media. Open `View > VLC-Whisper Settings` (on some skins `Tools > Extensions > VLC-Whisper Settings`). The dialog puts current engine, model, and language values first via `vlc.config.get`; the **Detected backend** label initially shows `(pending — start playback)` and switches to `gpu` or `cpu` after the first session `STARTED` / `STATUS` `resolved_backend`.
 
 4. Change **Language** `en` → `ro`, click **Apply**. Expected within ~2 s (next sender-loop poll):
 

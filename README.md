@@ -322,8 +322,10 @@ It exposes four controls that map directly to the plugin’s config namespace:
 | Threads | `whisper-threads` | integer `1..16`, default `4` (clamped on Apply) |
 | Detected backend (read-only) | `whisper-backend-active` | informational label refreshed on dialog open; shows `gpu` or `cpu` as resolved by the worker (`STATUS` v1.3 `resolved_backend`) after the first session `STARTED` |
 
-The dialog preselects current values on open via `vlc.config.get` (nil-safe defaults `auto` / bundled
-`models/ggml-tiny.bin` / `en` / `4`). If the user has not selected another model, plugin discovery prioritizes the
+The dialog puts current engine, model, and language values first on open via `vlc.config.get` (nil-safe defaults
+`auto` / bundled `models/ggml-tiny.bin` / `en` / `4`). VLC 3.0's Lua dropdown API selects the first value added and
+has no selection setter, so the remaining choices follow the persisted choice and the list order may change between
+opens. If the user has not selected another model, plugin discovery prioritizes the
 bundled `tiny`; an explicit user-selected `model-path` remains authoritative. `Apply` validates threads (`tonumber`
 + clamp `1..16`), writes all four keys via `vlc.config.set`, and logs `[VLC-Whisper] applied …` lines (filter
 `Tools > Messages`).

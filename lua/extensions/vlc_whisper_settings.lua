@@ -34,6 +34,7 @@ end
 
 -- id -> string maps for dropdown get_value() results (Lua 5.1-safe).
 local engine_map = { [1] = "auto", [2] = "gpu", [3] = "cpu" }
+local engine_labels = { [1] = "auto (default)", [2] = "GPU (Vulkan)", [3] = "CPU only" }
 local model_map = {
   [1] = "tiny.en",
   [2] = "tiny",
@@ -83,6 +84,14 @@ local language_map = {
   [5] = "fr",
   [6] = "es",
 }
+local language_labels = {
+  [1] = "English (en)",
+  [2] = "Romanian (ro)",
+  [3] = "Turkish (tr)",
+  [4] = "German (de)",
+  [5] = "French (fr)",
+  [6] = "Spanish (es)",
+}
 
 -- Reverse lookups for preselection.
 local engine_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
@@ -121,6 +130,14 @@ local function resolve_model_id_from_path(path)
     end
   end
   return default_model_id
+end
+
+-- VLC 3.0 selects the first added dropdown value and exposes no selection setter.
+local function populate_dropdown(widget, labels, selected_id)
+  widget:add_value(labels[selected_id], selected_id)
+  for _id = 1, #labels do
+    if _id ~= selected_id then widget:add_value(labels[_id], _id) end
+  end
 end
 
 local function on_apply()
@@ -253,14 +270,12 @@ local function build_dialog()
   -- Row 1: Engine
   dlg:add_label("Engine:", 1, 1, 1, 1)
   w_engine = dlg:add_dropdown(2, 1, 3, 1)
-  w_engine:add_value("auto (default)", 1)
-  w_engine:add_value("GPU (Vulkan)", 2)
-  w_engine:add_value("CPU only", 3)
-  pcall(function() w_engine:set_value(sel_engine) end)
+  populate_dropdown(w_engine, engine_labels, sel_engine)
 
   -- Row 2: Model (labels map to models/<name>.bin relative paths)
   dlg:add_label("Model:", 1, 2, 1, 1)
   w_model = dlg:add_dropdown(2, 2, 3, 1)
+  local model_labels = {}
   for _id = 1, #model_path_map do
     local label = model_map[_id] or "model"
     if _id == 2 or _id == 4 then
@@ -269,20 +284,14 @@ local function build_dialog()
     if _id == default_model_id then
       label = label .. " (bundled default)"
     end
-    w_model:add_value(label, _id)
+    model_labels[_id] = label
   end
-  pcall(function() w_model:set_value(sel_model) end)
+  populate_dropdown(w_model, model_labels, sel_model)
 
   -- Row 3: Language (concrete codes)
   dlg:add_label("Language:", 1, 3, 1, 1)
   w_language = dlg:add_dropdown(2, 3, 3, 1)
-  w_language:add_value("English (en)", 1)
-  w_language:add_value("Romanian (ro)", 2)
-  w_language:add_value("Turkish (tr)", 3)
-  w_language:add_value("German (de)", 4)
-  w_language:add_value("French (fr)", 5)
-  w_language:add_value("Spanish (es)", 6)
-  pcall(function() w_language:set_value(sel_language) end)
+  populate_dropdown(w_language, language_labels, sel_language)
 
   -- Row 4: Threads -- text input (VLC Lua has no spinbox widget).
   dlg:add_label("Threads:", 1, 4, 1, 1)
