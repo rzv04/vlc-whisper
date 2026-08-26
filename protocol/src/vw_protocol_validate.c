@@ -145,7 +145,9 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       const vw_msg_model_progress_t* p = (const vw_msg_model_progress_t*)payload;
       if (p->stage > VW_MODEL_STAGE_ABORTING) return false;
       if (p->pct > 100) return false;
-      if (p->bytes_total == 0 && p->stage != VW_MODEL_STAGE_IDLE) return false;
+      // Failure may happen before catalog resolution or destination inspection, so its byte total
+      // is legitimately unknown. Active and successful transfers still require a known total.
+      if (p->bytes_total == 0 && p->stage != VW_MODEL_STAGE_IDLE && p->stage != VW_MODEL_STAGE_FAILED) return false;
       return true;
     }
     default:

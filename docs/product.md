@@ -2,7 +2,7 @@
 
 ## Purpose
 
-**VLC-whisper** is a local-captioning extension ensemble for desktop VLC. While VLC plays media, it copies decoded playback audio to a local worker, which produces timed speech captions and returns them to VLC for on-video display. Audio and transcript text remain on the user's computer. The product makes no network request during captioning; the only egress is an explicit, user-triggered worker download of a pinned model.
+**VLC-whisper** is a local-captioning extension ensemble for desktop VLC. While VLC plays media, it copies decoded playback audio to a local worker, which produces timed speech captions and returns them to VLC for on-video display. Audio remains on the user's computer; transcript text leaves the computer only if the user explicitly opts into a future cloud-translation feature. Captioning itself makes no network request; model provisioning and future translation are separate, explicit network paths.
 
 The first supported target is **Windows 10/11 x64 with one pinned VLC 3.x build and English local media**. Linux x64 is a planned port, not an MVP support promise.
 
@@ -22,7 +22,7 @@ The problem is not “perfect subtitles”. Speech recognition is delayed, can r
 
 ## Constraints
 
-- **Privacy boundary:** no cloud inference, telemetry, automatic model download, remote logging, or network listener. An explicit settings action may ask the worker to download one sha256-pinned catalog model into the per-user model directory; Lua and the plugin remain network-free.
+- **Network and privacy boundary:** model downloads are permitted only after an explicit settings action, run by the worker's dedicated download thread while media plays, and limited to sha256-pinned catalog URLs. Future cloud translation may be added only as a separate, explicit user opt-in with clear transcript-egress disclosure. There is no cloud transcription, telemetry, automatic download, remote logging, or network listener; Lua and the current plugin path remain network-free.
 - **Language/code:** project-authored plugin and worker code is C17; whisper.cpp remains an unchanged, pinned third-party C/C++ dependency used through its C-style public API.
 - **Platform:** build Windows x64 artifacts on Ubuntu with CMake and a pinned cross-toolchain; test them in real Windows VLC.
 - **VLC compatibility:** native VLC modules are coupled to VLC internals. Pin and test against a precise VLC release/build; do not claim a durable generic third-party plugin ABI.

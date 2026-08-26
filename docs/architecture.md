@@ -181,9 +181,11 @@ Transcribed segments carry:
 ## Security, isolation, and limits
 
 - Non-elevated: worker runs as the user running VLC.
-- **Network boundary:** normal captioning is local-only. A user-initiated `MODEL_CTRL` is the sole documented
-  exception: the worker downloads one pinned catalog model, verifies SHA-256, and atomically installs it in the
-  per-user model directory. Lua and the plugin remain network-free; see ADR-023.
+- **Network boundary:** normal captioning is local-only. A user-initiated `MODEL_CTRL` permits the worker's
+  dedicated download thread to download one pinned catalog model, including while media plays; it verifies
+  SHA-256 and atomically installs the result in the per-user model directory. Any future cloud translation
+  path must be separately opt-in and disclose transcript egress; the current Lua and plugin paths remain
+  network-free. Model provisioning is specified by ADR-023.
 - Resource limits: worker memory is capped by the selected single-model allocation (the bundled `tiny` model is the
   default). Worker CPU thread count is capped by configuration (default 2 threads; graph compute uses ggml's
   pthread-based threadpool — on Windows OpenMP is disabled at build time so the worker exe stays free of MinGW
@@ -203,4 +205,4 @@ Transcribed segments carry:
   2. VLC process executable directory (`GetModuleFileNameA(NULL)`).
   3. Windows Registry keys `HKCU\Software\VLC-Whisper\InstallPath` and `HKLM\Software\VLC-Whisper\InstallPath`.
   4. Environment paths `%LOCALAPPDATA%\vlc-whisper\` and `%PROGRAMFILES%\vlc-whisper\`.
-- **Licensing & Offline Discipline**: Root permissive MIT License with full third-party attributions (`THIRD_PARTY_NOTICES.md`). Completely zero network connectivity or cloud APIs.
+- **Licensing & Network Discipline**: Root permissive MIT License with full third-party attributions (`THIRD_PARTY_NOTICES.md`). Network access is limited to explicit worker model downloads and separately governed opt-in translation; cloud transcription APIs and telemetry are not used.

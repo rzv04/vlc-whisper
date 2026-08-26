@@ -22,11 +22,14 @@ Support one exact Windows VLC 3.x distribution/build at a time. Native modules m
 
 Consequence: release manifests and CI artifacts include VLC version/commit and ABI assumptions. Compatibility with VLC 4 is a separate port, not an upgrade checkbox.
 
-## ADR-004: Offline-only local IPC
+## ADR-004: Authenticated local IPC and network boundary
 
 **Status:** Accepted.
 
-Use authenticated, current-user-only named pipes on Windows and Unix-domain `SOCK_SEQPACKET` on Linux. No localhost TCP, WebSocket, HTTP server, cloud fallback, telemetry, or auto-download. This meets the privacy claim even when a firewall or another local process is misconfigured.
+Use authenticated, current-user-only named pipes on Windows and Unix-domain `SOCK_SEQPACKET` on Linux. No
+localhost TCP, WebSocket, HTTP server, cloud transcription fallback, telemetry, or automatic download is allowed.
+Explicit catalog model downloads are the documented worker-only network path and are governed by ADR-023.
+Future cloud translation may use a separate explicitly opted-in path and must disclose transcript egress.
 
 ## ADR-005: Final-only captions first
 
@@ -382,8 +385,9 @@ channel.
 
 **Status:** Accepted.
 
-**Context.** The privacy boundary (AGENTS.md Rule 5, ADR-004) forbids network I/O, cloud fallback,
-telemetry, and auto-download. Lazy provisioning of the remaining `models/manifest.json` models
+**Context.** Earlier versions of the privacy boundary (AGENTS.md Rule 5, ADR-004) treated all runtime network
+I/O as forbidden. The product now permits explicit model provisioning, and reserves a separately governed,
+user-opted-in path for future cloud translation. Lazy provisioning of the remaining `models/manifest.json` models
 (`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`) requires network egress, but the
 installer must stay offline and Program Files/WindowsApps must never be written (MS Store installs).
 The question is where and under what conditions that egress is permitted.
@@ -406,8 +410,9 @@ The question is where and under what conditions that egress is permitted.
    `whisper-model-progress`/`whisper-model-status`.
 4. **Per-user model directory.** Downloaded models go to a per-user directory
    (`%LOCALAPPDATA%\vlc-whisper\models` on Windows, `${XDG_DATA_HOME:-$HOME/.local/share}/vlc-whisper/models`
-   on Linux; `--model-dir` override), created on demand. Stale `*.part` files are deleted at worker start;
-   downloads write to `<dest>/<filename>.part` and are atomically renamed on success. Resolve order:
+   on Linux; `--model-dir` override), created on demand. Each destination is guarded by an OS-level
+   interprocess lock held for the full transfer; worker startup never deletes shared `*.part` files. Downloads
+   write to `<dest>/<filename>.part` and are atomically renamed on success. Resolve order:
    explicit `model-path` → install `models/` → per-user dir. If a relative selected path is still configured after
    download, worker startup also matches its filename under `--model-dir`; the Windows uninstaller removes the
    app-owned `%LOCALAPPDATA%\vlc-whisper` model directory.
@@ -423,16 +428,17 @@ The question is where and under what conditions that egress is permitted.
 
 **Consequences.**
 
-- Privacy boundary is preserved with a narrow, auditable carve-out: the only egress is user-initiated,
-  worker-confined, URL-pinned, and hash-gated. Offline playback remains fully functional with the bundled
-  universal `ggml-tiny.bin` (multilingual); downloads are strictly opt-in.
+- The current network policy is narrow and auditable: model egress is user-initiated, worker-confined,
+  URL-pinned, and hash-gated. Future translation egress requires a separate opt-in/provider decision and
+  transcript-disclosure UX. Offline playback remains fully functional with the bundled universal `ggml-tiny.bin`;
+  downloads are strictly opt-in.
 - Failure is safe: `FAILED`/`ABORTING` → `IDLE` is mirrored to `whisper-model-status`; captions may stop
   (`E_MODEL_MISSING` semantics on next respawn) while VLC playback continues uninterrupted.
 - Single-flight semantics (second `DOWNLOAD` while active → immediate `FAILED`) keep behavior deterministic.
 
 **Rejected alternatives.**
 
-- **Plugin-side download** — violates the plugin network-free invariant and would block the VLC UI thread;
+- **Plugin-side download** — violates the plugin network-free boundary and would block the VLC UI thread;
   rejected.
 - **Installer-only provisioning** — no in-product recovery when a user selects a not-yet-bundled model
   mid-session and no MS Store support (cannot write Program Files/WindowsApps); rejected.

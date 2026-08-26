@@ -400,8 +400,9 @@ removed and the status returns to `idle`.
 Models are stored per-user (`%LOCALAPPDATA%\vlc-whisper\models` on Windows,
 `$XDG_DATA_HOME/vlc-whisper/models` on Linux; `--model-dir` override), so MS Store installs and
 restricted Program Files locations remain supported. Resolve order: explicit `model-path` → install
-`models/` → per-user dir. All downloads are explicit and worker-only (see ADR-023); offline use
-stays fully functional with the bundled `ggml-tiny.bin`.
+`models/` → per-user dir. Downloads are explicit and worker-only (see ADR-023), and may continue while media
+plays. Future cloud translation is a separate opt-in feature with transcript-egress disclosure; cloud transcription,
+telemetry, and remote logging are not used. Offline use stays fully functional with the bundled `ggml-tiny.bin`.
 
 The settings dialog reports whether the selected file is already present in the bundled VLC `models\` directory or
 the per-user `%LOCALAPPDATA%\vlc-whisper\models\` directory. Presence is a fast file check only; the worker remains

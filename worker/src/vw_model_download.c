@@ -13,9 +13,10 @@
 #include "vw_sha256.h"
 
 #ifndef _WIN32
-#include <dirent.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -47,13 +48,16 @@ struct vw_model_download {
   char dest_dir[4096];
   char part_path[4096];
   char final_path[4096];
+  char lock_path[4096];
   atomic_bool abort_requested;
 #ifndef _WIN32
   pid_t child_pid;
+  int lock_fd;
 #else
   HINTERNET hSession;
   HINTERNET hConnect;
   HINTERNET hRequest;
+  HANDLE lock_handle;
 #endif
 };
 
@@ -169,6 +173,40 @@ uint8_t vw_model_download_pct(uint64_t bytes_done, uint64_t bytes_total) {
   uint64_t pct = bytes_done * 100ULL / bytes_total;
   if (pct > 100) pct = 100;
   return (uint8_t)pct;
+}
+
+static bool vw_model_download_acquire_lock(vw_model_download_t* dl) {
+  if (!dl || !dl->lock_path[0]) return false;
+#ifndef _WIN32
+  dl->lock_fd = open(dl->lock_path, O_CREAT | O_RDWR, 0600);
+  if (dl->lock_fd < 0) return false;
+  if (flock(dl->lock_fd, LOCK_EX | LOCK_NB) != 0) {
+    close(dl->lock_fd);
+    dl->lock_fd = -1;
+    return false;
+  }
+  return true;
+#else
+  dl->lock_handle =
+      CreateFileA(dl->lock_path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  return dl->lock_handle != INVALID_HANDLE_VALUE;
+#endif
+}
+
+static void vw_model_download_release_lock(vw_model_download_t* dl) {
+  if (!dl) return;
+#ifndef _WIN32
+  if (dl->lock_fd >= 0) {
+    flock(dl->lock_fd, LOCK_UN);
+    close(dl->lock_fd);
+    dl->lock_fd = -1;
+  }
+#else
+  if (dl->lock_handle != INVALID_HANDLE_VALUE) {
+    CloseHandle(dl->lock_handle);
+    dl->lock_handle = INVALID_HANDLE_VALUE;
+  }
+#endif
 }
 
 #ifndef _WIN32
@@ -564,15 +602,28 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
     dl->part_path[plen + 5] = '\0';
   }
   vw_path_join(dl->final_path, sizeof(dl->final_path), dest_dir, entry->filename);
+  int lock_path_len = snprintf(dl->lock_path, sizeof(dl->lock_path), "%s.lock", dl->final_path);
+  if (lock_path_len < 0 || (size_t)lock_path_len >= sizeof(dl->lock_path)) {
+    free(dl);
+    return NULL;
+  }
   atomic_init(&dl->abort_requested, false);
 #ifndef _WIN32
   dl->child_pid = 0;
+  dl->lock_fd = -1;
 #else
   dl->hSession = NULL;
   dl->hConnect = NULL;
   dl->hRequest = NULL;
+  dl->lock_handle = INVALID_HANDLE_VALUE;
 #endif
   pthread_mutex_init(&dl->lock, NULL);
+  if (!vw_model_download_acquire_lock(dl)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "model destination is busy for '%s'", entry->filename);
+    pthread_mutex_destroy(&dl->lock);
+    free(dl);
+    return NULL;
+  }
   // Initialize progress snapshot.
   dl->progress.stage = VW_MODEL_STAGE_IDLE;
   dl->progress.pct = 0;
@@ -582,6 +633,7 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
   snprintf(dl->progress.model_id, sizeof(dl->progress.model_id), "%s", entry->id);
 
   if (pthread_create(&dl->thread, NULL, vw_download_thread, dl) != 0) {
+    vw_model_download_release_lock(dl);
     pthread_mutex_destroy(&dl->lock);
     free(dl);
     return NULL;
@@ -635,6 +687,7 @@ void vw_model_download_free(vw_model_download_t* dl) {
     dl->child_pid = 0;
   }
 #endif
+  vw_model_download_release_lock(dl);
   pthread_mutex_destroy(&dl->lock);
   free(dl);
 }
@@ -671,34 +724,4 @@ bool vw_model_download_default_dir(char* out, size_t out_size) {
   out[out_size - 1] = '\0';
   if (!vw_mkdir_p(out)) return false;
   return true;
-}
-
-void vw_model_download_cleanup_partial(const char* dest_dir) {
-  if (!dest_dir || !dest_dir[0]) return;
-#ifndef _WIN32
-  DIR* d = opendir(dest_dir);
-  if (!d) return;
-  struct dirent* e;
-  while ((e = readdir(d)) != NULL) {
-    size_t n = strlen(e->d_name);
-    if (n > 5 && strcmp(e->d_name + n - 5, ".part") == 0) {
-      char full[4096];
-      vw_path_join(full, sizeof(full), dest_dir, e->d_name);
-      unlink(full);
-    }
-  }
-  closedir(d);
-#else
-  char pattern[4096];
-  snprintf(pattern, sizeof(pattern), "%s\\*.part", dest_dir);
-  WIN32_FIND_DATAA fd;
-  HANDLE h = FindFirstFileA(pattern, &fd);
-  if (h == INVALID_HANDLE_VALUE) return;
-  do {
-    char full[4096];
-    vw_path_join(full, sizeof(full), dest_dir, fd.cFileName);
-    DeleteFileA(full);
-  } while (FindNextFileA(h, &fd));
-  FindClose(h);
-#endif
 }

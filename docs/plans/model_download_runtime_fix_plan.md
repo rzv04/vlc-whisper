@@ -47,7 +47,7 @@ An explicit download request made before or during playback reaches the live wor
   - Failed relay, failed download, failed hash, missing destination, or failed activation reports an explicit terminal status and leaves media playback running.
   - A stale config value cannot trigger an unbounded retry loop; one user command produces at most one active worker download.
 - Privacy/security implications:
-  - Only the existing worker network exception remains; diagnostics contain no auth tokens, transcript text, or PCM.
+  - Model downloads use the existing worker network path; future translation requires separate opt-in disclosure. Diagnostics contain no auth tokens, transcript text, or PCM.
 - Protocol change: none.
 
 ## Acceptance criteria
@@ -77,7 +77,7 @@ An explicit download request made before or during playback reaches the live wor
 
 - [x] C17 and project namespace/style rules remain satisfied.
 - [x] No blocking work is introduced in the VLC audio callback or Lua callback.
-- [x] Offline/privacy and bounded-resource invariants remain satisfied.
+- [x] Approved network-policy and bounded-resource invariants remain satisfied.
 - [x] Error paths preserve VLC playback.
 - [x] Required format, build, test, and Valgrind checks pass; Valgrind reports no definite, indirect, or possible
   leaks (only still-reachable allocations from system/runtime libraries).

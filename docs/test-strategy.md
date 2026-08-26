@@ -71,7 +71,8 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/test_protocol_codec.c` & `test_protocol_validate.c` (17d): Protocol v1.2 serialization and schema validation: 1-byte `source_active` payload in `VW_MSG_STARTED`, legal media-range validation for `VW_MSG_POSITION` (`current_pts_us` and `input_time_us` bounded in `[-10s, 10 years]`), finite positive playback rate (`isfinite` and in `(0, 16]`), and strict position flag bitmask validation (`VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED`).
 - `tests/unit/test_caption_presenter.c` (17d): SPU subpicture channel persistence across repeated blanking flushes, rate-scaled lead clamping, and pause transition blanking.
 - `tests/unit/test_caption_presenter.c`: model-download progress uses a separate wall-clock SPU channel, survives caption blanking, and flushes explicitly on abort/teardown.
-- `tests/unit/test_model_download.c`: local-file verified download, SHA-256 vectors, catalog lookup, progress math, abort cleanup, and partial-file removal without external network access.
+- `tests/unit/test_model_download.c`: local-file verified download, SHA-256 vectors, catalog lookup, progress math, abort cleanup, and same-destination interprocess single-flight locking.
+- `tests/unit/test_protocol_codec.c` and `test_protocol_validate.c`: zero-total terminal `FAILED` model progress is accepted while zero-total active progress remains rejected.
 - Model-download regression coverage must preserve the pending catalog-id correlation across the worker's initial
   `MODEL_PROGRESS(IDLE)` snapshot, then accept `DONE` as the activation trigger; `FAILED`, abort, worker death, and
   transport teardown are the terminal clearing paths. Windows manual coverage additionally checks the per-user final

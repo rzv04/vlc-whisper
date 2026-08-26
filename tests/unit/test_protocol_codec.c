@@ -326,12 +326,16 @@ int main(void) {
     EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
     bad.pct = 255;
     EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
-    // bytes_total ==0 only allowed for IDLE
+    // Active progress still requires a known total.
     bad.stage = VW_MODEL_STAGE_DOWNLOADING;
     bad.pct = 50;
     bad.bytes_total = 0;
     EXPECT(!vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
-    // valid must pass
+    // Terminal failures may have no known byte total.
+    bad.stage = VW_MODEL_STAGE_FAILED;
+    bad.pct = 0;
+    EXPECT(vw_protocol_validate_payload(VW_MSG_MODEL_PROGRESS, &bad));
+    // IDLE and DONE with valid totals must pass.
     bad.stage = VW_MODEL_STAGE_IDLE;
     bad.pct = 0;
     bad.bytes_total = 0;

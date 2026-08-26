@@ -183,7 +183,10 @@ static void test_local_file_download(void) {
   EXPECT((uint64_t)st.st_size == sizeof(payload) - 1);
 
   vw_model_download_free(dl);
+  char lock_path[4096];
+  snprintf(lock_path, sizeof(lock_path), "%s/local.bin.lock", dest_dir);
   EXPECT(unlink(final_path) == 0);
+  EXPECT(unlink(lock_path) == 0);
   EXPECT(unlink(source_tmpl) == 0);
   EXPECT(rmdir(dest_dir) == 0);
 #endif
@@ -193,7 +196,7 @@ static void test_poll_and_lifecycle(void) {
 #ifdef _WIN32
   (void)0;
   return;  // mkdtemp is POSIX-only; Linux coverage suffices
-#endif
+#else
   vw_download_progress_t prog;
   EXPECT(vw_model_download_poll(NULL, &prog) == false);
   vw_model_download_abort(NULL);
@@ -217,6 +220,8 @@ static void test_poll_and_lifecycle(void) {
   vw_model_catalog_entry_t fifo_entry = {"fifo", "fifo.bin", fifo_url, "", 1, false};
   vw_model_download_t* dl = vw_model_download_start(&fifo_entry, tmpdir);
   if (dl) {
+    // A second worker cannot claim the same destination while the first owns its interprocess lock.
+    EXPECT(vw_model_download_start(&fifo_entry, tmpdir) == NULL);
     EXPECT(vw_model_download_poll(dl, NULL) == false);
     EXPECT(vw_model_download_poll(dl, &prog) == true);
     EXPECT_EQ_STR(prog.model_id, "fifo");
@@ -227,50 +232,14 @@ static void test_poll_and_lifecycle(void) {
   }
   char part_path[4096];
   snprintf(part_path, sizeof(part_path), "%s/fifo.bin.part", tmpdir);
+  char lock_path[4096];
+  snprintf(lock_path, sizeof(lock_path), "%s/fifo.bin.lock", tmpdir);
   struct stat st;
   EXPECT(stat(part_path, &st) != 0);
   EXPECT(unlink(fifo_path) == 0);
+  EXPECT(unlink(lock_path) == 0);
   EXPECT(rmdir(tmpdir) == 0);
-}
-
-static void test_cleanup_partial(void) {
-#ifdef _WIN32
-  (void)0;
-  return;  // mkdtemp is POSIX-only; Linux coverage suffices
 #endif
-  char tmpl[] = "/tmp/vw_test_cleanup_XXXXXX";
-  char* tmpdir = mkdtemp(tmpl);
-  EXPECT(tmpdir != NULL);
-
-  char part1[4096], part2[4096], keep[4096];
-  snprintf(part1, sizeof(part1), "%s/a.part", tmpdir);
-  snprintf(part2, sizeof(part2), "%s/b.part", tmpdir);
-  snprintf(keep, sizeof(keep), "%s/keep.bin", tmpdir);
-  FILE* f = fopen(part1, "wb");
-  EXPECT(f != NULL);
-  fwrite("x", 1, 1, f);
-  fclose(f);
-  f = fopen(part2, "wb");
-  EXPECT(f != NULL);
-  fwrite("y", 1, 1, f);
-  fclose(f);
-  f = fopen(keep, "wb");
-  EXPECT(f != NULL);
-  fwrite("z", 1, 1, f);
-  fclose(f);
-
-  vw_model_download_cleanup_partial(tmpdir);
-  struct stat st;
-  EXPECT(stat(part1, &st) != 0);
-  EXPECT(stat(part2, &st) != 0);
-  EXPECT(stat(keep, &st) == 0);
-
-  // Null and non-existent dir should not crash.
-  vw_model_download_cleanup_partial(NULL);
-  vw_model_download_cleanup_partial("/nonexistent/path/xyz");
-
-  unlink(keep);
-  rmdir(tmpdir);
 }
 
 int main(void) {
@@ -280,7 +249,6 @@ int main(void) {
   test_default_dir();
   test_local_file_download();
   test_poll_and_lifecycle();
-  test_cleanup_partial();
   printf("test_model_download: all checks passed\n");
   return 0;
 }

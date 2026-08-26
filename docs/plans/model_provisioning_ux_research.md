@@ -15,7 +15,7 @@ wall-clock SPU channel that is separate from captions and survives pause/seek bl
 
 1. Which model to bundle as-is: English-only `ggml-tiny.en.bin` (current) vs universal `ggml-tiny.bin`?
 2. Who performs lazy downloads of the other six models, and when does the user opt in?
-3. How is download progress surfaced, given: single-dialog constraint, no progress-bar widget, and the offline/privacy invariant (`AGENTS.md` Rule 5)?
+3. How is download progress surfaced, given: single-dialog constraint, no progress-bar widget, and the explicit-network/privacy policy (`AGENTS.md` Rule 5)?
 4. Can the extension GUI status update in real time? (verified against VLC 3.0.23 sources — §7)
 
 ---
@@ -58,7 +58,7 @@ Code-level facts checked before designing the download flow:
 
 **Recommendation: B, with A retained as the offline fallback.** The installer keeps shipping the bundled default (works with zero network forever); runtime download is strictly **user-initiated, one model at a time, sha256-pinned, from the pinned Hugging Face URL in `models/manifest.json`**. Helper scripts stay for air-gapped users.
 
-**Privacy invariant handling:** `AGENTS.md` Rule 5 says "zero network requests". A user-initiated model fetch is not telemetry/cloud transcription, but the rule as written forbids it. This requires a new ADR (decisions.md) carving out: *network egress occurs only inside the worker process, only on explicit user action in the settings GUI, only to the pinned model URL, only with sha256 verification; never automatic, never at playback start, never for any other host*. The plugin itself remains network-free (it only relays control/progress frames over the existing authenticated local IPC).
+**Network-policy handling:** `AGENTS.md` Rule 5 now permits explicit worker model fetches and reserves separately governed opt-in cloud translation. Model egress occurs only inside the worker process, only on explicit user action, only to pinned catalog URLs, and only with sha256 verification; never automatic or at playback start. Future translation must disclose transcript egress. The plugin itself remains network-free for these paths (it only relays control/progress frames over authenticated local IPC).
 
 **Worker HTTP client:** Windows → WinHTTP (system library, no new link dependency, supports progress callbacks + cancellation). Linux → fork `curl -fL -o <tmp>` as a subprocess (zero new link dependency; curl is near-universal) or link libcurl if a dependency is acceptable. Either way the download must run on a **dedicated worker thread**, never the IPC loop (single-listener constraint; the connection must keep answering STATUS/KEEPALIVE during a multi-minute download).
 
@@ -69,7 +69,7 @@ Code-level facts checked before designing the download flow:
 - `$INSTDIR\models\` (Program Files) requires admin to write → **not writable at runtime** for standard users, and **read-only entirely** for MS Store VLC installs (`WindowsApps`).
 - **Recommendation: per-user model directory**, e.g. `%LOCALAPPDATA%\vlc-whisper\models\` (Windows) / `~/.local/share/vlc-whisper/models/` (Linux), created on demand.
 - Resolution order becomes: configured `model-path` (if set) → install-dir `models/` (bundled default) → per-user dir (downloaded models). The plugin probe (`vw_plugin_resolve_model_path`) and the worker's own fallback must both learn the third location; the worker should also accept an explicit absolute `--model` from the plugin argv (already forwarded today).
-- Atomicity: download to `<name>.part`, verify sha256 against manifest, `rename()` into place. On worker start, delete stale `*.part` (covers VLC killed mid-download — the plugin tears down the worker on exit, which aborts the transfer).
+- Atomicity: download to `<name>.part`, verify sha256 against manifest, `rename()` into place. Each destination has an interprocess ownership lock for the transfer lifetime; worker startup never deletes another worker's `*.part` file.
 
 ---
 
@@ -124,7 +124,7 @@ Reuses the 19b live-apply pattern end to end; protocol change is a compatible mi
 
 1. **Config vars** (registered like the existing `whisper-*` items; read-only mirrors follow the `whisper-backend-active` precedent): `whisper-model-download` (string: model id to fetch, or `abort`), `whisper-model-progress` (int 0–100, read-only mirror), `whisper-model-status` (string: `idle|downloading|verifying|done|failed|missing|aborting`, read-only mirror).
 2. **Plugin** (2 s snapshot loop already exists): detects `whisper-model-download` diff → sends new `MODEL_CTRL` frame to worker (same authenticated IPC, single listener). Drains `MODEL_PROGRESS` frames → `config_PutInt`/`PutPsz` mirrors (VLC config lock already proven safe for cross-thread writes in 19b's `whisper-backend-active`).
-3. **Worker**: dedicated download thread; WinHTTP/subprocess-curl to the manifest URL into `<per-user dir>/<name>.part`; sha256 verify; atomic rename; progress frames at ~1 Hz (pct + bytes); honors `abort`; never blocks the IPC loop; deletes stale `.part` at startup.
+3. **Worker**: dedicated download thread; WinHTTP/subprocess-curl to the manifest URL into `<per-user dir>/<name>.part`; sha256 verify; atomic rename; progress frames at ~1 Hz (pct + bytes); honors `abort`; never blocks the IPC loop; holds an interprocess destination lock and never deletes another worker's partial file at startup.
 4. **Extension**: `Download` / `Abort` menu entries write the control variable, update the current label once, and
    return. No filesystem access, network, timer, polling loop, sleep, or busy wait exists in Lua. The plugin sender
    owns progress rendering and the worker owns transfer cancellation.
@@ -138,7 +138,7 @@ Reuses the 19b live-apply pattern end to end; protocol change is a compatible mi
 |---|---|
 | Bundle which model | Universal `ggml-tiny.bin`; keep `tiny.en` lazy-downloadable |
 | Download executor | Worker process, dedicated thread (WinHTTP / subprocess curl), sha256-pinned from `models/manifest.json` |
-| Invariant handling | New ADR: user-initiated-only network carve-out; plugin stays network-free |
+| Network policy | ADR-023 permits explicit worker model downloads; future translation is separately opt-in and disclosed; plugin stays network-free |
 | Write location | Per-user model dir; probe order config → install dir → user dir |
 | User trigger points | Installer checkboxes (optional) · settings dropdown annotation + menu entry (primary) · `E_MODEL_MISSING` OSD (passive) |
 | Progress UI | Dedicated C-managed wall-clock SPU channel over the video; the existing Lua label is command feedback only; separate from the caption SPU channel |

@@ -28,9 +28,8 @@ typedef struct vw_download_progress {
 
 typedef struct vw_model_download vw_model_download_t;
 
-// Starts an asynchronous single-flight model download in a dedicated thread
-// copying the catalog entry and destination directory without performing network
-// I/O synchronously; returns handle or NULL on invalid args or thread failure.
+// Starts an asynchronous single-flight model download, claiming an interprocess
+// destination lock before the dedicated thread can touch its partial file.
 vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* entry, const char* dest_dir);
 
 // Requests asynchronous abort of an in-flight download; sets abort flag, kills
@@ -49,10 +48,6 @@ void vw_model_download_free(vw_model_download_t* dl);
 // else $XDG_DATA_HOME/vlc-whisper/models or ~/.local/share/vlc-whisper/models) and
 // ensures it exists with mkdir -p semantics; returns true on success.
 bool vw_model_download_default_dir(char* out, size_t out_size);
-
-// Deletes any stale *.part temporary files left from previous interrupted
-// downloads inside dest_dir; invoked once at worker startup for cleanliness.
-void vw_model_download_cleanup_partial(const char* dest_dir);
 
 // Pure helper computing saturated progress percentage bytes_done*100/bytes_total,
 // clamping to 100 and handling zero total without division by zero.

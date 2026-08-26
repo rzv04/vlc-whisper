@@ -66,7 +66,7 @@ Model-download controls remain in the single VLC-Whisper Lua dialog, but Lua nev
 
 ### Privacy/security implications
 
-The existing ADR-023 boundary is preserved: only the worker performs explicit, pinned, sha256-verified network downloads. Lua, the plugin, transcripts, and PCM remain network-free and non-persistent.
+The ADR-023 model-download boundary remains: only the worker performs explicit, pinned, sha256-verified model downloads. Future cloud translation is a separate opt-in feature and must disclose transcript egress. Lua and the current plugin path remain network-free; PCM remains non-persistent.
 
 ### Protocol change
 
@@ -97,7 +97,7 @@ None. Existing protocol v1.4 `MODEL_CTRL` and `MODEL_PROGRESS` frames are reused
 
 - [x] C17 and project namespace/style rules remain satisfied.
 - [x] No blocking work is introduced in the VLC audio callback or Lua extension callback.
-- [x] Existing offline/privacy and bounded-resource invariants remain satisfied.
+- [x] Explicit model-download network policy, future translation boundary, and bounded-resource invariants remain documented.
 - [x] Error paths preserve VLC playback.
 - [x] Required formatting, build, tests, and Valgrind checks pass.
 - [x] Documentation and roadmap state match the implementation.

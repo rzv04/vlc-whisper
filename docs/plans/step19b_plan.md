@@ -7,7 +7,7 @@ A single user-visible outcome: a VLC Lua extension dialog ("VLC-Whisper Settings
 - Relevant docs/ADR:
   - `docs/decisions.md` ADR-022 (Lua extension as primary GUI host, standalone `vlc-whisper-settings.exe` retained as rich-panel tier; `audio_filter` cannot own menu — Extensions menu is the blessed surface).
   - `docs/plans/step19a_research_dossier.md` §§1–4 (module capabilities, worker single-listener constraint, per-call vs context-init Whisper params).
-  - Roadmap 19b spec + product invariants (`AGENTS.md` Rule 4: never block audio callback; Rule 5 offline-only product — no cloud at playback time).
+  - Roadmap 19b spec + product invariants (`AGENTS.md` Rule 4: never block audio callback; Rule 5 local-first product — no cloud transcription at playback time).
   - Pinned default model `tiny.en` is English-only (`is_multilingual()==false`); DoD requires no auto-detect entry.
 - VLC/worker/protocol version affected:
   - Protocol v1.2 → v1.3 (minor bump, additive tail field; same-major-wire-compatible).
@@ -45,7 +45,7 @@ A single user-visible outcome: a VLC Lua extension dialog ("VLC-Whisper Settings
   - Missing model file: dropdown selection writes a path pointing at a file not yet on disk; worker init then emits `E_MODEL_MISSING` and captions disable while media playback continues (existing UX) until 19c provisions the model.
   - Backend resolution truth: compile-flag `VW_HAVE_VULKAN` via `worker/CMakeLists.txt` plus configured `backend` value; resolved = `cpu` when `backend==cpu` or not Vulkan-compiled, else `gpu`.
 - Privacy/security implications:
-  - Zero network at playback time preserved; no new listener opened; model/backend changes never auto-download.
+  - No unsolicited network at playback time; no new listener opened; model/backend changes never auto-download.
 - Protocol change: compatible minor bump (v1.3, same major). Decoder tolerant of legacy 44 B STATUS (zero-fills tail); new encoder always writes 60 B. No capability flag needed — both peers ship together.
 
 ## Acceptance criteria
@@ -77,7 +77,7 @@ Exact commands, fixtures, target OS/VLC build, and manual verification steps.
 ## Definition of done
 - [x] C17 code; no project-authored C++ introduced
 - [x] No blocking work in VLC audio callback
-- [x] No network access, telemetry, transcript/PCM persistence, or sensitive logs introduced
+- [x] No unapproved network access, telemetry, transcript/PCM persistence, or sensitive logs introduced
 - [x] Memory, audio queue, frame, text, and retry limits are bounded
 - [x] Error path is safe: captions may stop, playback does not
 - [x] Unit/contract/integration tests pass as applicable
@@ -90,4 +90,3 @@ Exact commands, fixtures, target OS/VLC build, and manual verification steps.
 - Build/test outputs or CI links: `cmake --preset linux-x64-debug && cmake --build -j4` 0 errors; `ctest 20/20 100%`; `windows-x64-debug-cpu` 0 link errors (after adding `config_GetInt`/`config_PutPsz`/`config_FindConfig` exports); `luac -p` OK.
 - Measured performance (if relevant): respawn poll cadence ~2 s (tick counter at `vw_plugin_sender_main` 5 ms loop); caption gap ≈ worker restart time (existing epoch machinery, same as seek handling).
 - Known limitations/follow-ups: all four settings currently apply via respawn (live per-call apply for language/threads without restart is a future optimization — no behavior difference except gap); auto-detect language deliberately omitted; model provisioning remains bundled-only in this step (installer/CPack include whatever `*.bin` + `*.json` exist under `models/` at build time; selecting a not-yet-bundled label writes the path and worker respawn surfaces `E_MODEL_MISSING` until the file is provisioned manually — see `cmake/vw_provision_model.cmake` reuse). Only **one dialog per Lua extension** is supported (`vlc.dialog` singleton; extension `activate` builds a single `dlg`; verified against `share/lua/README.txt` `vlc.dialog("Title")` pattern and existing extensions' single-global-dlg idiom), so any future on-demand download UI must be managed **inside this same dialog** and — to preserve the non-blocking GUI guarantee from `step19a_research_dossier.md` Q1 / `step19a_lua_route_feasibility.md` — the fetch **must execute in the worker process, not Lua**: Lua writes a control var (e.g. `whisper-model-download`), the plugin forwards it to the worker, which performs the sha256-pinned download and mirrors progress back through a config var the dialog polls. An `os.execute` or in-Lua HTTP fetch would block VLC's UI thread.
-

@@ -88,6 +88,39 @@ static bool send_error(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESS
   return true;
 }
 
+// Builds and sends a model-progress frame, including terminal failures with unknown byte totals.
+static bool vw_worker_send_model_progress(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESSION_ID_BYTES],
+                                          uint8_t stage, uint8_t pct, uint64_t bytes_done, uint64_t bytes_total,
+                                          const char* model_id, uint32_t* sequence) {
+  if (!handle || !session_id || !model_id || !sequence) return false;
+
+  vw_msg_model_progress_t progress;
+  memset(&progress, 0, sizeof(progress));
+  memcpy(progress.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
+  progress.stage = stage;
+  progress.pct = pct;
+  progress.bytes_done = bytes_done;
+  progress.bytes_total = bytes_total;
+  snprintf(progress.model_id, sizeof(progress.model_id), "%s", model_id);
+
+  uint8_t payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &progress, payload, sizeof(payload), &payload_len)) {
+    return false;
+  }
+
+  vw_frame_header_t header = {.magic = VW_PROTOCOL_MAGIC,
+                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                              .type = VW_MSG_MODEL_PROGRESS,
+                              .payload_length = (uint32_t)payload_len,
+                              .sequence = ++(*sequence)};
+  uint8_t header_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&header, header_buf, sizeof(header_buf))) return false;
+  vw_ipc_send(handle, header_buf, sizeof(header_buf));
+  vw_ipc_send(handle, payload, payload_len);
+  return true;
+}
+
 // Dedicated IPC reader thread (ADR-013): the only thread that reads from the pipe. Continuously
 // drains frames into the bounded worker frame queue so inference on the main loop never stalls
 // transport reads. Never sends; all replies stay single-writer in vw_worker_run's main loop.
@@ -231,7 +264,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                  "Silero VAD model not specified; operating on zero-config RMS Energy fallback");
   }
 
-  // Model download state: per-user directory resolved once, stale .part files cleaned before the loop.
+  // Model download state: per-user directory resolved once. Per-download locks protect shared partial files.
   vw_model_download_t* model_dl = NULL;
   char dl_dir[VW_PATH_MAX_BYTES];
   dl_dir[0] = '\0';
@@ -244,7 +277,6 @@ int vw_worker_run(const vw_worker_config_t* config) {
   }
   if (dl_dir_ready) {
     vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_MODEL_DL", "model download directory '%s'", dl_dir);
-    vw_model_download_cleanup_partial(dl_dir);
   } else {
     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "model download directory unavailable");
   }
@@ -338,6 +370,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
       // If we have look-ahead decoding work to do (and haven't hit EOF), don't sleep
       if (session_active && source_mode && source_decoder && !paused && !source_eof &&
           (decoded_pts_us < vw_saturating_add_i64(current_playback_pts_us, lead_target_us))) {
+        break;
+      }
+      if (model_dl) {
+        // Leave the queue wait so the main loop can poll and emit download progress while no
+        // session, source decoder, or audio traffic is active.
+        vw_platform_sleep_ms(5);
         break;
       }
       vw_platform_sleep_ms(5);
@@ -771,35 +809,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 }
               }
               if (is_active) {
-                vw_download_progress_t snap;
-                if (vw_model_download_poll(model_dl, &snap)) {
-                  vw_msg_model_progress_t prog;
-                  memset(&prog, 0, sizeof(prog));
-                  if (session_active) {
-                    memcpy(prog.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
-                  } else {
-                    memcpy(prog.session_id.bytes, payload_decoded.model_ctrl.session_id.bytes, VW_SESSION_ID_BYTES);
-                  }
-                  prog.stage = (uint8_t)snap.stage;
-                  prog.pct = (uint8_t)snap.pct;
-                  prog.bytes_done = snap.bytes_done;
-                  prog.bytes_total = snap.bytes_total;
-                  snprintf(prog.model_id, sizeof(prog.model_id), "%s", snap.model_id);
-                  uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
-                  size_t prog_len = 0;
-                  if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &prog, prog_payload, sizeof(prog_payload),
-                                                 &prog_len)) {
-                    vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                                  .major = VW_PROTOCOL_VERSION_MAJOR,
-                                                  .type = VW_MSG_MODEL_PROGRESS,
-                                                  .payload_length = (uint32_t)prog_len,
-                                                  .sequence = ++sequence};
-                    uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
-                    vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
-                    vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
-                    vw_ipc_send(handle, prog_payload, prog_len);
-                  }
-                }
+                const uint8_t* progress_session =
+                    session_active ? session_id.bytes : payload_decoded.model_ctrl.session_id.bytes;
+                vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "rejecting model '%s': another download is active",
+                             req_id);
+                vw_worker_send_model_progress(handle, progress_session, VW_MODEL_STAGE_FAILED, 0, 0, 0, req_id,
+                                              &sequence);
               } else {
                 if (model_dl) {
                   vw_model_download_free(model_dl);
@@ -901,29 +916,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
           should_send = true;
         }
         if (should_send) {
-          vw_msg_model_progress_t msg;
-          memset(&msg, 0, sizeof(msg));
-          if (session_active) {
-            memcpy(msg.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
-          }
-          msg.stage = (uint8_t)prog.stage;
-          msg.pct = (uint8_t)prog.pct;
-          msg.bytes_done = prog.bytes_done;
-          msg.bytes_total = prog.bytes_total;
-          snprintf(msg.model_id, sizeof(msg.model_id), "%s", prog.model_id);
-          uint8_t prog_payload[VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES];
-          size_t prog_len = 0;
-          if (vw_protocol_encode_payload(VW_MSG_MODEL_PROGRESS, &msg, prog_payload, sizeof(prog_payload), &prog_len)) {
-            vw_frame_header_t prog_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                          .major = VW_PROTOCOL_VERSION_MAJOR,
-                                          .type = VW_MSG_MODEL_PROGRESS,
-                                          .payload_length = (uint32_t)prog_len,
-                                          .sequence = ++sequence};
-            uint8_t prog_hdr_buf[sizeof(vw_frame_header_t)];
-            vw_protocol_encode_header(&prog_hdr, prog_hdr_buf, sizeof(prog_hdr_buf));
-            vw_ipc_send(handle, prog_hdr_buf, sizeof(prog_hdr_buf));
-            vw_ipc_send(handle, prog_payload, prog_len);
-          }
+          const uint8_t zero_session[VW_SESSION_ID_BYTES] = {0};
+          const uint8_t* progress_session = session_active ? session_id.bytes : zero_session;
+          vw_worker_send_model_progress(handle, progress_session, (uint8_t)prog.stage, (uint8_t)prog.pct,
+                                        prog.bytes_done, prog.bytes_total, prog.model_id, &sequence);
           last_stage = (int)prog.stage;
           last_progress_send_us = now_us;
           if (prog.stage == VW_MODEL_STAGE_DONE) {

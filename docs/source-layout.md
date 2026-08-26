@@ -71,7 +71,7 @@ vlc-whisper/
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
 │   │   ├── vw_worker_config.c                 # Configuration setup, --vad-model parsing and auto-discovery
 │   │   ├── vw_sha256.c                        # Streaming SHA-256 implementation
-│   │   └── vw_model_download.c                # WinHTTP/curl download, diagnostics, .part → verify → atomic rename
+│   │   └── vw_model_download.c                # WinHTTP/curl download, ownership lock, diagnostics, .part → verify → atomic rename
 │   └── third_party/                           # Pinned external C/C++ dependencies
 │       ├── vlc-3.0.23/                        # Pinned VLC header SDK headers
 │       └── whisper.cpp/                       # Pinned whisper.cpp C/C++ inference engine
@@ -187,9 +187,9 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_sha256.h`          | Streaming SHA-256 computation for model download verification      |
 | `vw_sha256.c`          | Incremental SHA-256 implementation, streaming hash while writing .part |
 | `vw_model_catalog.h`   | Committed model catalog (7 models, pinned sha256/bytes, Hugging Face URLs) |
-| `vw_model_download.h`  | Download engine interface: dedicated thread, single-flight, abort, progress snapshot |
-| `vw_model_download.c`  | WinHTTP/curl download, .part → sha256 verify → atomic rename into per-user dir; abort and worker-death cleanup |
-| `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, local success, abort cleanup, and retry-then-fail paths |
+| `vw_model_download.h`  | Download engine interface: dedicated thread, interprocess ownership lock, single-flight, abort, progress snapshot |
+| `vw_model_download.c`  | WinHTTP/curl download, per-model lock, .part → sha256 verify → atomic rename into per-user dir; abort and worker-death cleanup |
+| `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, local success, abort cleanup, same-destination locking, and retry-then-fail paths |
 
 The builder exposes `vw_segment_builder_push_hypothesis` (whole-phrase final-subtitles dedup: exact,
 fragment, and expanded superstring hypotheses are dropped; queue grows dynamically; history commits after a

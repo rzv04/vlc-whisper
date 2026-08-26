@@ -11,7 +11,7 @@ One user-visible outcome: the installer bundles the universal multilingual `ggml
 - VLC/worker/protocol version affected:
   - Protocol v1.3 → **v1.4** (compatible minor): two new message types. `VW_CLIENT_VERSION`/`VW_WORKER_VERSION` 1.3.0 → 1.4.0.
 - Assumptions and explicit non-goals:
-  - The plugin itself performs **zero network I/O**; only the worker process egresses, and only on an explicit user action relayed over the existing authenticated local IPC.
+  - The plugin itself performs **zero network I/O**; the worker process may egress for explicit model downloads, and future translation may use a separately governed opt-in path relayed over authenticated local IPC.
   - Resume/Range downloads are out of scope (v1 accepts full re-download; largest model ≈ 3.1 GB).
   - No second Lua dialog (VLC allows one per extension); all progress renders inside the existing settings dialog.
   - GUI "auto" language entry stays out (step 20); worker CLI accepts `--language auto` as the prerequisite.
@@ -60,7 +60,7 @@ Base URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/`:
 `worker/include/vw_model_catalog.h` is a **committed** header (static const array; no build-time JSON parsing — boring, reviewable). `models/manifest.json` mirrors it for docs/installer/scripts; both files cross-reference each other in comments.
 
 ### Storage & integrity
-- Per-user model dir: Windows `%LOCALAPPDATA%\vlc-whisper\models`; Linux `${XDG_DATA_HOME:-$HOME/.local/share}/vlc-whisper/models`. Worker CLI `--model-dir <path>` overrides. Created on demand; stale `*.part` deleted at worker start.
+- Per-user model dir: Windows `%LOCALAPPDATA%\vlc-whisper\models`; Linux `${XDG_DATA_HOME:-$HOME/.local/share}/vlc-whisper/models`. Worker CLI `--model-dir <path>` overrides. Created on demand; each destination has an interprocess lock and worker startup never sweeps shared `*.part` files.
 - Download: `<dest>/<filename>.part` → stream SHA-256 while writing → compare catalog hash → atomic rename (`rename()` POSIX; `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` Windows). Hash mismatch → delete `.part`, retry once, then `failed`.
 - Engine: dedicated thread, single-flight (second DOWNLOAD while active → immediate `failed` progress with `stage=DOWNLOADING` semantics replaced by error status; GUI prevents this anyway). Progress snapshot under mutex; poller reads it. Abort: flag + join; Windows `WinHttpCloseHandle`, Linux `kill(curl child)`.
 
@@ -77,7 +77,7 @@ Base URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/`:
 - Offline/restricted network: `FAILED` after WinHTTP/curl error; bundled `tiny` keeps working.
 
 ### Privacy/security implications
-- ADR-023: network egress ONLY inside worker, ONLY on explicit user action relayed via authenticated local IPC, ONLY to pinned catalog URLs, ONLY with sha256 verification; never automatic, never at playback start; no telemetry; plugin stays network-free; transcripts/PCM never persisted (unchanged).
+- ADR-023: model-download egress is only inside the worker, only on explicit user action relayed via authenticated local IPC, only to pinned catalog URLs, and only with sha256 verification; future translation requires separate opt-in disclosure; no telemetry; plugin stays network-free; PCM never persists.
 
 ### Protocol change: compatible minor (v1.3 → v1.4)
 
@@ -106,7 +106,7 @@ Base URL `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/`:
 ## Definition of done
 - [x] C17 code; no project-authored C++ introduced
 - [x] No blocking work in VLC audio callback
-- [x] Network access confined to worker, user-initiated, pinned URLs + sha256 (ADR-023); no telemetry, no transcript/PCM persistence
+- [x] Model-download access confined to worker, user-initiated, pinned URLs + sha256 (ADR-023); future translation remains a separate opt-in; no telemetry or PCM persistence
 - [x] Memory, download, queue, frame, and retry limits are bounded
 - [x] Error path is safe: captions may stop, playback does not
 - [x] Unit/contract/integration tests pass as applicable
