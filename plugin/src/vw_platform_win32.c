@@ -14,18 +14,9 @@
 #include "vw_platform.h"
 
 bool vw_platform_get_random_bytes(void* buffer, size_t size) {
-  if (!buffer || size == 0) {
-    return false;
-  }
-  // memset(buffer, 0x42, size);
-
-  // generate a random size-byte (32) token for authentication
+  if (!buffer || size == 0) return false;
   NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-  if (!BCRYPT_SUCCESS(status)) {
-    return false;
-  }
-
-  return true;
+  return BCRYPT_SUCCESS(status);
 }
 
 int64_t vw_platform_get_time_us(void) {
@@ -34,52 +25,32 @@ int64_t vw_platform_get_time_us(void) {
   ULARGE_INTEGER uli;
   uli.LowPart = ft.dwLowDateTime;
   uli.HighPart = ft.dwHighDateTime;
-  // Convert to microseconds since Unix epoch (January 1, 1970)
   return (int64_t)((uli.QuadPart - 116444736000000000ULL) / 10);
 }
 
 int64_t vw_platform_get_monotonic_time_us(void) {
-  // QueryPerformanceCounter: microsecond-resolution monotonic clock that keeps
-  // advancing across system sleep on modern hardware. GetTickCount64 would be
-  // only ~15.6 ms granularity and frozen during S3/S4 suspension, which can
-  // stall the client's handshake/terminate deadlines for a whole sleep.
   static LARGE_INTEGER freq = {0};
-  if (freq.QuadPart == 0) {
-    QueryPerformanceFrequency(&freq);
-  }
+  if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
   LARGE_INTEGER counter;
   QueryPerformanceCounter(&counter);
-  // Split into whole seconds + remainder to keep the multiplication from
-  // overflowing int64: (count/freq)*1e6 + ((count%freq)*1e6)/freq.
   LONGLONG sec = counter.QuadPart / freq.QuadPart;
   LONGLONG rem = counter.QuadPart % freq.QuadPart;
   return sec * 1000000LL + (rem * 1000000LL) / freq.QuadPart;
 }
 
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
-  if (!executable_path || !argv) {
-    return false;
-  }
+  if (!executable_path || !argv) return false;
 
-  // Build a mutable command line: quoted executable_path followed by argv[1..].
-  // argv[0] is the program name (like main/execve) and must not be duplicated.
   size_t cmd_len = strlen(executable_path) * 2 + 10;
-  for (size_t i = 1; argv[i] != NULL; i++) {
-    cmd_len += strlen(argv[i]) * 2 + 10;
-  }
+  for (size_t i = 1; argv[i] != NULL; i++) cmd_len += strlen(argv[i]) * 2 + 10;
   char* cmd = (char*)malloc(cmd_len + 1);
-  if (!cmd) {
-    return false;
-  }
+  if (!cmd) return false;
   size_t pos = 0;
 
-  // Helper lambda-like macro to append a single quoted/escaped argument
   const char* all_args[64];
   size_t arg_count = 0;
   all_args[arg_count++] = executable_path;
-  for (size_t i = 1; argv[i] != NULL && arg_count < 63; i++) {
-    all_args[arg_count++] = argv[i];
-  }
+  for (size_t i = 1; argv[i] != NULL && arg_count < 63; i++) all_args[arg_count++] = argv[i];
   all_args[arg_count] = NULL;
 
   for (size_t a = 0; a < arg_count; a++) {
@@ -94,13 +65,9 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
           i++;
         }
         if (arg[i + 1] == '"' || arg[i + 1] == '\0') {
-          for (size_t s = 0; s < num_slashes * 2; s++) {
-            cmd[pos++] = '\\';
-          }
+          for (size_t s = 0; s < num_slashes * 2; s++) cmd[pos++] = '\\';
         } else {
-          for (size_t s = 0; s < num_slashes; s++) {
-            cmd[pos++] = '\\';
-          }
+          for (size_t s = 0; s < num_slashes; s++) cmd[pos++] = '\\';
         }
       } else if (arg[i] == '"') {
         cmd[pos++] = '\\';
@@ -113,7 +80,6 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   }
   cmd[pos] = '\0';
 
-  // Convert to UTF-16 for CreateProcessW (requires a mutable wchar_t buffer)
   int wlen = MultiByteToWideChar(CP_UTF8, 0, cmd, -1, NULL, 0);
   if (wlen <= 0) {
     free(cmd);
@@ -127,58 +93,71 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wcmd, wlen);
   free(cmd);
 
-  STARTUPINFOW si;
+  STARTUPINFOEXW six;
   PROCESS_INFORMATION pi;
-  ZeroMemory(&si, sizeof(si));
-  si.cb = sizeof(si);
+  ZeroMemory(&six, sizeof(six));
+  six.StartupInfo.cb = sizeof(six);
   ZeroMemory(&pi, sizeof(pi));
 
-  // Diagnostic: capture the worker's stdout+stderr into %TEMP%\vlc-whisper-worker.log so whisper's
-  // own output, vw_log_event lines, and any crash/assert text are visible. The worker is spawned
-  // with CREATE_NO_WINDOW and no console, so without this its logs are lost. Only the worker
-  // binary is redirected; other spawns (e.g. test_platform's cmd.exe) are left untouched.
   HANDLE hLog = INVALID_HANDLE_VALUE;
+  HANDLE hStdin = INVALID_HANDLE_VALUE;
+  LPPROC_THREAD_ATTRIBUTE_LIST attr_list = NULL;
+  BOOL inherit = FALSE;
+  DWORD creation_flags = CREATE_NO_WINDOW;
+
   if (strstr(executable_path, "vlc-whisper-worker") != NULL) {
     char tmp_dir[MAX_PATH];
     if (GetTempPathA(MAX_PATH, tmp_dir) > 0) {
       char log_path[MAX_PATH];
-      snprintf(log_path, sizeof(log_path), "%svlc-whisper-worker.log", tmp_dir);
-      SECURITY_ATTRIBUTES sa;
-      sa.nLength = sizeof(sa);
-      sa.lpSecurityDescriptor = NULL;
-      sa.bInheritHandle = TRUE;  // required for STARTF_USESTDHANDLES inheritance
-      hLog = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS,
-                         FILE_ATTRIBUTE_NORMAL, NULL);
-      if (hLog != INVALID_HANDLE_VALUE) {
-        si.dwFlags |= STARTF_USESTDHANDLES;
-        si.hStdOutput = hLog;
-        si.hStdError = hLog;
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+      int log_len = snprintf(log_path, sizeof(log_path), "%svlc-whisper-worker.log", tmp_dir);
+      if (log_len >= 0 && (size_t)log_len < sizeof(log_path)) {
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = NULL;
+        sa.bInheritHandle = TRUE;
+        hLog = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+        hStdin = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
+                             FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hLog != INVALID_HANDLE_VALUE && hStdin != INVALID_HANDLE_VALUE) {
+          SIZE_T attr_size = 0;
+          InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+          attr_list = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attr_size);
+          if (attr_list && InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_size)) {
+            HANDLE allowed_handles[2] = {hLog, hStdin};
+            if (UpdateProcThreadAttribute(attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, allowed_handles,
+                                          sizeof(allowed_handles), NULL, NULL)) {
+              six.lpAttributeList = attr_list;
+              six.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+              six.StartupInfo.hStdOutput = hLog;
+              six.StartupInfo.hStdError = hLog;
+              six.StartupInfo.hStdInput = hStdin;
+              inherit = TRUE;
+              creation_flags |= EXTENDED_STARTUPINFO_PRESENT;
+            }
+          }
+        }
       }
     }
   }
 
-  // bInheritHandles must be TRUE for the stdio handles to reach the child; only when redirecting.
-  BOOL inherit = (hLog != INVALID_HANDLE_VALUE);
-  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, inherit, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-  if (hLog != INVALID_HANDLE_VALUE) {
-    CloseHandle(hLog);
+  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, inherit, creation_flags, NULL, NULL, &six.StartupInfo, &pi);
+
+  if (attr_list) {
+    if (six.lpAttributeList) DeleteProcThreadAttributeList(attr_list);
+    free(attr_list);
   }
+  if (hStdin != INVALID_HANDLE_VALUE) CloseHandle(hStdin);
+  if (hLog != INVALID_HANDLE_VALUE) CloseHandle(hLog);
   free(wcmd);
 
-  if (!success) {
-    return false;
-  }
+  if (!success) return false;
 
-  // Close thread handle immediately as it's not needed
   CloseHandle(pi.hThread);
-
-  // Close process handle if not requested, otherwise return it
-  if (out_process) {
+  if (out_process)
     *out_process = pi.hProcess;
-  } else {
+  else
     CloseHandle(pi.hProcess);
-  }
   return true;
 }
 
@@ -198,9 +177,7 @@ void vw_platform_terminate_process(vw_process_t process) {
 }
 
 void vw_platform_close_process(vw_process_t process) {
-  if (process && process != INVALID_HANDLE_VALUE) {
-    CloseHandle((HANDLE)process);
-  }
+  if (process && process != INVALID_HANDLE_VALUE) CloseHandle((HANDLE)process);
 }
 
 typedef struct {
