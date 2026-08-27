@@ -199,8 +199,7 @@ static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_
   int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)),
                               (const uint8_t**)decoder->frame->extended_data, decoder->frame->nb_samples);
   if (converted > 0)
-    vw_source_decoder_copy_samples(decoder, resample_buf, (size_t)converted, out_pcm, max_samples,
-                                   inout_total_samples);
+    vw_source_decoder_copy_samples(decoder, resample_buf, (size_t)converted, out_pcm, max_samples, inout_total_samples);
 }
 
 static bool vw_source_decoder_drain_swr(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
