@@ -22,11 +22,14 @@ Support one exact Windows VLC 3.x distribution/build at a time. Native modules m
 
 Consequence: release manifests and CI artifacts include VLC version/commit and ABI assumptions. Compatibility with VLC 4 is a separate port, not an upgrade checkbox.
 
-## ADR-004: Offline-only local IPC
+## ADR-004: Authenticated local IPC and network boundary
 
 **Status:** Accepted.
 
-Use authenticated, current-user-only named pipes on Windows and Unix-domain `SOCK_SEQPACKET` on Linux. No localhost TCP, WebSocket, HTTP server, cloud fallback, telemetry, or auto-download. This meets the privacy claim even when a firewall or another local process is misconfigured.
+Use authenticated, current-user-only named pipes on Windows and Unix-domain `SOCK_SEQPACKET` on Linux. No
+localhost TCP, WebSocket, HTTP server, cloud transcription fallback, telemetry, or automatic download is allowed.
+Explicit catalog model downloads are the documented worker-only network path and are governed by ADR-023.
+Future cloud translation may use a separate explicitly opted-in path and must disclose transcript egress.
 
 ## ADR-005: Final-only captions first
 
@@ -304,4 +307,140 @@ to REVISE already-emitted subtitles.
 - **Zero Flash Cues**: Every subtitle is displayed with sufficient human reading time ($\ge 1.0\text{s}$ wall clock).
 - **No Cue Collisions**: Cues display sequentially without visual overlap in VLC's SPU subpicture pipeline.
 - **Deterministic Latency**: Greedy decoding ensures bounded, single-pass inference without search latency spikes.
-- **Overlap prevention mechanism (verified 2026-08-20)**: the presenter posts every cue with `b_ephemer = true` (`vw_caption_presenter.c`), so VLC's SPU keeps only the newest same-channel ephemeral subpicture (`vlc_subpicture.h`: "displayed until the next one appear"). A successor cue therefore auto-evicts its predecessor regardless of the predecessor's posted `i_stop` — the 1s reading floor may leave two cues' *intervals* overlapping in the SPU chain, but only one is ever *rendered*. Interval clipping in `show_segment` is the lookahead precision layer (successor known in advance); ephemeral eviction is the safety net for the live-PCM path (successor not yet knowable at flush time). Static interval-overlap analysis that ignores `b_ephemer` is not a visible defect. This is a regression-tested invariant (`test_caption_presenter.c` asserts `b_ephemer == true` on every posted subpicture).
+- **Overlap prevention mechanism (corrected 2026-08-26)**: `b_ephemer = true` remains a secondary SPU selection safeguard, but it does not synchronously replace a queued same-channel subpicture. For live PCM, the presenter explicitly queues `vout_FlushSubpictureChannel()` immediately before `vout_PutSubpicture()`; VLC's FIFO vout control queue rejects the prior live cue before adding its replacement. Look-ahead source cues do not flush the channel: their successor-aware interval clipping remains the precision mechanism that permits multiple future cues to coexist without overlap.
+
+## ADR-022: Settings GUI via VLC Lua Extension (Spike, Non-Bundled Concept)
+
+**Status:** Accepted (Spike).
+
+**Context.** Step 19a required a feasibility spike for the settings/control GUI that will expose engine
+backend (auto / Vulkan GPU / CPU), model (tiny / base / large), language (auto / en / ro / tr / …),
+and CPU thread count (default 4). Three integration routes were evaluated against VLC 3.0.23 headers
+and the existing ensemble boundaries: (a) standalone `vlc-whisper-settings.exe` per ADR-011, (b) native
+C interface module (`set_capability("interface", N)` in the same plugin DLL), and (c) VLC Lua extension
+(`lua/extensions/*.lua`, `vlc_extensions.h` / `vlc.dialog`). The research dossier
+(`docs/plans/step19a_research_dossier.md`) and the Lua-extension feasibility record
+(`docs/plans/step19a_lua_route_feasibility.md`) proved that an `audio_filter` module cannot inject
+a Tools-menu item (`vlc_actions.h` ACTIONIDs are not a third-party menu API), while the worker IPC pipe
+is strictly single-listener (`listen(,1)` / `nMaxInstances=1`) and cannot be reused as a GUI→plugin
+channel.
+
+**Decision.**
+
+1. **GUI host: VLC Lua extension (primary), standalone exe retained as rich-panel tier.**
+   - The spike extension `lua/extensions/vlc_whisper_settings.lua` (Lua 5.1-era, `luac -p` clean) owns the
+     single Extensions-menu entry `View → VLC-Whisper Settings (Spike)` via `capabilities = {"menu"}` /
+     `EXTENSION_HAS_MENU` / `EXTENSION_TRIGGER_MENU` and renders the four PotPlayer-parity controls with
+     `vlc.dialog` widgets (dropdowns for engine / model / language, text_input default "4" for threads —
+     the documented spinner gap: `EXTENSION_WIDGET_SPIN_ICON` is a static animation, not an input).
+     On Apply the spike stores selections in a local `spike_state` table and logs
+     `[VLC-Whisper][SPIKE]` lines; it never writes config or touches the network.
+   - `vlc-whisper-settings.exe` (ADR-011) is retained as the optional out-of-process rich panel that a
+     future Lua dialog can delegate to (e.g. an "Open advanced settings…" button spawning it via a tiny
+     C `extension` helper). This preserves crash isolation without requiring a forked VLC build (ADR-012).
+
+2. **Non-bundled concept scope.** The spike extension and its `lua/README_SPIKE.md` manual-test instructions
+   are committed on branch `gemini/milestone-4-step-19a` as a feasibility artifact and are explicitly
+   **excluded from CMake install / CPack / NSIS packaging**. The installer continues to deploy only
+   `libvlc_whisper_plugin.dll`, the worker, and the sha256-pinned models (existing `install(TARGETS …)`
+   rules); the Lua spike requires manual copy to `<VLC>\lua\extensions\` for manual testing and will not
+   ship until a follow-up ADR promotes it to a bundled component.
+
+3. **Wire-up feasibility for the real GUI (roadmap 19c).** The spike proves the bridge exists even though
+   it is not wired: the Lua extension reaches the plugin through the shared VLC config namespace
+   (`vlc.config.set` → `config_PutPsz` / `config_PutInt` on four proposed keys
+   `whisper-backend` / `model-path` / `whisper-language` / `whisper-threads`, declared in
+   `vlc_module_begin()` alongside the existing `worker-path`/`model-path` `add_loadfile` vars).  
+   Per-setting apply costs (from `worker/third_party/whisper.cpp` and our wrappers):
+   `whisper-language` and `whisper-threads` are `whisper_full_params` per-call state → live-settable
+   once engine setters are wired; `model-path` and `whisper-backend` are `whisper_context_params` @ init →
+   worker respawn via `vw_plugin_respawn_worker` (existing epoch machinery). Full mapping and
+   language-list sourcing (`whisper_lang_max_id` / `whisper_lang_str`) in the spike report and dossier.
+
+4. **Amendment to ADR-011.** ADR-011's `Tools → VLC-Whisper Settings…` claim is superseded:
+   the blessed third-party menu surface is the **Extensions menu** (`View → …` after activation), not Tools.
+   ADR-011's crash-isolation and Start-Menu launch properties remain true for the retained exe tier.
+
+**Consequences.**
+
+- Seamless in-VLC menu integration **without distributing a recompiled VLC build**; single text-file distribution,
+  no ABI coupling to the pinned VLC build, `luac -p` gate, no C++.
+- Lua runs cooperatively on VLC's UI thread: any heavy work stalls the whole UI. The phase-1 rule is strict:
+  Apply handlers stay O(small) (config writes only); future translation (19b) must not HTTP inside a Lua callback.
+- Widget toolkit is basic (no spinner; fixed layout); a rich panel remains a future exe.
+- Installer/uninstaller integration is trivial when promoted (`File → lua\extensions\…` + `Delete`/`RMDir`; no
+  `plugins.dat` regeneration needed — Lua is not a cached binary module).
+
+**Rejected alternatives.**
+
+- **Native C interface module in the same plugin DLL** — proven feasible (spike `gemini/milestone-4-step-19a-c-interface`
+  @ `3697286`, heartbeat + `vw_platform_spawn_process` probe, Windows-verified, both presets build), but
+  requires launch via `vlc --extraintf=vwsettingsintf` rather than a native menu entry and offers no toolkit
+  advantage until the standalone exe is spawned anyway. Parked as the fallback if Lua is rejected post-testing.
+- **In-DLL Qt dialog from the audio filter** — infeasible: `audio_filter` cannot own UI; Qt loop belongs to VLC's
+  main thread.
+
+
+## ADR-023: User-Initiated Model Download via Worker (Network Egress Carve-Out)
+
+**Status:** Accepted.
+
+**Context.** Earlier versions of the privacy boundary (AGENTS.md Rule 5, ADR-004) treated all runtime network
+I/O as forbidden. The product now permits explicit model provisioning, and reserves a separately governed,
+user-opted-in path for future cloud translation. Lazy provisioning of the remaining `models/manifest.json` models
+(`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`) requires network egress, but the
+installer must stay offline and Program Files/WindowsApps must never be written (MS Store installs).
+The question is where and under what conditions that egress is permitted.
+
+**Decision.**
+
+1. **Egress is worker-only, explicit, pinned, and verified.** Network access occurs **ONLY** inside
+   the `vlc-whisper-worker` process, **ONLY** on an explicit user action in the settings GUI
+   (`Download selected model` menu entry), relayed over the existing authenticated local IPC
+   (`MODEL_CTRL` → `MODEL_PROGRESS`, Protocol v1.4), **ONLY** to sha256-pinned Hugging Face URLs
+   (`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/<filename>`) from the committed catalog
+   (`worker/include/vw_model_catalog.h`, mirrored in `models/manifest.json`), and is **ALWAYS**
+   sha256-verified before use (stream hash while writing `.part` → compare → atomic rename).
+2. **Never automatic, never at playback start, never elsewhere.** No background fetch, no start-up
+   prefetch, no retry polling, and no request to any other host. A request made before playback is queued as a
+   config command and starts only when the media-created worker exists. Transcripts and PCM are never persisted or
+   transmitted.
+3. **Plugin stays network-free.** `libvlc_whisper_plugin.dll` performs zero network I/O; it only sends
+   `MODEL_CTRL` and mirrors `MODEL_PROGRESS` into the read-only config vars
+   `whisper-model-progress`/`whisper-model-status`.
+4. **Per-user model directory.** Downloaded models go to a per-user directory
+   (`%LOCALAPPDATA%\vlc-whisper\models` on Windows, `${XDG_DATA_HOME:-$HOME/.local/share}/vlc-whisper/models`
+   on Linux; `--model-dir` override), created on demand. Each destination is guarded by an OS-level
+   interprocess lock held for the full transfer; worker startup never deletes shared `*.part` files. Downloads
+   write to `<dest>/<filename>.part` and are atomically renamed on success. Resolve order:
+   explicit `model-path` → install `models/` → per-user dir. If a relative selected path is still configured after
+   download, worker startup also matches its filename under `--model-dir`; the Windows uninstaller removes the
+   app-owned `%LOCALAPPDATA%\vlc-whisper` model directory.
+5. **No-wait UI boundary.** The single Lua settings dialog performs bounded config writes and returns immediately.
+   The plugin sender thread consumes worker progress and renders it on a dedicated C-managed SPU channel. Caption
+   blanking on pause/seek does not flush that channel, so the download continues while media is paused; abort,
+   worker disconnect, or shutdown cancels the worker download and clears the overlay.
+6. **Local preflight only.** The Lua dialog may open selected model filenames briefly to distinguish bundled and
+   per-user presence, but never hashes large files on VLC's UI thread; worker downloads remain SHA-256-authoritative.
+   VLC 3.0 exposes no dropdown-change callback or widget enabled/disabled method, so `.en` models keep the full
+   language list visible and Apply coerces their language to `en`; availability captions refresh on dialog construction
+   or bounded Apply/Download callbacks.
+
+**Consequences.**
+
+- The current network policy is narrow and auditable: model egress is user-initiated, worker-confined,
+  URL-pinned, and hash-gated. Future translation egress requires a separate opt-in/provider decision and
+  transcript-disclosure UX. Offline playback remains fully functional with the bundled universal `ggml-tiny.bin`;
+  downloads are strictly opt-in.
+- Failure is safe: `FAILED`/`ABORTING` → `IDLE` is mirrored to `whisper-model-status`; captions may stop
+  (`E_MODEL_MISSING` semantics on next respawn) while VLC playback continues uninterrupted.
+- Single-flight semantics (second `DOWNLOAD` while active → immediate `FAILED`) keep behavior deterministic.
+
+**Rejected alternatives.**
+
+- **Plugin-side download** — violates the plugin network-free boundary and would block the VLC UI thread;
+  rejected.
+- **Installer-only provisioning** — no in-product recovery when a user selects a not-yet-bundled model
+  mid-session and no MS Store support (cannot write Program Files/WindowsApps); rejected.
+- **Helper scripts only (`vw_download_*`)** — poor UX, requires manual file placement and offers no live
+  progress in the settings dialog; retained only as a developer fallback, not the product path.

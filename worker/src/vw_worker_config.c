@@ -4,6 +4,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool vw_worker_config_file_exists(const char* path) {
+  if (!path || !path[0]) return false;
+  FILE* file = fopen(path, "rb");
+  if (!file) return false;
+  fclose(file);
+  return true;
+}
+
+static bool vw_worker_config_is_absolute_path(const char* path) {
+  if (!path || !path[0]) return false;
+#ifdef _WIN32
+  return path[0] == '\\' || (path[1] != '\0' && path[1] == ':');
+#else
+  return path[0] == '/';
+#endif
+}
+
+static const char* vw_worker_config_basename(const char* path) {
+  if (!path) return NULL;
+  const char* base = path;
+  for (const char* cursor = path; *cursor; cursor++) {
+    if (*cursor == '/' || *cursor == '\\') base = cursor + 1;
+  }
+  return base;
+}
+
 // Parse a 64-char hex string into a 32-byte token. Returns true on success.
 static bool vw_token_from_hex(const char* hex, uint8_t out[VW_AUTH_TOKEN_BYTES]) {
   if (strlen(hex) != VW_AUTH_TOKEN_BYTES * 2) return false;  // must be exactly 64 hex chars
@@ -84,8 +110,9 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
     return false;
   }
   memset(config, 0, sizeof(vw_worker_config_t));
-  strncpy(config->model_path, "models/ggml-tiny.en.bin", sizeof(config->model_path) - 1);
+  strncpy(config->model_path, "models/ggml-tiny.bin", sizeof(config->model_path) - 1);
   strncpy(config->language, "en", sizeof(config->language) - 1);
+  config->n_threads = 4;
   config->sample_rate = 16000;
   config->backend = VW_WORKER_BACKEND_AUTO;
   config->gpu_device = 0;
@@ -118,7 +145,23 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "missing value for --model\n");
         return 2;
       }
-      snprintf(config->model_path, sizeof(config->model_path), "%s", argv[++i]);
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->model_path)) {
+        fprintf(stderr, "bad --model: too long (max %zu)\n", sizeof(config->model_path) - 1);
+        return 2;
+      }
+      snprintf(config->model_path, sizeof(config->model_path), "%s", v);
+    } else if (strcmp(argv[i], "--model-dir") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --model-dir\n");
+        return 2;
+      }
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->model_dir)) {
+        fprintf(stderr, "bad --model-dir: too long (max %zu)\n", sizeof(config->model_dir) - 1);
+        return 2;
+      }
+      snprintf(config->model_dir, sizeof(config->model_dir), "%s", v);
     } else if (strcmp(argv[i], "--vad-model") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --vad-model\n");
@@ -159,6 +202,31 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         return 2;
       }
       config->gpu_device = (int)id;
+    } else if (strcmp(argv[i], "--language") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --language\n");
+        return 2;
+      }
+      const char* lang = argv[++i];
+      if (lang[0] == '\0' || strlen(lang) >= sizeof(config->language)) {
+        fprintf(stderr, "bad --language: expected 1..%zu char code, got '%s'\n", sizeof(config->language) - 1, lang);
+        return 2;
+      }
+      snprintf(config->language, sizeof(config->language), "%s", lang);
+    } else if (strcmp(argv[i], "--n-threads") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --n-threads\n");
+        return 2;
+      }
+      char* end = NULL;
+      long n = strtol(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0') {
+        fprintf(stderr, "bad --n-threads: expected integer 1..16\n");
+        return 2;
+      }
+      if (n < 1) n = 1;
+      if (n > 16) n = 16;
+      config->n_threads = (int)n;
     } else {
       fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;
@@ -169,4 +237,28 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
   vw_worker_config_autodiscover_vad(config);
 
   return 0;
+}
+
+bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char* out, size_t out_size) {
+  if (!config || !out || out_size == 0 || !config->model_path[0]) return false;
+  if (vw_worker_config_file_exists(config->model_path)) {
+    if (strlen(config->model_path) >= out_size) return false;
+    snprintf(out, out_size, "%s", config->model_path);
+    return true;
+  }
+  if (vw_worker_config_is_absolute_path(config->model_path) || !config->model_dir[0]) return false;
+
+  const char* filename = vw_worker_config_basename(config->model_path);
+  if (!filename || !filename[0]) return false;
+  size_t dir_len = strlen(config->model_dir);
+  size_t file_len = strlen(filename);
+  bool needs_separator = dir_len > 0 && config->model_dir[dir_len - 1] != '/' && config->model_dir[dir_len - 1] != '\\';
+  size_t required = dir_len + (needs_separator ? 1 : 0) + file_len + 1;
+  if (required > out_size) return false;
+#ifdef _WIN32
+  snprintf(out, out_size, "%s%s%s", config->model_dir, needs_separator ? "\\" : "", filename);
+#else
+  snprintf(out, out_size, "%s%s%s", config->model_dir, needs_separator ? "/" : "", filename);
+#endif
+  return vw_worker_config_file_exists(out);
 }

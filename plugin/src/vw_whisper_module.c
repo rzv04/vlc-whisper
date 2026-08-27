@@ -67,6 +67,81 @@ static int64_t vw_plugin_input_position_us(input_thread_t* input);
 
 static char vw_plugin_dl_anchor;
 
+// Returns per-user model directory mirroring worker vw_model_download_default_dir (%LOCALAPPDATA%\\vlc-whisper\\models
+// on Windows via LOCALAPPDATA; $XDG_DATA_HOME/vlc-whisper/models else $HOME/.local/share on Linux).
+static bool vw_plugin_get_model_dir(char* out, size_t out_size) {
+  if (!out || out_size == 0) return false;
+#ifdef _WIN32
+  const char* base = getenv("LOCALAPPDATA");
+  char tmp[4096];
+  if (base && base[0]) {
+    snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", base);
+  } else {
+    const char* home = getenv("USERPROFILE");
+    if (home && home[0]) {
+      snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", home);
+    } else {
+      snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+    }
+  }
+  snprintf(out, out_size, "%s", tmp);
+#else
+  const char* xdg = getenv("XDG_DATA_HOME");
+  char tmp[4096];
+  if (xdg && xdg[0]) {
+    snprintf(tmp, sizeof(tmp), "%s/vlc-whisper/models", xdg);
+  } else {
+    const char* home = getenv("HOME");
+    if (home && home[0]) {
+      snprintf(tmp, sizeof(tmp), "%s/.local/share/vlc-whisper/models", home);
+    } else {
+      snprintf(tmp, sizeof(tmp), "/tmp/vlc-whisper/models");
+    }
+  }
+  snprintf(out, out_size, "%s", tmp);
+#endif
+  out[out_size - 1] = '\0';
+  return true;
+}
+
+// Maps catalog model id to bundled filename; plugin cannot link worker catalog header directly.
+static const char* vw_plugin_catalog_filename(const char* id) {
+  if (!id) return NULL;
+  static const struct {
+    const char* id;
+    const char* file;
+  } kMap[] = {
+      {"tiny.en", "ggml-tiny.en.bin"}, {"tiny", "ggml-tiny.bin"},   {"base.en", "ggml-base.en.bin"},
+      {"base", "ggml-base.bin"},       {"small", "ggml-small.bin"}, {"medium", "ggml-medium.bin"},
+      {"large", "ggml-large-v3.bin"},
+  };
+  for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++) {
+    if (strcmp(kMap[i].id, id) == 0) return kMap[i].file;
+  }
+  return NULL;
+}
+
+// Returns the catalog id represented by a configured model path, defaulting to the bundled multilingual model.
+static const char* vw_plugin_catalog_id_from_path(const char* path) {
+  if (!path || !path[0]) return "tiny";
+  const char* base = path;
+  for (const char* p = path; *p; p++) {
+    if (*p == '/' || *p == '\\') base = p + 1;
+  }
+  static const struct {
+    const char* id;
+    const char* file;
+  } kMap[] = {
+      {"tiny.en", "ggml-tiny.en.bin"}, {"tiny", "ggml-tiny.bin"},   {"base.en", "ggml-base.en.bin"},
+      {"base", "ggml-base.bin"},       {"small", "ggml-small.bin"}, {"medium", "ggml-medium.bin"},
+      {"large", "ggml-large-v3.bin"},
+  };
+  for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++) {
+    if (strcmp(base, kMap[i].file) == 0) return kMap[i].id;
+  }
+  return "tiny";
+}
+
 static bool vw_plugin_path_exists(const char* path) {
 #ifdef _WIN32
   DWORD attr = GetFileAttributesA(path);
@@ -209,10 +284,18 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
 #endif
 }
 
-// Resolves the ggml-tiny.en.bin model file: probes "<dir>/ggml-tiny.en.bin" and "<dir>/models/"
-// in the same ancestor + exe-dir walk used for the worker binary. Empty out means "no model".
+// Resolves a catalog model file in install paths and then the per-user model directory. Empty out means "no model".
 static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
-  const char* model_names[] = {"ggml-tiny.en.bin", "models/ggml-tiny.en.bin"};
+  const char* model_names[] = {
+      "ggml-tiny.bin",     "models/ggml-tiny.bin",     "ggml-tiny.en.bin", "models/ggml-tiny.en.bin",
+      "ggml-base.bin",     "models/ggml-base.bin",     "ggml-base.en.bin", "models/ggml-base.en.bin",
+      "ggml-small.bin",    "models/ggml-small.bin",    "ggml-medium.bin",  "models/ggml-medium.bin",
+      "ggml-large-v3.bin", "models/ggml-large-v3.bin",
+  };
+  const char* model_files[] = {"ggml-tiny.bin",  "ggml-tiny.en.bin", "ggml-base.bin",    "ggml-base.en.bin",
+                               "ggml-small.bin", "ggml-medium.bin",  "ggml-large-v3.bin"};
+  const size_t model_name_count = sizeof(model_names) / sizeof(model_names[0]);
+  const size_t model_file_count = sizeof(model_files) / sizeof(model_files[0]);
 #ifdef _WIN32
   char plugin_path[MAX_PATH];
   HMODULE hmod = NULL;
@@ -221,35 +304,70 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
       hmod) {
     DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
     if (len > 0 && len < sizeof(plugin_path)) {
-      if (vw_plugin_probe_ancestors(plugin_path, 3, model_names, 2, out, out_size)) return true;
+      if (vw_plugin_probe_ancestors(plugin_path, 3, model_names, model_name_count, out, out_size)) return true;
     }
   }
   char exe_path[MAX_PATH];
   DWORD elen = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
   if (elen > 0 && elen < sizeof(exe_path)) {
-    if (vw_plugin_probe_ancestors(exe_path, 0, model_names, 2, out, out_size)) return true;
+    if (vw_plugin_probe_ancestors(exe_path, 0, model_names, model_name_count, out, out_size)) return true;
   }
-  if (vw_plugin_probe_windows_paths(model_names, 2, out, out_size)) return true;
+  if (vw_plugin_probe_windows_paths(model_names, model_name_count, out, out_size)) return true;
+  // Per-user directory probe mirrors worker vw_model_download_default_dir; plugin passes --model-dir explicitly so both
+  // agree.
+  {
+    char dir[VW_PATH_MAX_BYTES];
+    if (vw_plugin_get_model_dir(dir, sizeof(dir))) {
+      for (size_t i = 0; i < model_file_count; i++) {
+        char cand[VW_PATH_MAX_BYTES + 64];  // dir bound + '/' + catalog name: snprintf cannot truncate
+        snprintf(cand, sizeof(cand), "%s/%s", dir, model_files[i]);
+        // Also try Windows separator for consistency
+#ifdef _WIN32
+        for (char* c = cand; *c; c++)
+          if (*c == '/') *c = '\\';
+#endif
+        if (vw_plugin_path_exists(cand)) {
+          snprintf(out, out_size, "%s", cand);
+          return true;
+        }
+      }
+    }
+  }
   return false;
 #else
   Dl_info info;
   if (dladdr((void*)&vw_plugin_dl_anchor, &info) && info.dli_fname && info.dli_fname[0]) {
-    if (vw_plugin_probe_ancestors(info.dli_fname, 4, model_names, 2, out, out_size)) return true;
+    if (vw_plugin_probe_ancestors(info.dli_fname, 4, model_names, model_name_count, out, out_size)) return true;
   }
 #ifdef __linux__
   char exe_path[4096];
   ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
   if (n > 0) {
     exe_path[n] = '\0';
-    if (vw_plugin_probe_ancestors(exe_path, 0, model_names, 2, out, out_size)) return true;
+    if (vw_plugin_probe_ancestors(exe_path, 0, model_names, model_name_count, out, out_size)) return true;
   }
 #endif
+  // Per-user directory probe mirrors worker vw_model_download_default_dir; plugin passes --model-dir explicitly so both
+  // agree.
+  {
+    char dir[VW_PATH_MAX_BYTES];
+    if (vw_plugin_get_model_dir(dir, sizeof(dir))) {
+      for (size_t i = 0; i < model_file_count; i++) {
+        char cand[VW_PATH_MAX_BYTES + 64];  // dir bound + '/' + catalog name: snprintf cannot truncate
+        snprintf(cand, sizeof(cand), "%s/%s", dir, model_files[i]);
+        if (vw_plugin_path_exists(cand)) {
+          snprintf(out, out_size, "%s", cand);
+          return true;
+        }
+      }
+    }
+  }
   return false;
 #endif
 }
 
 // Plugin instance state
-typedef struct {
+typedef struct vw_plugin_sys {
   vw_spsc_queue_t* queue;
   vw_audio_capture_t capture;
   vw_worker_client_t* client;
@@ -269,6 +387,7 @@ typedef struct {
   _Atomic bool discontinuity_pending;
   _Atomic int64_t resume_pts_us;  // Media position set by poll detectors
   _Atomic bool source_mode_active;
+  _Atomic bool session_active;
   char active_source_url[VW_MAX_SOURCE_URL_BYTES];
   uint64_t chunks_sent;
   uint32_t frames_received;
@@ -277,9 +396,50 @@ typedef struct {
   uint32_t errors_received;
   uint32_t respawn_count;  // bounded worker respawns after transport death (Step 17d)
   char model_path[VW_PATH_MAX_BYTES];
+  // 19b: live-apply config snapshot for worker-path/model-path/backend/language/threads
+  char cfg_worker_path[VW_PATH_MAX_BYTES];
+  char cfg_model_path[VW_PATH_MAX_BYTES];
+  char cfg_backend[16];
+  char cfg_language[16];
+  char cfg_model_download[40];
+  char model_download_id[40];
+  int cfg_threads;
+  bool cfg_snapshot_valid;
+  _Atomic bool respawn_in_progress;
+  int64_t last_config_poll_us;
+  int64_t last_cfg_respawn_attempt_us;  // last failed-config-respawn attempt; paces the 10s retry
 } vw_plugin_sys_t;
 #define VW_MAX_WORKER_RESPAWNS 3
 #define VW_WORKER_RESPAWN_DELAY_MS 1000
+
+static bool vw_plugin_send_model_request(vw_plugin_sys_t* sys, const char* request);
+static bool vw_plugin_activate_downloaded_model(vw_plugin_sys_t* sys, const char* model_id, bool paused);
+
+static bool vw_plugin_send_model_request(vw_plugin_sys_t* sys, const char* request) {
+  if (!sys || !sys->client || !request || !request[0]) return false;
+
+  uint8_t action = (strcmp(request, "abort") == 0) ? VW_MODEL_ACTION_ABORT : VW_MODEL_ACTION_DOWNLOAD;
+  const char* model_id = action == VW_MODEL_ACTION_ABORT ? "" : request;
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "sending %s request for model '%s'",
+               action == VW_MODEL_ACTION_ABORT ? "abort" : "download", model_id[0] ? model_id : "(active)");
+  if (!vw_worker_client_send_model_ctrl(sys->client, action, model_id)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_MODEL_CTRL", "MODEL_CTRL send failed for request '%s'", request);
+    return false;
+  }
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "MODEL_CTRL sent for request '%s'", request);
+
+  vlc_object_t* obj = VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx);
+  config_PutPsz(obj, "whisper-model-download", "");
+  config_PutInt(obj, "whisper-model-progress", 0);
+  config_PutPsz(obj, "whisper-model-status", action == VW_MODEL_ACTION_ABORT ? "aborting" : "downloading");
+  if (action == VW_MODEL_ACTION_DOWNLOAD) {
+    snprintf(sys->model_download_id, sizeof(sys->model_download_id), "%s", model_id);
+  } else {
+    sys->model_download_id[0] = '\0';
+  }
+  sys->cfg_model_download[0] = '\0';
+  return true;
+}
 // Sender thread (14c): the only consumer of the SPSC queue and the only user of the worker client.
 // Starts one session, then alternates draining queue -> send AUDIO frames with draining worker ->
 // plugin frames (SEGMENT/STATUS/ERROR), degrading to passthrough on any fatal transport condition.
@@ -289,23 +449,56 @@ typedef struct {
 // fresh session. The old worker exits once its pipe end is closed (disconnect waits up to 5s for
 // it), freeing the pipe name before the delay elapses. Returns false (permanent passthrough) when
 // the respawn budget is exhausted or the new worker cannot start a session.
-static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
-  if (sys->respawn_count >= VW_MAX_WORKER_RESPAWNS) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN_EXHAUSTED",
-                 "worker respawn limit (%u) reached; captions disabled, passthrough only",
-                 (unsigned)VW_MAX_WORKER_RESPAWNS);
-    return false;
+// transport_recovery: true for transport-death recovery (consumes one of VW_MAX_WORKER_RESPAWNS
+// per filter lifetime); false for user-initiated config-change respawns, which must NEVER consume
+// that budget — otherwise three settings changes would leave later settings silently unapplied
+// (snapshot already refreshed) and a later transport death would kill captions permanently.
+static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool transport_recovery) {
+  if (transport_recovery) {
+    if (sys->respawn_count >= VW_MAX_WORKER_RESPAWNS) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN_EXHAUSTED",
+                   "worker respawn limit (%u) reached; captions disabled, passthrough only",
+                   (unsigned)VW_MAX_WORKER_RESPAWNS);
+      return false;
+    }
+    sys->respawn_count++;
   }
-  sys->respawn_count++;
   if (sys->client) {
+    if (sys->model_download_id[0]) {
+      sys->model_download_id[0] = '\0';
+      config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status", "failed:worker");
+      vw_caption_presenter_clear_model_progress(&sys->presenter);
+    }
     vw_worker_client_disconnect(sys->client);
     sys->client = NULL;
   }
-  vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN", "transport death; respawning worker (%u/%u)",
-               sys->respawn_count, (unsigned)VW_MAX_WORKER_RESPAWNS);
+  // The old transport is gone; its dead-flag is obsolete bookkeeping. Clear it unconditionally
+  // (even when client was already NULL) so a config respawn attempted while worker_dead was set
+  // — transport failure followed by a settings change inside one 2s poll window — cannot leave
+  // the flag set across a failed launch: the transport block in the sender loop would otherwise
+  // reclassify that config failure as transport recovery, consume the bounded budget, and break
+  // the loop. A failed respawn returns with client == NULL; the sender loop's NULL-client guard
+  // idles on that until the next config diff.
+  atomic_store(&sys->worker_dead, false);
+  vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_RESPAWN", "%s; respawning worker (%u/%u)",
+               transport_recovery ? "transport death" : "config change", sys->respawn_count,
+               (unsigned)VW_MAX_WORKER_RESPAWNS);
   vw_platform_sleep_ms(VW_WORKER_RESPAWN_DELAY_MS);  // let the old worker exit and free the pipe name
-  sys->client = vw_worker_client_launch_and_connect(sys->worker_path, sys->pipe_name, sys->auth_token,
-                                                    sys->model_path[0] ? sys->model_path : NULL);
+  char* respawn_be = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
+  char* respawn_lg = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
+  int64_t respawn_thr = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
+  int respawn_gpu = -1;
+  if (config_FindConfig("whisper-gpu-device")) {
+    respawn_gpu = (int)config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-gpu-device");
+  }
+  char respawn_model_dir[VW_PATH_MAX_BYTES];
+  respawn_model_dir[0] = '\0';
+  vw_plugin_get_model_dir(respawn_model_dir, sizeof(respawn_model_dir));
+  sys->client = vw_worker_client_launch_and_connect_ex(
+      sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL, respawn_be,
+      respawn_lg, (int)respawn_thr, respawn_gpu, respawn_model_dir[0] ? respawn_model_dir : NULL);
+  if (respawn_be) free(respawn_be);
+  if (respawn_lg) free(respawn_lg);
   if (!sys->client) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_UNAVAILABLE",
                  "caption worker respawn failed; running passthrough only");
@@ -336,24 +529,55 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused) {
     vlc_object_release(VLC_OBJECT(input));
   }
   vw_caption_presenter_blank(&sys->presenter);  // erase stale captions from the dead epoch
-  bool started = vw_worker_client_start_session(sys->client, 0, "tiny.en", source_url);
+  bool started =
+      vw_worker_client_start_session(sys->client, 0, vw_plugin_catalog_id_from_path(sys->model_path), source_url);
+  if (source_url) {
+    snprintf(sys->active_source_url, sizeof(sys->active_source_url), "%s", source_url);
+  } else {
+    sys->active_source_url[0] = '\0';
+  }
   free(source_url);
-  atomic_store(&sys->source_mode_active, vw_worker_client_is_source_active(sys->client));
+  atomic_store(&sys->session_active, started);
+  atomic_store(&sys->source_mode_active, started && vw_worker_client_is_source_active(sys->client));
   if (!started) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL", "worker rejected respawn session");
-    vw_worker_client_disconnect(sys->client);
-    sys->client = NULL;
     return false;
   }
   if (paused) {
     vw_worker_client_pause_session(sys->client);  // restart in the paused state the death left us in
   }
-  atomic_store(&sys->worker_dead, false);
   sys->chunks_sent = 0;
   sys->frames_received = 0;
   sys->segments_received = 0;
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED", "caption session restarted (respawn)");
   return true;
+}
+
+static bool vw_plugin_activate_downloaded_model(vw_plugin_sys_t* sys, const char* model_id, bool paused) {
+  if (!sys || !model_id || !model_id[0]) return false;
+  const char* filename = vw_plugin_catalog_filename(model_id);
+  if (!filename) return false;
+
+  char model_dir[VW_PATH_MAX_BYTES];
+  if (!vw_plugin_get_model_dir(model_dir, sizeof(model_dir))) return false;
+  char model_path[VW_PATH_MAX_BYTES];
+#ifdef _WIN32
+  int written = snprintf(model_path, sizeof(model_path), "%s\\%s", model_dir, filename);
+#else
+  int written = snprintf(model_path, sizeof(model_path), "%s/%s", model_dir, filename);
+#endif
+  if (written < 0 || (size_t)written >= sizeof(model_path) || !vw_plugin_path_exists(model_path)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_MODEL_ACTIVATE", "downloaded model path is unavailable for %s", model_id);
+    return false;
+  }
+
+  vlc_object_t* obj = VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx);
+  config_PutPsz(obj, "model-path", model_path);
+  snprintf(sys->model_path, sizeof(sys->model_path), "%s", model_path);
+  snprintf(sys->cfg_model_path, sizeof(sys->cfg_model_path), "%s", model_path);
+  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_ACTIVATE", "activating downloaded model %s from %s", model_id,
+               model_path);
+  return vw_plugin_respawn_worker(sys, paused, false);
 }
 
 static void* vw_plugin_sender_main(void* arg) {
@@ -380,20 +604,24 @@ static void* vw_plugin_sender_main(void* arg) {
   }
 
   // First iteration: start the caption session. A worker rejection (e.g. E_MODEL_MISSING) means
-  // captions stay off for this module lifetime; playback is untouched.
-  if (sys->client && !vw_worker_client_start_session(sys->client, 0, "tiny.en", source_url)) {
-    if (source_url) free(source_url);
-    atomic_store(&sys->worker_dead, true);
-    atomic_store(&sys->source_mode_active, false);
-    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL",
-                 "worker rejected session; captions disabled, passthrough only");
-    return NULL;
+  // captions stay off until a model is provisioned / settings change; playback is untouched.
+  bool session_started = false;
+  if (sys->client) {
+    session_started =
+        vw_worker_client_start_session(sys->client, 0, vw_plugin_catalog_id_from_path(sys->model_path), source_url);
+    if (!session_started) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL",
+                   "worker rejected session; captions disabled, passthrough only");
+    }
   }
   if (source_url) free(source_url);
-  atomic_store(&sys->source_mode_active, vw_worker_client_is_source_active(sys->client));
-  vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED",
-               "caption session started (STARTED confirmed source_active=%d)",
-               atomic_load(&sys->source_mode_active) ? 1 : 0);
+  atomic_store(&sys->session_active, session_started);
+  atomic_store(&sys->source_mode_active, session_started && vw_worker_client_is_source_active(sys->client));
+  if (session_started) {
+    vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SESSION_STARTED",
+                 "caption session started (STARTED confirmed source_active=%d)",
+                 atomic_load(&sys->source_mode_active) ? 1 : 0);
+  }
 
   // Play/pause lifecycle: poll the input thread once per iteration (cadence is 5-20ms). On the
   // playing->paused transition send PAUSE; on paused->playing send RESUME. While paused the
@@ -406,11 +634,172 @@ static void* vw_plugin_sender_main(void* arg) {
   int64_t paused_position_us = -1;   // media position captured at the pause transition
   int64_t current_position_us = -1;  // latest sampled media position for SPU timing
   while (atomic_load(&sys->sender_running)) {
+    // 19b: 2s-cadence snapshot compare of worker-path/model-path/backend/language/threads.
+    // Snapshot stored in sys (initialized from first successful read). Any diff triggers a
+    // single respawn via vw_plugin_respawn_worker, guarded against re-entry.
+    int64_t cfg_now_us = vw_platform_get_monotonic_time_us();
+    if (!sys->cfg_snapshot_valid) {
+      char* wp = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "worker-path");
+      char* mp = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "model-path");
+      char* be = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
+      char* lg = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
+      char* dl = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-download");
+      int64_t thr = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
+      if (wp) {
+        snprintf(sys->cfg_worker_path, sizeof(sys->cfg_worker_path), "%s", wp);
+        free(wp);
+      } else {
+        sys->cfg_worker_path[0] = '\0';
+      }
+      if (mp) {
+        snprintf(sys->cfg_model_path, sizeof(sys->cfg_model_path), "%s", mp);
+        free(mp);
+      } else {
+        sys->cfg_model_path[0] = '\0';
+      }
+      if (be && be[0]) {
+        snprintf(sys->cfg_backend, sizeof(sys->cfg_backend), "%s", be);
+        free(be);
+      } else {
+        if (be) free(be);
+        snprintf(sys->cfg_backend, sizeof(sys->cfg_backend), "auto");
+      }
+      if (lg && lg[0]) {
+        snprintf(sys->cfg_language, sizeof(sys->cfg_language), "%s", lg);
+        free(lg);
+      } else {
+        if (lg) free(lg);
+        snprintf(sys->cfg_language, sizeof(sys->cfg_language), "en");
+      }
+      if (thr < 1 || thr > 16) thr = 4;
+      sys->cfg_threads = (int)thr;
+      if (dl && dl[0]) {
+        snprintf(sys->cfg_model_download, sizeof(sys->cfg_model_download), "%s", dl);
+      } else {
+        sys->cfg_model_download[0] = '\0';
+      }
+      if (dl) free(dl);
+      sys->last_config_poll_us = cfg_now_us;
+      sys->cfg_snapshot_valid = true;
+      // A request made before media playback is intentionally present in the first snapshot. Relay it now that
+      // this filter has spawned a worker; MODEL_CTRL is valid without a caption session.
+      if (sys->cfg_model_download[0]) {
+        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "observed pending request '%s' in initial config snapshot",
+                     sys->cfg_model_download);
+      }
+      if (sys->cfg_model_download[0] && !vw_plugin_send_model_request(sys, sys->cfg_model_download)) {
+        atomic_store(&sys->worker_dead, true);
+        config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status", "failed:worker");
+      }
+    } else if (cfg_now_us - sys->last_config_poll_us >= 2000000) {
+      sys->last_config_poll_us = cfg_now_us;
+      if (!atomic_load(&sys->respawn_in_progress)) {
+        char* wp_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "worker-path");
+        char* mp_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "model-path");
+        char* be_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
+        char* lg_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
+        char* dl_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-download");
+        int64_t thr_new = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
+        const char* wp_cmp = wp_new ? wp_new : "";
+        const char* mp_cmp = mp_new ? mp_new : "";
+        const char* be_cmp = (be_new && be_new[0]) ? be_new : "auto";
+        const char* lg_cmp = (lg_new && lg_new[0]) ? lg_new : "en";
+        const char* dl_cmp = dl_new ? dl_new : "";
+        if (thr_new < 1 || thr_new > 16) thr_new = 4;
+        bool diff = false;
+        if (strcmp(wp_cmp, sys->cfg_worker_path) != 0) diff = true;
+        if (strcmp(mp_cmp, sys->cfg_model_path) != 0) diff = true;
+        if (strcmp(be_cmp, sys->cfg_backend) != 0) diff = true;
+        if (strcmp(lg_cmp, sys->cfg_language) != 0) diff = true;
+        if ((int)thr_new != sys->cfg_threads) diff = true;
+        // Model download control does not trigger a respawn; relay as MODEL_CTRL.
+        if (strcmp(dl_cmp, sys->cfg_model_download) != 0) {
+          // Normalize empty download request: ignore if empty and not abort. The request is edge-triggered: the
+          // helper clears both the config value and the sender snapshot after a successful relay.
+          if (dl_cmp[0] || strcmp(dl_cmp, "abort") == 0) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_CTRL", "observed config request '%s'", dl_cmp);
+            if (!vw_plugin_send_model_request(sys, dl_cmp)) {
+              atomic_store(&sys->worker_dead, true);
+              config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status",
+                            "failed:worker");
+            }
+          } else {
+            snprintf(sys->cfg_model_download, sizeof(sys->cfg_model_download), "%s", dl_cmp);
+          }
+        }
+        if (diff) {
+          bool expected = false;
+          if (atomic_compare_exchange_strong(&sys->respawn_in_progress, &expected, true)) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_CONFIG_CHANGED",
+                         "config changed (backend=%s language=%s threads=%d); respawning worker", be_cmp, lg_cmp,
+                         (int)thr_new);
+            // Refresh snapshot before respawn so a second diff doesn't re-trigger immediately
+            snprintf(sys->cfg_worker_path, sizeof(sys->cfg_worker_path), "%s", wp_cmp);
+            snprintf(sys->cfg_model_path, sizeof(sys->cfg_model_path), "%s", mp_cmp);
+            snprintf(sys->cfg_backend, sizeof(sys->cfg_backend), "%s", be_cmp);
+            snprintf(sys->cfg_language, sizeof(sys->cfg_language), "%s", lg_cmp);
+            sys->cfg_threads = (int)thr_new;
+            // Keep sys->worker_path / model_path in sync for respawn's argv
+            if (wp_new && wp_new[0]) {
+              if (strlen(wp_new) < sizeof(sys->worker_path)) {
+                snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", wp_new);
+              }
+            } else if (!wp_new || !wp_new[0]) {
+              // Empty worker-path means fallback discovery; clear to force respawn to re-resolve?
+              // Keep existing path if config cleared — discovery would be wrong mid-session.
+            }
+            if (mp_new) {
+              if (mp_new[0] && strlen(mp_new) < sizeof(sys->model_path)) {
+                snprintf(sys->model_path, sizeof(sys->model_path), "%s", mp_new);
+              } else if (!mp_new[0]) {
+                sys->model_path[0] = '\0';
+              }
+            }
+            // Config respawn failure is NOT a transport death: the snapshot is already committed,
+            // so the same broken settings will not re-trigger. Log and leave the loop alive with
+            // a NULL client — the NULL-client guard below idles safely and the next settings
+            // change (any config diff) starts a fresh config respawn without touching the
+            sys->last_cfg_respawn_attempt_us = vw_platform_get_monotonic_time_us();
+            if (!vw_plugin_respawn_worker(sys, paused, false)) {
+              vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_CONFIG_RESPAWN_FAILED",
+                           "new settings could not start a worker; captions idle until the next settings change");
+            }
+            atomic_store(&sys->respawn_in_progress, false);
+          }
+        }
+        if (wp_new) free(wp_new);
+        if (mp_new) free(mp_new);
+        if (be_new) free(be_new);
+        if (lg_new) free(lg_new);
+        if (dl_new) free(dl_new);
+      }
+    }
     // Transport death (Step 17d resilience): respawn the worker (bounded) and restart the session
     // with the current MRL instead of disabling captions for the rest of playback.
     if (atomic_load(&sys->worker_dead)) {
-      if (!vw_plugin_respawn_worker(sys, paused)) {
+      if (!vw_plugin_respawn_worker(sys, paused, true)) {
         break;
+      }
+      continue;
+    }
+    // No worker (failed config respawn, or initial session start rejected): idle safely. All
+    // client I/O below requires a client; treating NULL as transport death here would consume
+    // the bounded recovery budget for a non-transport failure and could break the loop
+    // permanently. A pending discontinuity stays latched until a worker returns.
+    // Reconnect path: the committed snapshot means the same settings never re-diff, so a failed
+    // config respawn would otherwise idle forever (even if the failure was transient — file
+    // lock, AV scan — or the model appears later). Retry the launch every 10s; still a config
+    // respawn, so the transport-recovery budget is never touched. Success re-enters the normal
+    // loop on the next iteration.
+    if (!sys->client) {
+      int64_t idle_now_us = vw_platform_get_monotonic_time_us();
+      if (idle_now_us - sys->last_cfg_respawn_attempt_us >= 10000000) {
+        sys->last_cfg_respawn_attempt_us = idle_now_us;
+        vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_CONFIG_RESPAWN_RETRY",
+                     "no worker; retrying launch with current settings");
+        vw_plugin_respawn_worker(sys, paused, false);
+      } else {
+        vw_platform_sleep_ms(20);
       }
       continue;
     }
@@ -457,14 +846,17 @@ static void* vw_plugin_sender_main(void* arg) {
                 }
                 strncpy(sys->active_source_url, normalized_uri, sizeof(sys->active_source_url) - 1);
                 sys->active_source_url[sizeof(sys->active_source_url) - 1] = '\0';
-                if (vw_worker_client_start_session(sys->client, 0, "tiny.en",
+                if (vw_worker_client_start_session(sys->client, 0, vw_plugin_catalog_id_from_path(sys->model_path),
                                                    normalized_uri[0] ? normalized_uri : NULL)) {
+                  atomic_store(&sys->session_active, true);
                   atomic_store(&sys->source_mode_active, vw_worker_client_is_source_active(sys->client));
                   last_position_us = -1;
                   paused_position_us = -1;
                 } else {
-                  atomic_store(&sys->worker_dead, true);
+                  atomic_store(&sys->session_active, false);
                   atomic_store(&sys->source_mode_active, false);
+                  vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL",
+                               "worker rejected media-swap session; captions idle, playback continues");
                 }
               }
             }
@@ -472,7 +864,7 @@ static void* vw_plugin_sender_main(void* arg) {
         }
       }
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
-      if (position_us >= 0) {
+      if (position_us >= 0 && atomic_load(&sys->session_active)) {
         current_position_us = position_us;
         if (!vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
                                             now_paused ? VW_POSITION_FLAG_PAUSED : 0)) {
@@ -570,9 +962,10 @@ static void* vw_plugin_sender_main(void* arg) {
     vw_audio_chunk_t chunk;
     bool sent_any = false;
     bool is_source_mode = atomic_load(&sys->source_mode_active);
+    bool is_session_active = atomic_load(&sys->session_active);
     while (vw_spsc_queue_pop(sys->queue, &chunk)) {
-      if (paused || is_source_mode) {
-        continue;  // discard audio captured before/during pause or when source lookahead mode is active
+      if (paused || is_source_mode || !is_session_active) {
+        continue;  // discard audio captured before/during pause, in source mode, or when session is not active
       }
       sys->chunks_sent++;
       if (!vw_worker_client_send_audio(sys->client, &chunk)) {
@@ -590,6 +983,9 @@ static void* vw_plugin_sender_main(void* arg) {
     int recv_status = vw_worker_client_receive_frame(sys->client, sent_any ? 5000 : 20000, &recv);
     if (recv_status == VW_IPC_RECV_FATAL) {
       atomic_store(&sys->worker_dead, true);
+      sys->model_download_id[0] = '\0';
+      config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status", "failed:worker");
+      vw_caption_presenter_clear_model_progress(&sys->presenter);
       vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_DEAD",
                    "receive_frame fatal (transport dead); captions disabled, passthrough only");
       continue;  // top of loop: respawn the worker
@@ -619,7 +1015,7 @@ static void* vw_plugin_sender_main(void* arg) {
             // presenter may copy/format it safely. No OSD when the vout walk fails (passthrough).
             // input_time_us is reserved for media-domain scheduling (17c); the presenter renders
             // in the OSD clock domain (mdate), which this VLC build displays reliably.
-            vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us);
+            vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us, is_source_mode);
           } else {
             vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_PAUSED_DROP", "segment id=%llu dropped while paused",
                          (unsigned long long)recv.segment.segment_id);
@@ -630,7 +1026,70 @@ static void* vw_plugin_sender_main(void* arg) {
           vw_log_event(VW_LOG_LEVEL_DEBUG, "PLUGIN_STATUS", "queued=%lld inference=%lld dropped=%lld",
                        (long long)recv.status.queued_audio_us, (long long)recv.status.inference_us,
                        (long long)recv.status.dropped_audio_us);
+          if (recv.status.resolved_backend[0] != '\0') {
+            // Cross-thread config write is safe: VLC config API is internally locked
+            // (config_PutPsz takes the config lock). Mirrors worker's resolved backend
+            // (gpu|cpu, NUL-padded) for the GUI's informational whisper-backend-active key.
+            config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend-active",
+                          recv.status.resolved_backend);
+          }
           break;
+        case VW_MSG_MODEL_PROGRESS: {
+          config_PutInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-progress",
+                        (int)recv.progress.pct);
+          const char* stage_name = "idle";
+          switch (recv.progress.stage) {
+            case 0:
+              stage_name = "idle";
+              break;
+            case 1:
+              stage_name = "downloading";
+              break;
+            case 2:
+              stage_name = "verifying";
+              break;
+            case 3:
+              stage_name = "done";
+              break;
+            case 4:
+              stage_name = "failed";
+              break;
+            case 5:
+              stage_name = "aborting";
+              break;
+            default:
+              stage_name = "idle";
+              break;
+          }
+          char prog_status[80];
+          snprintf(prog_status, sizeof(prog_status), "%s:%s", stage_name, recv.progress.model_id);
+          config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status", prog_status);
+          if (recv.progress.stage == VW_MODEL_STAGE_IDLE) {
+            // The worker emits an initial IDLE snapshot before starting the asynchronous download. Keep the
+            // pending correlation id intact so the later DONE frame can activate and respawn the new model.
+            vw_caption_presenter_clear_model_progress(&sys->presenter);
+          } else {
+            vw_caption_presenter_show_model_progress(&sys->presenter, &recv.progress);
+          }
+          vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_PROGRESS",
+                       "model '%s' stage=%s pct=%u bytes=%llu/%llu pending='%s'", recv.progress.model_id, stage_name,
+                       (unsigned)recv.progress.pct, (unsigned long long)recv.progress.bytes_done,
+                       (unsigned long long)recv.progress.bytes_total,
+                       sys->model_download_id[0] ? sys->model_download_id : "(none)");
+          if (recv.progress.stage == VW_MODEL_STAGE_FAILED) {
+            sys->model_download_id[0] = '\0';
+          }
+          if (recv.progress.stage == VW_MODEL_STAGE_DONE &&
+              strcmp(sys->model_download_id, recv.progress.model_id) == 0) {
+            sys->model_download_id[0] = '\0';
+            if (!vw_plugin_activate_downloaded_model(sys, recv.progress.model_id, paused)) {
+              config_PutPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-status",
+                            "failed:activation");
+              vw_caption_presenter_clear_model_progress(&sys->presenter);
+            }
+          }
+          break;
+        }
         case VW_MSG_ERROR:
           sys->errors_received++;
           vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_WORKER_ERROR", "code=%u recoverable=%u msg=%.*s",
@@ -644,11 +1103,12 @@ static void* vw_plugin_sender_main(void* arg) {
       }
     }
 
-    // If a pending caption cue is buffered and media position is approaching its display start PTS,
-    // flush it to SPU so it is rendered on time with its reading floor duration.
+    // Look-ahead cues flush as the media position approaches; live cues flush immediately in the OSD clock domain
+    // because their system-date PTS cannot be compared with INPUT_GET_TIME.
     if (sys->presenter.has_pending && !paused) {
-      if (current_position_us <= 0 || sys->presenter.pending_segment.start_pts_us <= current_position_us + 100000LL) {
-        vw_caption_presenter_flush(&sys->presenter, current_position_us);
+      if (!is_source_mode || current_position_us < 0 ||
+          sys->presenter.pending_segment.start_pts_us <= current_position_us + 100000LL) {
+        vw_caption_presenter_flush(&sys->presenter, current_position_us, is_source_mode);
       }
     }
 
@@ -791,6 +1251,8 @@ static int vw_plugin_open(vlc_object_t* obj) {
   sys->presenter.p_filter_ctx = p_filter;  // sender thread renders SEGMENT frames via this context
   sys->presenter.spu_channel_id = -1;
   sys->presenter.spu_channel_registered = false;
+  sys->presenter.model_progress_channel_id = -1;
+  sys->presenter.model_progress_channel_registered = false;
 
   vw_log_set_sink(vw_plugin_log_sink, obj);
 
@@ -859,8 +1321,24 @@ static int vw_plugin_open(vlc_object_t* obj) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_RNG_FAIL", "failed to generate random auth_token");
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_WORKER_LAUNCH", "spawning worker: %s", sys->worker_path);
-    sys->client = vw_worker_client_launch_and_connect(sys->worker_path, sys->pipe_name, sys->auth_token,
-                                                      sys->model_path[0] ? sys->model_path : NULL);
+    char* open_be = config_GetPsz(obj, "whisper-backend");
+    char* open_lg = config_GetPsz(obj, "whisper-language");
+    int64_t open_thr = config_GetInt(obj, "whisper-threads");
+    int open_gpu = -1;
+    if (config_FindConfig("whisper-gpu-device")) {
+      open_gpu = (int)config_GetInt(obj, "whisper-gpu-device");
+    }
+    char open_model_dir[VW_PATH_MAX_BYTES];
+    open_model_dir[0] = '\0';
+    vw_plugin_get_model_dir(open_model_dir, sizeof(open_model_dir));
+    vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MODEL_PATH", "worker model='%s' download_dir='%s'",
+                 sys->model_path[0] ? sys->model_path : "(bundled/default)",
+                 open_model_dir[0] ? open_model_dir : "(unavailable)");
+    sys->client = vw_worker_client_launch_and_connect_ex(
+        sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL, open_be,
+        open_lg, (int)open_thr, open_gpu, open_model_dir[0] ? open_model_dir : NULL);
+    if (open_be) free(open_be);
+    if (open_lg) free(open_lg);
     vw_log_event(sys->client ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_CONNECT",
                  sys->client ? "worker connected (HELLO handshake ok)" : "worker connect failed");
   }
@@ -878,6 +1356,15 @@ static int vw_plugin_open(vlc_object_t* obj) {
     // when neither a polled position nor a stored target exists, the -1 sentinel lets the
     // PLUGIN_SEEK_TARGET_MISSING branch fire instead of emitting a spurious seek to 0.
     atomic_init(&sys->resume_pts_us, -1);
+    atomic_init(&sys->respawn_in_progress, false);
+    sys->cfg_snapshot_valid = false;
+    sys->last_config_poll_us = 0;
+    sys->cfg_worker_path[0] = '\0';
+    sys->cfg_model_path[0] = '\0';
+    sys->cfg_backend[0] = '\0';
+    sys->cfg_language[0] = '\0';
+    sys->cfg_model_download[0] = '\0';
+    sys->cfg_threads = 4;
     if (vw_platform_thread_create(&sys->sender_thread, vw_plugin_sender_main, sys)) {
       sys->sender_started = true;
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER_START", "sender thread started (5/20 ms cadence)");
@@ -931,12 +1418,27 @@ static void vw_plugin_close(vlc_object_t* obj) {
 #pragma GCC diagnostic ignored "-Wpedantic"
 vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper AI Captions Filter")
     set_capability("audio filter", 0) set_category(CAT_AUDIO) set_subcategory(SUBCAT_AUDIO_AFILTER)
-        add_shortcut("vlc_whisper", "whisper")
-            add_loadfile("worker-path", NULL, "Path to vlc-whisper-worker executable (optional)",
-                         "Explicit location of vlc-whisper-worker[.exe] for installs where it is "
-                         "not co-located with the plugin; defaults to discovery",
-                         false)
-                add_loadfile("model-path", NULL, "Path to ggml-tiny.en.bin model file (optional)",
-                             "Explicit location of the whisper model; defaults to discovery next to the plugin", false)
-                    set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
+        add_shortcut("vlc_whisper",
+                     "whisper") add_loadfile("worker-path", NULL, "Path to vlc-whisper-worker executable (optional)",
+                                             "Explicit location of vlc-whisper-worker[.exe] for installs where it is "
+                                             "not co-located with the plugin; defaults to discovery",
+                                             false)
+            add_loadfile("model-path", NULL, "Path to bundled ggml-tiny.bin or another model (optional)",
+                         "Explicit location of the whisper model; absent user selection discovers bundled tiny first",
+                         false) add_string("whisper-backend", "auto", "Inference backend",
+                                           "auto|gpu|cpu (auto probes Vulkan)",
+                                           false) add_string("whisper-language", "en", "Caption language",
+                                                             "Whisper language code (en|ro|tr|de|fr|es...)", false)
+                add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)", false)
+                    change_integer_range(1, 16)
+                        add_string("whisper-backend-active", "", "Active backend (read-only)",
+                                   "Mirrors resolved backend from worker STATUS (gpu|cpu); informational", false)
+                            add_string("whisper-model-download", "", "Model download control",
+                                       "Catalog id to download or abort; plugin relays as MODEL_CTRL", false)
+                                add_integer("whisper-model-progress", 0, "Download progress percent (read-only mirror)",
+                                            "Mirrors worker MODEL_PROGRESS pct (0..100) for Lua GUI",
+                                            true) change_integer_range(0, 100)
+                                    add_string("whisper-model-status", "", "Model download status (read-only mirror)",
+                                               "Mirrors worker MODEL_PROGRESS stage:model_id for GUI", true)
+                                        set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
 #pragma GCC diagnostic pop

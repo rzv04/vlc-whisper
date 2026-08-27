@@ -47,8 +47,11 @@ int main(void) {
   EXPECT(vw_whisper_engine_get_segment(NULL, 0, &dummy_seg) == false);
 
   // 2. Check for model file in CWD or build parent directories
-  const char* model_paths[] = {"models/ggml-tiny.en.bin", "../../../models/ggml-tiny.en.bin",
-                               "../../models/ggml-tiny.en.bin", "../models/ggml-tiny.en.bin"};
+  const char* model_paths[] = {
+      "models/ggml-tiny.bin",          "../../../models/ggml-tiny.bin", "../../models/ggml-tiny.bin",
+      "../models/ggml-tiny.bin",       "models/ggml-tiny.en.bin",       "../../../models/ggml-tiny.en.bin",
+      "../../models/ggml-tiny.en.bin", "../models/ggml-tiny.en.bin",
+  };
   const char* model_path = NULL;
   for (size_t i = 0; i < sizeof(model_paths) / sizeof(model_paths[0]); i++) {
     FILE* f = fopen(model_paths[i], "rb");
@@ -60,7 +63,7 @@ int main(void) {
   }
 
   if (!model_path) {
-    printf("Model file ggml-tiny.en.bin not present - skipping model-gated test (exit 77)\n");
+    printf("Model file (ggml-tiny.bin or ggml-tiny.en.bin) not present - skipping model-gated test (exit 77)\n");
     return 77;
   }
 

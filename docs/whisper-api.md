@@ -37,7 +37,7 @@ Controls model loading behaviour.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `use_gpu` | `bool` | implementation-defined | Offload computation to GPU |
+| `use_gpu` | `bool` | implementation-defined | Offload computation to GPU. When no usable GPU/IGPU device exists (or the `gpu_device` ordinal is out of range), whisper.cpp silently degrades to CPU and still returns a valid context — the vlc-whisper worker re-derives this decision after init and reports the effective backend in the IPC `STATUS.resolved_backend` field (see `docs/api-contracts.md`) |
 | `flash_attn` | `bool` | `false` | Enable flash attention (reduces memory, may affect quality) |
 | `gpu_device` | `int` | `0` | CUDA device index |
 | `dtw_token_timestamps` | `bool` | `false` | [EXPERIMENTAL] Token-level timestamps via DTW |

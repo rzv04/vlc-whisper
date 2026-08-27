@@ -19,7 +19,11 @@ text_segment_Delete
 mdate
 var_Inherit
 var_Get
+config_FindConfig
+config_GetInt
 config_GetPsz
+config_PutInt
+config_PutPsz
 input_Control
 input_GetItem
 input_item_GetURI

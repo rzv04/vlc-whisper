@@ -27,20 +27,18 @@ struct vw_source_decoder {
   int64_t duration_us;
   int64_t current_pts_us;
   int64_t stream_start_time;  // Container start_time in stream TB; media-relative normalization base.
+  bool demux_eof;
+  bool flush_sent;
   bool eof_reached;
   bool pkt_pending;
   int16_t leftover_buffer[4096];
   size_t leftover_count;
 };
 
-// Strips file:// URI prefix if present
 static const char* vw_source_decoder_normalize_posix_path(const char* url, char* buf, size_t buf_len) {
   if (!url) return "";
   const char* src = url;
-  if (strncmp(src, "file://", 7) == 0) {
-    src += 7;
-  }
-  // URL decode %20 etc.
+  if (strncmp(src, "file://", 7) == 0) src += 7;
   size_t idx = 0;
   while (*src && idx + 1 < buf_len) {
     if (*src == '%' && src[1] && src[2]) {
@@ -66,10 +64,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   vw_source_decoder_normalize_posix_path(url, clean_path, sizeof(clean_path));
 
   AVFormatContext* fmt_ctx = NULL;
-  if (avformat_open_input(&fmt_ctx, clean_path, NULL, NULL) < 0) {
-    return NULL;
-  }
-
+  if (avformat_open_input(&fmt_ctx, clean_path, NULL, NULL) < 0) return NULL;
   if (avformat_find_stream_info(fmt_ctx, NULL) < 0) {
     avformat_close_input(&fmt_ctx);
     return NULL;
@@ -93,7 +88,6 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
     avformat_close_input(&fmt_ctx);
     return NULL;
   }
-
   if (avcodec_parameters_to_context(codec_ctx, stream->codecpar) < 0 || avcodec_open2(codec_ctx, codec, NULL) < 0) {
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
@@ -128,6 +122,15 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   dec->stream_start_time = (stream->start_time == AV_NOPTS_VALUE) ? 0 : stream->start_time;
   dec->pkt = av_packet_alloc();
   dec->frame = av_frame_alloc();
+  if (!dec->pkt || !dec->frame) {
+    if (dec->pkt) av_packet_free(&dec->pkt);
+    if (dec->frame) av_frame_free(&dec->frame);
+    swr_free(&swr_ctx);
+    avcodec_free_context(&codec_ctx);
+    avformat_close_input(&fmt_ctx);
+    free(dec);
+    return NULL;
+  }
   dec->duration_us = fmt_ctx->duration > 0 ? (int64_t)av_rescale(fmt_ctx->duration, 1000000, AV_TIME_BASE) : -1;
 
   if (info) {
@@ -137,7 +140,6 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
     snprintf(info->container_format, sizeof(info->container_format), "%s",
              fmt_ctx->iformat ? fmt_ctx->iformat->name : "ffmpeg");
   }
-
   return dec;
 }
 bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us) {
@@ -151,7 +153,13 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
 
   if (av_seek_frame(decoder->fmt_ctx, decoder->audio_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD) >= 0) {
     avcodec_flush_buffers(decoder->codec_ctx);
+    if (decoder->swr_ctx) {
+      swr_close(decoder->swr_ctx);
+      if (swr_init(decoder->swr_ctx) < 0) return false;
+    }
     decoder->current_pts_us = target_pts_us;
+    decoder->demux_eof = false;
+    decoder->flush_sent = false;
     decoder->eof_reached = false;
     decoder->leftover_count = 0;
     if (decoder->pkt_pending) {
@@ -163,16 +171,30 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return false;
 }
 
+static void vw_source_decoder_copy_samples(vw_source_decoder_t* decoder, const int16_t* samples, size_t count,
+                                           int16_t* out_pcm, size_t max_samples, size_t* inout_total_samples) {
+  size_t needed = max_samples - *inout_total_samples;
+  size_t to_copy = count < needed ? count : needed;
+  if (to_copy > 0) {
+    memcpy(out_pcm + *inout_total_samples, samples, to_copy * sizeof(int16_t));
+    *inout_total_samples += to_copy;
+    decoder->current_pts_us += (int64_t)((to_copy * 1000000ULL) / 16000ULL);
+  }
+  size_t remainder = count - to_copy;
+  if (remainder > 0) {
+    size_t cap = sizeof(decoder->leftover_buffer) / sizeof(int16_t);
+    if (remainder > cap) remainder = cap;
+    memcpy(decoder->leftover_buffer, samples + to_copy, remainder * sizeof(int16_t));
+    decoder->leftover_count = remainder;
+  }
+}
+
 static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
                                             size_t* inout_total_samples, int64_t* out_pts_us) {
   AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
   int64_t frame_pts = decoder->frame->pts;
-  if (frame_pts == AV_NOPTS_VALUE) {
-    frame_pts = decoder->frame->best_effort_timestamp;
-  }
-  if (frame_pts == AV_NOPTS_VALUE) {
-    frame_pts = decoder->frame->pkt_dts;
-  }
+  if (frame_pts == AV_NOPTS_VALUE) frame_pts = decoder->frame->best_effort_timestamp;
+  if (frame_pts == AV_NOPTS_VALUE) frame_pts = decoder->frame->pkt_dts;
   if (frame_pts != AV_NOPTS_VALUE && stream) {
     // Raw stream timestamp -> media-relative: strip the container offset so
     // caption scheduling aligns with VLC's media timeline (mirror of seek).
@@ -180,36 +202,26 @@ static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_
     if (frame_pts < 0) frame_pts = 0;  // head padding can precede start_time
     decoder->current_pts_us = (int64_t)av_rescale_q(frame_pts, stream->time_base, (AVRational){1, 1000000});
   }
-
-  if (out_pts_us && *inout_total_samples == 0) {
-    *out_pts_us = decoder->current_pts_us;
-  }
+  if (out_pts_us && *inout_total_samples == 0) *out_pts_us = decoder->current_pts_us;
 
   int16_t resample_buf[4096];
   uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
   int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)),
                               (const uint8_t**)decoder->frame->extended_data, decoder->frame->nb_samples);
+  if (converted > 0)
+    vw_source_decoder_copy_samples(decoder, resample_buf, (size_t)converted, out_pcm, max_samples, inout_total_samples);
+}
 
-  if (converted > 0) {
-    size_t samples_converted = (size_t)converted;
-    size_t needed = max_samples - *inout_total_samples;
-    if (samples_converted <= needed) {
-      memcpy(out_pcm + *inout_total_samples, resample_buf, samples_converted * sizeof(int16_t));
-      *inout_total_samples += samples_converted;
-      decoder->current_pts_us += (int64_t)((samples_converted * 1000000ULL) / 16000ULL);
-    } else {
-      memcpy(out_pcm + *inout_total_samples, resample_buf, needed * sizeof(int16_t));
-      *inout_total_samples += needed;
-      decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
-
-      size_t remainder = samples_converted - needed;
-      if (remainder > sizeof(decoder->leftover_buffer) / sizeof(int16_t)) {
-        remainder = sizeof(decoder->leftover_buffer) / sizeof(int16_t);
-      }
-      memcpy(decoder->leftover_buffer, resample_buf + needed, remainder * sizeof(int16_t));
-      decoder->leftover_count = remainder;
-    }
-  }
+static bool vw_source_decoder_drain_swr(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
+                                        size_t* inout_total_samples, int64_t* out_pts_us) {
+  int16_t resample_buf[4096];
+  uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
+  int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)), NULL, 0);
+  if (converted < 0) return true;
+  if (converted == 0) return true;
+  if (out_pts_us && *inout_total_samples == 0) *out_pts_us = decoder->current_pts_us;
+  vw_source_decoder_copy_samples(decoder, resample_buf, (size_t)converted, out_pcm, max_samples, inout_total_samples);
+  return false;
 }
 
 size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
@@ -217,35 +229,60 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
   if (!decoder || !decoder->fmt_ctx || !out_pcm || max_samples == 0) return 0;
 
   size_t total_samples = 0;
-
-  // Drain leftovers first
   if (decoder->leftover_count > 0) {
     size_t to_copy = decoder->leftover_count < max_samples ? decoder->leftover_count : max_samples;
     memcpy(out_pcm, decoder->leftover_buffer, to_copy * sizeof(int16_t));
-    if (out_pts_us && total_samples == 0) {
-      *out_pts_us = decoder->current_pts_us;
-    }
+    if (out_pts_us) *out_pts_us = decoder->current_pts_us;
     total_samples += to_copy;
     decoder->current_pts_us += (int64_t)((to_copy * 1000000ULL) / 16000ULL);
-
     if (to_copy < decoder->leftover_count) {
       memmove(decoder->leftover_buffer, decoder->leftover_buffer + to_copy,
               (decoder->leftover_count - to_copy) * sizeof(int16_t));
       decoder->leftover_count -= to_copy;
       return total_samples;
-    } else {
-      decoder->leftover_count = 0;
     }
+    decoder->leftover_count = 0;
   }
 
   int defer_no_progress = 0;
   while (total_samples < max_samples && !decoder->eof_reached) {
+    if (decoder->demux_eof) {
+      if (!decoder->flush_sent) {
+        int flush_ret = avcodec_send_packet(decoder->codec_ctx, NULL);
+        if (flush_ret >= 0 || flush_ret == AVERROR_EOF) {
+          decoder->flush_sent = true;
+        } else if (flush_ret != AVERROR(EAGAIN)) {
+          vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_FLUSH", "avcodec_send_packet(NULL) failed (%d)", flush_ret);
+          decoder->flush_sent = true;
+        }
+      }
+
+      int recv_ret = avcodec_receive_frame(decoder->codec_ctx, decoder->frame);
+      if (recv_ret >= 0) {
+        vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+        continue;
+      }
+      if (recv_ret == AVERROR_EOF) {
+        bool swr_empty = vw_source_decoder_drain_swr(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+        if (swr_empty && decoder->leftover_count == 0) decoder->eof_reached = true;
+        continue;
+      }
+      if (recv_ret == AVERROR(EAGAIN)) {
+        if (!decoder->flush_sent) continue;
+        break;
+      }
+      vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RECV", "avcodec_receive_frame failed (%d)", recv_ret);
+      decoder->eof_reached = true;
+      break;
+    }
+
     if (!decoder->pkt_pending) {
       int ret = av_read_frame(decoder->fmt_ctx, decoder->pkt);
       if (ret < 0) {
-        decoder->eof_reached = true;
-        break;
+        decoder->demux_eof = true;
+        continue;
       }
+      decoder->pkt_pending = true;
     }
 
     if (decoder->pkt->stream_index == decoder->audio_stream_idx) {
@@ -253,16 +290,12 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       int progress_leftover = (int)decoder->leftover_count;
       int send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
       if (send_ret == AVERROR(EAGAIN)) {
-        // Decoder output buffer is full: drain what we can, then retry the same
-        // packet. We never drop the packet here -- it is deferred to the next
-        // iteration so no compressed audio is lost.
         while (total_samples < max_samples && decoder->leftover_count == 0 &&
                avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
           vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
         }
-        if (total_samples < max_samples && decoder->leftover_count == 0) {
+        if (total_samples < max_samples && decoder->leftover_count == 0)
           send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
-        }
       }
 
       if (send_ret >= 0) {
@@ -274,25 +307,15 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
         decoder->pkt_pending = false;
         defer_no_progress = 0;
       } else if (send_ret == AVERROR(EAGAIN)) {
-        // Decoder still cannot accept the packet after draining. Defer it and loop
-        // without reading a new packet until the decoder makes room. Guard against a
-        // genuine deadlock: if draining produced no new samples and the leftover
-        // buffer did not shrink twice in a row, stop to avoid an infinite loop.
-        if (total_samples == progress_total && (int)decoder->leftover_count == progress_leftover) {
+        if (total_samples == progress_total && (int)decoder->leftover_count == progress_leftover)
           defer_no_progress++;
-        } else {
+        else
           defer_no_progress = 0;
-        }
-        if (defer_no_progress >= 2) {
-          av_packet_unref(decoder->pkt);
-          decoder->pkt_pending = false;
-          break;
-        }
+        if (defer_no_progress >= 2) break;
         decoder->pkt_pending = true;
       } else {
-        if (send_ret != AVERROR_EOF) {
+        if (send_ret != AVERROR_EOF)
           vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
-        }
         av_packet_unref(decoder->pkt);
         decoder->pkt_pending = false;
       }

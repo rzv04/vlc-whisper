@@ -246,8 +246,12 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
     return false;
   }
 
+  char clean_text[VW_SEGMENT_BUILDER_MAX_TEXT_BYTES];
+  memcpy(clean_text, text, len);
+  clean_text[len] = '\0';
+
   // Reject non-speech descriptor tags (e.g. [Music], ♪) and isolated punctuation (e.g. "...", "---")
-  if (vw_hallucination_is_phantom_text(text)) {
+  if (vw_hallucination_is_phantom_text(clean_text)) {
     return false;
   }
 
@@ -276,23 +280,23 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
     bool time_matches = (start_diff <= VW_DEDUP_TIME_TOLERANCE_US) ||
                         (end_pts_us > last->start_pts_us && start_pts_us < last->end_pts_us);
     if (time_matches) {
-      if (strncmp(last->text_utf8, text, len) == 0 && last->text_utf8[len] == '\0') {
+      if (strcmp(last->text_utf8, clean_text) == 0) {
         return false;
       }
-      if (strstr(last->text_utf8, text) != NULL) {
+      if (strstr(last->text_utf8, clean_text) != NULL) {
         return false;
       }
     }
     // Partial-overlap prefix trim against the pending cue (candidate starts with the cue's tail, or
     // extends a cue that is its word-aligned prefix -> emit only the new remainder).
     bool dropped = false;
-    if (vw_segment_builder_apply_tail_trim(builder, text, len, start_pts_us, end_pts_us, last->text_utf8,
+    if (vw_segment_builder_apply_tail_trim(builder, clean_text, len, start_pts_us, end_pts_us, last->text_utf8,
                                            last->start_pts_us, last->end_pts_us, &dropped)) {
       return !dropped;
     }
     // Mid-containment (the cue appears mid-candidate, not as a word-aligned prefix): all candidate
     // words are covered -> drop (runs after the trim, which handles the prefix-extension case).
-    if (time_matches && strstr(text, last->text_utf8) != NULL) {
+    if (time_matches && strstr(clean_text, last->text_utf8) != NULL) {
       return false;
     }
   }
@@ -311,22 +315,22 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
       continue;
     }
 
-    if (strncmp(hist->text, text, len) == 0 && hist->text[len] == '\0') {
+    if (strcmp(hist->text, clean_text) == 0) {
       return false;  // exact duplicate
     }
-    if (strstr(hist->text, text) != NULL) {
+    if (strstr(hist->text, clean_text) != NULL) {
       return false;  // fragment already covered
     }
     // Partial-overlap prefix trim against this committed cue: handles both the candidate-repeats-
     // cue-tail shape and the candidate-extends-cue-prefix shape (emitting only the new remainder).
     bool dropped = false;
-    if (vw_segment_builder_apply_tail_trim(builder, text, len, start_pts_us, end_pts_us, hist->text, hist->start_pts_us,
-                                           hist->end_pts_us, &dropped)) {
+    if (vw_segment_builder_apply_tail_trim(builder, clean_text, len, start_pts_us, end_pts_us, hist->text,
+                                           hist->start_pts_us, hist->end_pts_us, &dropped)) {
       return !dropped;
     }
     // Mid-containment (the cue appears mid-candidate, not as a word-aligned prefix): all candidate
     // words are covered -> drop.
-    if (strstr(text, hist->text) != NULL) {
+    if (strstr(clean_text, hist->text) != NULL) {
       return false;
     }
   }
@@ -339,10 +343,10 @@ bool vw_segment_builder_push_hypothesis(vw_segment_builder_t* builder, const cha
   if (emit_start >= end_pts_us) {
     return false;
   }
-  if (!vw_segment_builder_enqueue(builder, text, emit_start, end_pts_us)) {
+  if (!vw_segment_builder_enqueue(builder, clean_text, emit_start, end_pts_us)) {
     return false;
   }
-  vw_segment_builder_commit_history(builder, text, emit_start, end_pts_us);
+  vw_segment_builder_commit_history(builder, clean_text, emit_start, end_pts_us);
   return true;
 }
 

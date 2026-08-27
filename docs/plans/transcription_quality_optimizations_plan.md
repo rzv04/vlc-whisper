@@ -145,7 +145,7 @@ Dialogue audio in movies and streams frequently contains sub-80Hz low-frequency 
 ## Definition of Done
 - [ ] C17 code standard enforced (`-std=c17`).
 - [ ] Zero blocking locks, heap allocations, or IPC in VLC audio callback.
-- [ ] Offline privacy invariant preserved (zero network calls).
+- [ ] No unapproved network calls; model provisioning remains explicit worker-only and translation remains separately opt-in.
 - [ ] Valgrind memcheck clean (0 leaks).
 - [ ] Native Linux and Windows MinGW cross-builds pass with zero warnings.
 - [ ] ADR and documentation updated in `docs/decisions.md` and `docs/architecture.md`.
