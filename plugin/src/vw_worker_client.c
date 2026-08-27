@@ -79,6 +79,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   vw_process_t worker_process = (vw_process_t)0;
   if (executable_path) {
     char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
+    char gpu_buf[16];
     token_to_hex(auth_token, token_hex);
     // 19b: argv grows from 8 to 16 to carry --backend/--gpu-device/--language/--n-threads
     const char* argv[20];
@@ -97,7 +98,6 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     argv[argc++] = "--backend";
     argv[argc++] = eff_backend;
     if (gpu_device >= 0) {
-      char gpu_buf[16];
       snprintf(gpu_buf, sizeof(gpu_buf), "%d", gpu_device);
       argv[argc++] = "--gpu-device";
       argv[argc++] = gpu_buf;
