@@ -26,6 +26,7 @@ struct vw_source_decoder {
   int audio_stream_idx;
   int64_t duration_us;
   int64_t current_pts_us;
+  int64_t stream_start_time;  // Container start_time in stream TB; media-relative normalization base.
   bool demux_eof;
   bool flush_sent;
   bool eof_reached;
@@ -116,6 +117,9 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   dec->codec_ctx = codec_ctx;
   dec->swr_ctx = swr_ctx;
   dec->audio_stream_idx = audio_idx;
+  // Normalize to a media-relative timeline: containers may begin at a nonzero
+  // start_time (e.g. MPEG-TS), while VLC positions are media-relative from 0.
+  dec->stream_start_time = (stream->start_time == AV_NOPTS_VALUE) ? 0 : stream->start_time;
   dec->pkt = av_packet_alloc();
   dec->frame = av_frame_alloc();
   if (!dec->pkt || !dec->frame) {
@@ -138,12 +142,14 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   }
   return dec;
 }
-
 bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us) {
   if (!decoder || !decoder->fmt_ctx || decoder->audio_stream_idx < 0) return false;
 
   AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
   int64_t target_ts = av_rescale_q(target_pts_us, (AVRational){1, 1000000}, stream->time_base);
+  // Media-relative position -> raw stream timestamp: add the container offset
+  // so seeks land on the requested media time even when start_time != 0.
+  target_ts += decoder->stream_start_time;
 
   if (av_seek_frame(decoder->fmt_ctx, decoder->audio_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD) >= 0) {
     avcodec_flush_buffers(decoder->codec_ctx);
@@ -190,6 +196,10 @@ static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_
   if (frame_pts == AV_NOPTS_VALUE) frame_pts = decoder->frame->best_effort_timestamp;
   if (frame_pts == AV_NOPTS_VALUE) frame_pts = decoder->frame->pkt_dts;
   if (frame_pts != AV_NOPTS_VALUE && stream) {
+    // Raw stream timestamp -> media-relative: strip the container offset so
+    // caption scheduling aligns with VLC's media timeline (mirror of seek).
+    frame_pts -= decoder->stream_start_time;
+    if (frame_pts < 0) frame_pts = 0;  // head padding can precede start_time
     decoder->current_pts_us = (int64_t)av_rescale_q(frame_pts, stream->time_base, (AVRational){1, 1000000});
   }
   if (out_pts_us && *inout_total_samples == 0) *out_pts_us = decoder->current_pts_us;
