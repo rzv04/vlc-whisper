@@ -3,19 +3,19 @@
 # ==============================================================================
 # ------------------------------------------------------------------------------
 # Clean-checkout model provisioning.
-# models/*.bin are gitignored; the NSIS installer requires ggml-tiny.en.bin.
+# models/*.bin are gitignored; the NSIS installer requires ggml-tiny.bin.
 # The model is fetched ONLY when the 'installer' (or 'provision_models') target
 # is built and the file is absent — plain configure/build never touch network,
 # keeping offline builds offline. Integrity pinned to the sha256 recorded in
 # models/manifest.json (mismatch aborts the download).
 # ------------------------------------------------------------------------------
-set(VW_MODEL_TINY_EN "${CMAKE_CURRENT_SOURCE_DIR}/models/ggml-tiny.en.bin")
-set(VW_MODEL_TINY_EN_URL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin")
-set(VW_MODEL_TINY_EN_SHA256 "c78c86576ed16665798939f268b20902c347d21098f98d71be68b3d61e0b0486")
+set(VW_MODEL_TINY "${CMAKE_CURRENT_SOURCE_DIR}/models/ggml-tiny.bin")
+set(VW_MODEL_TINY_URL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin")
+set(VW_MODEL_TINY_SHA256 "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21")
 
-if(NOT EXISTS "${VW_MODEL_TINY_EN}")
+if(NOT EXISTS "${VW_MODEL_TINY}")
   message(WARNING
-    "VW: models/ggml-tiny.en.bin is absent. Building the 'installer' target will "
+    "VW: models/ggml-tiny.bin is absent. Building the 'installer' target will "
     "fetch it automatically (sha256-pinned); 'provision_models' fetches it standalone. "
     "CPack ZIP omits it until provisioned.")
 endif()
@@ -39,20 +39,20 @@ if(WIN32)
 
     add_custom_target(provision_models
       COMMAND ${CMAKE_COMMAND}
-              -DMODEL_PATH=${VW_MODEL_TINY_EN}
-              -DMODEL_URL=${VW_MODEL_TINY_EN_URL}
-              -DMODEL_SHA256=${VW_MODEL_TINY_EN_SHA256}
+              -DMODEL_PATH=${VW_MODEL_TINY}
+              -DMODEL_URL=${VW_MODEL_TINY_URL}
+              -DMODEL_SHA256=${VW_MODEL_TINY_SHA256}
               -DALLOW_DOWNLOAD=${VW_PROVISION_MODELS}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_provision_model.cmake
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      COMMENT "Provisioning models/ggml-tiny.en.bin (skipped when present)..."
+      COMMENT "Provisioning models/ggml-tiny.bin (skipped when present)..."
     )
 
     add_custom_target(installer
       COMMAND ${CMAKE_COMMAND}
-              -DMODEL_PATH=${VW_MODEL_TINY_EN}
-              -DMODEL_URL=${VW_MODEL_TINY_EN_URL}
-              -DMODEL_SHA256=${VW_MODEL_TINY_EN_SHA256}
+              -DMODEL_PATH=${VW_MODEL_TINY}
+              -DMODEL_URL=${VW_MODEL_TINY_URL}
+              -DMODEL_SHA256=${VW_MODEL_TINY_SHA256}
               -DALLOW_DOWNLOAD=${VW_PROVISION_MODELS}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_provision_model.cmake
       COMMAND ${MAKENSIS_EXECUTABLE} ${NSIS_SCRIPT_OUT}
@@ -85,6 +85,9 @@ if(WIN32)
   install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/models"
     DESTINATION .
     FILES_MATCHING PATTERN "*.bin" PATTERN "*.json"
+  )
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lua"
+    DESTINATION .
   )
   install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"

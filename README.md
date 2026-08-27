@@ -1,19 +1,152 @@
 # VLC-Whisper
 
-Offline, real-time speech captions inside VLC for local media.
+<p align="center">
+  <img src="./assets/vlc-whisper-logo-animation.gif" width=700 alt="VLC-Whisper">
+</p>
+
+<p align="center">
+  <a href="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml">
+    <img src="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://github.com/rzv04/vlc-whisper/releases">
+    <img src="https://img.shields.io/github/v/release/rzv04/vlc-whisper" alt="Release">
+  </a>
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
+  </a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey" alt="Windows and Linux">
+  <img src="https://img.shields.io/badge/VLC-3.0%2B-orange" alt="VLC 3.0+">
+  <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
+</p>
+
+**VLC-Whisper** brings private, offline, real-time AI speech recognition and subtitle generation directly into VLC media player. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), it automatically transcribes and displays synchronized subtitles for any audio or video file without sending data to the cloud.
 
 ---
 
-## System Prerequisites
+## Live Demo
 
-To build and test the project, install the required packages for your development environment:
+<p align="center">
+  <video
+    src="https://github.com/user-attachments/assets/94ab40aa-f654-4441-b8fb-98575e29d946"
+    width="900"
+    controls>
+  </video>
+</p>
 
-### Ubuntu / Debian
+## Key Highlights
+
+- **100% Private and Offline**: All audio processing, voice activity detection, and speech recognition run entirely on your local machine. Zero cloud APIs, zero telemetry, and zero data leaves your computer.
+- **Hardware-Accelerated**: Supports Vulkan GPU acceleration for fast real-time transcription, with automatic CPU fallback on systems without dedicated graphics.
+- **Ahead-of-Time Lookahead**: When playing local media files, the worker decodes upcoming audio ahead of the playback playhead for instant subtitle availability.
+- **Voice Activity Detection**: Integrated Silero VAD prevents phantom captions during silence, instrumental music, or background noise.
+- **In-App Settings Extension**: Configure speech models, language selection, inference threads, and hardware backend directly from VLC via the `View > VLC-Whisper Settings` menu.
+- **On-Demand Model Downloads**: Comes bundled with the universal multilingual `tiny` model. Download larger or specialized models (`tiny.en`, `base`, `small`, `medium`, `large-v3`) on demand directly within VLC.
+- **Zero Runtime Dependencies**: The Windows worker and plugin are statically linked with MinGW runtime for standalone plug-and-play installation.
+
+---
+
+## Quick Start for End Users (Windows)
+
+For users running VLC media player 3.0 (64-bit) on Windows 10 or 11:
+
+### Option 1: Standalone Installer (Recommended)
+
+1. Download the latest installer `vlc-whisper-0.3.0-win64-setup.exe` from [Releases](https://github.com/rzv04/vlc-whisper/releases).
+2. Run the installer. It automatically:
+   - Detects your 64-bit VLC installation directory (e.g., `C:\Program Files\VideoLAN\VLC`).
+   - Deploys `libvlc_whisper_plugin.dll` to `plugins\audio_filter\`.
+   - Places the AI worker and bundled models into your VLC directory.
+   - Rebuilds the VLC plugin cache (`plugins.dat`).
+   - Creates a **"VLC (with AI Whisper Captions)"** desktop shortcut.
+3. Launch VLC using the created shortcut (or start VLC with `--audio-filter=vlc_whisper`).
+4. Play any video or audio file. Subtitles will appear automatically at the bottom of the screen.
+
+### Option 2: Portable Archive (.zip)
+
+1. Download `vlc-whisper-0.3.0-win64.zip` from [Releases](https://github.com/rzv04/vlc-whisper/releases).
+2. Extract the contents directly into your VLC installation folder (e.g., `C:\Program Files\VideoLAN\VLC`).
+3. Open a terminal in the VLC directory and rebuild the plugin cache:
+   ```cmd
+   vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
+   ```
+4. Launch VLC with `--audio-filter=vlc_whisper`.
+
+---
+
+## Configuring Settings in VLC
+
+VLC-Whisper includes a built-in settings dialog accessible from the VLC menu bar:
+
+1. Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Settings**).
+2. Adjust your preferred configuration:
+   - **Engine (Backend)**: `auto` (default, probes GPU and falls back to CPU), `gpu` (Vulkan), or `cpu`.
+   - **Model**: Choose from bundled `tiny (multilingual)` or additional models (`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`).
+   - **Language**: Select your target language (`English`, `Romanian`, `Turkish`, `German`, `French`, `Spanish`).
+   - **Threads**: CPU inference worker threads (`1` to `16`, default `4`).
+3. Click **Apply** to save the configuration. The worker restarts seamlessly with the new settings.
+
+### Downloading Additional Models
+
+The installer includes the lightweight multilingual `ggml-tiny.bin` model out of the box. To download higher-accuracy models:
+
+1. Open **View > VLC-Whisper Settings**.
+2. Select your desired model in the **Model** dropdown.
+3. Click **Download Selected Model**.
+4. Start media playback if VLC is idle. The worker downloads the model in the background over a secure HTTPS connection and validates its SHA-256 checksum.
+5. Downloaded models are stored in your per-user app directory (`%LOCALAPPDATA%\vlc-whisper\models` on Windows, `~/.local/share/vlc-whisper/models` on Linux). Once complete, the plugin automatically activates the new model.
+
+> [!NOTE]
+> Pausing media playback does not interrupt or pause ongoing model downloads.
+
+---
+
+## Architecture Overview
+
+VLC-Whisper uses an isolated two-process architecture to guarantee VLC media playback stability:
+
+```mermaid
+flowchart TB
+    subgraph VLC["VLC Media Player Process"]
+        direction TB
+        AOUT["Audio Output Pipeline"] -->|"PCM Audio Callback"| PLUGIN["vlc_whisper<br/>(Audio Filter Plugin)"]
+        GUI["vlc_whisper_settings<br/>(Lua Extension GUI)"] -->|"Config / Download Trigger"| PLUGIN
+        PLUGIN -->|"Realtime SPSC Queue"| SENDER["Plugin Sender Thread"]
+        SENDER -->|"Render Subpictures"| SPU["VLC Video Output / SPU Subpictures"]
+    end
+
+    subgraph IPC["Authenticated Local IPC (Pipe / Unix Socket)"]
+        SENDER -->|"Audio Chunks & Control Messages"| WORKER_IN
+        WORKER_OUT -->|"Timed Caption Segments & Progress"| SENDER
+    end
+
+    subgraph WORKER["vlc-whisper-worker (Isolated AI Process)"]
+        direction TB
+        WORKER_IN["Worker IPC Receiver"] --> VAD["Silero VAD<br/>(Voice Activity Detection)"]
+        VAD -->|"Speech Boundaries"| ENGINE["whisper.cpp<br/>(Vulkan GPU / CPU)"]
+        ENGINE --> BUILDER["Segment Builder & Hallucination Filter"]
+        BUILDER --> WORKER_OUT["Worker IPC Sender"]
+        HTTP["Background Model Downloader<br/>(WinHTTP / curl)"] -.->|"SHA-256 Validated Model"| ENGINE
+    end
+```
+
+- **Plugin Layer (`libvlc_whisper_plugin`)**: An out-of-tree VLC `audio_filter` plugin that captures audio PCM frames in real time without blocking VLC's audio pipeline (zero locks, zero heap allocation in audio callbacks).
+- **Worker Layer (`vlc-whisper-worker`)**: A standalone background process that performs heavy speech recognition and VAD inference off the main VLC process.
+- **Secure Local IPC**: Authenticated communication over local named pipes (Windows) or Unix domain sockets (Linux) secured by a per-session 32-byte secret token.
+
+---
+
+## Developer Guide & Building from Source
+
+### System Prerequisites
+
+Install the necessary build dependencies for your development platform:
+
+#### Ubuntu / Debian
 
 ```bash
 # Core build system and native compilers
 sudo apt-get update && sudo apt-get install -y \
-  cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr
+  cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr nsis
 
 # MinGW-w64 cross-compilers (required for Windows x64 targets)
 sudo apt-get install -y \
@@ -23,11 +156,11 @@ sudo apt-get install -y \
 sudo apt-get install -y libvulkan-dev glslc
 ```
 
-### Fedora / RHEL
+#### Fedora / RHEL
 
 ```bash
 sudo dnf install -y cmake ninja-build gcc gcc-c++ clang-tools-extra valgrind \
-  mingw64-gcc mingw64-gcc-c++ vulkan-loader-devel glslc
+  mingw64-gcc mingw64-gcc-c++ vulkan-loader-devel glslc nsis
 ```
 
 ---
@@ -81,7 +214,10 @@ Requires `libvulkan-dev` and `glslc`.
 
 ```bash
 cmake --preset linux-x64-debug
-cmake --build --preset linux-x64-debug -j4
+# NOTE: the Vulkan-enabled linux-x64-debug preset MUST build with -j1 on
+# 8 GB-RAM machines: ggml-vulkan's mul_mm.comp.cpp alone can consume most of
+# the memory and parallel cc1plus instances get OOM-killed (silent build fail).
+cmake --build --preset linux-x64-debug -j1
 ctest --preset linux-x64-debug --output-on-failure
 ```
 
@@ -137,198 +273,131 @@ _(Without `VW_VULKAN_SDK`, `windows-x64-release` prints a warning and automatica
 
 ### GPU (Vulkan) Runtime Notes & Build Memory Limits
 
-- **Runtime Fallback**: When `--backend auto` (default) or `--backend gpu` is used, `whisper.cpp` probes the GPU and transparently falls back to CPU if no physical Vulkan driver/GPU is present at runtime.
-- **Worker Flags**: Pass `--backend auto|gpu|cpu` or `--gpu-device <id>` when launching the worker manually.
-- **Build RAM Usage**: Compiling Vulkan SPIR-V shaders (`glslc`) creates high memory pressure. On systems with ≤8 GB RAM or VMs, limit build concurrency to `-j1` or `-j2` (e.g. `cmake --build --preset <preset> -j1`) to avoid OOM or swap thrashing. The `*-cpu` presets do not invoke `glslc` and are low-memory build targets.
+- **Runtime Fallback**: When `--backend auto` (default) or `--backend gpu` is used, `whisper.cpp` probes the GPU and transparently falls back to CPU if no physical Vulkan driver or GPU is present at runtime.
+- **Worker CLI Flags**: Pass `--backend auto|gpu|cpu` or `--gpu-device <id>` when launching the worker manually.
+- **Build RAM Usage and Memory Limits**: Compiling Vulkan SPIR-V shaders (`glslc`) creates high memory pressure during C++ compilation. On systems with <=8 GB RAM or virtual machines, limit build concurrency to `-j1` or `-j2` (for example, `cmake --build --preset linux-x64-debug -j1`) to prevent parallel compiler processes from exhausting RAM and being terminated by the out-of-memory killer. CPU-only presets (`*-cpu`) do not invoke `glslc` and build with minimal memory usage.
 
 ---
 
-## Running Tests
+## Testing & Verification
 
-The project includes unit and integration tests.
+The project includes unit and integration test suites covering protocol serialization, audio ring buffers, VAD chunking, whisper decoding, and worker IPC lifecycle.
 
-### Using CMake Presets (Linux native)
-
-To compile and run tests natively on Linux during development:
+### Running Tests with CMake Presets (Linux Native)
 
 ```bash
-# Configure the native Linux debug build
+# Configure native Linux debug build
 cmake --preset linux-x64-debug
 
-# Build tests (use -j2 on low-RAM hosts: the first Vulkan build compiles glslc shaders,
-# which spikes memory — see the GPU acceleration section above)
+# Build tests (use -j1 or -j2 on low-RAM hosts)
 cmake --build --preset linux-x64-debug -j4
 
-# Run tests and show output for failed ones
+# Execute the test suite
 ctest --preset linux-x64-debug --output-on-failure
 ```
 
-### Manual Configuration (Without presets)
+### Valgrind Memory Leak Verification
 
-```bash
-cmake -B build -S .
-cmake --build build -j4
-cd build && ctest --output-on-failure
-```
-
-To run the test suite through Valgrind to check for memory leaks and invalid accesses (requires `valgrind` installed):
+Run the entire test suite under Valgrind memcheck to ensure zero memory leaks, uninitialized memory accesses, or buffer overruns:
 
 ```bash
 cmake --build --preset linux-x64-debug -j$(nproc)
-ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure
-```
-
-For stricter leak detection (fail on any leak):
-
-```bash
 ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure \
   --extra-memcheck-options=--leak-check=full \
   --extra-memcheck-options=--error-exitcode=1
 ```
 
-### Code Coverage Testing (Linux Native Only)
+### Code Coverage Reports (Linux Native)
 
-To generate code coverage reports for project-authored C17 code (excluding third-party libraries and tests), ensure `gcovr` is installed and run:
+To measure test coverage across all project-authored C17 code (excluding third-party dependencies):
 
 ```bash
-# Configure the native Linux coverage build
+# Configure coverage preset
 cmake --preset linux-x64-coverage
 
-# Build and run tests to generate coverage data (.gcda)
+# Build and execute tests
 cmake --build --preset linux-x64-coverage
 ctest --preset linux-x64-coverage
 
-# Generate HTML coverage report (output to build/coverage.html)
+# Generate HTML coverage report in build/coverage.html
 gcovr -r . --html-details build/coverage.html --exclude 'worker/third_party/' --exclude 'tests/'
 
-# Or print coverage summary to terminal
+# Or output coverage summary to terminal
 gcovr -r . --exclude 'worker/third_party/' --exclude 'tests/'
 ```
 
 ---
 
-### Option 2: Manual CMake Configuration
+## Compiling the Windows Installer & Release Packages
+
+To compile the standalone Windows installer wizard with embedded GPU worker and CPU fallback (requires `nsis`):
 
 ```bash
-# Configure from repository root
-cmake -S . -B build/windows-x64 \
-  -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchains/windows-x64-mingw.cmake"
+# 1. Build CPU fallback worker (bundled alongside GPU worker if present)
+cmake --preset windows-x64-release-cpu
+cmake --build --preset windows-x64-release-cpu -j4
+cp build/windows-x64-release-cpu/worker/vlc-whisper-worker-cpu.exe build/windows-x64-release/worker/ 2>/dev/null || true
 
-# Build all primary targets
-cmake --build build/windows-x64
+# 2. Build release binaries and NSIS setup wizard
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release --target installer
+
+# 3. Generate portable ZIP archive
+cpack --config build/windows-x64-release/CPackConfig.cmake
 ```
+
+Outputs generated in `build/windows-x64-release/`:
+
+- `vlc-whisper-0.3.0-win64-setup.exe` (Standalone Windows setup wizard)
+- `vlc-whisper-0.3.0-win64.zip` (Portable release archive)
 
 ---
 
 ## Building Sample Snippets
 
-Code snippets located in `samples/snippets/` are registered as standalone CMake targets (`sample_<snippet_name>`).
-
-By default, samples are marked `EXCLUDE_FROM_ALL` and are **not** compiled during standard project builds. To compile sample binaries separately:
+Standalone demonstration snippets located in `samples/snippets/` are registered as individual CMake targets (`sample_<name>`):
 
 ```bash
-# Build a specific sample snippet (e.g. samples/snippets/whisper_pcm.c)
+# Build a specific snippet
 cmake --build --preset windows-x64-release --target sample_whisper_pcm
 
-# Build all sample snippets at once
+# Build all sample snippets
 cmake --build --preset windows-x64-release --target samples
 ```
 
-The compiled Windows `.exe` sample binaries are output to `build/windows-x64-release/samples/` (e.g., `sample_whisper_pcm.exe`).
-
-### Running Sample Snippets on Windows
-
-Sample snippet executables accept the path to a GGML model file via command-line arguments:
+Sample binaries are generated in `build/windows-x64-release/samples/` and accept model paths via command-line arguments:
 
 ```cmd
-# Run sample_whisper_pcm with a model path
-sample_whisper_pcm.exe C:\path\to\ggml-tiny.en.bin
+sample_whisper_pcm.exe C:\path\to\ggml-tiny.bin
 ```
 
 ---
 
 ## Static Runtime Linking (MinGW)
 
-The MinGW cross-compilation setup automatically configures static linking (`-static`, `-static-libgcc`, `-static-libstdc++`, static `libgomp.a`, and static `libwinpthread.a`).
+The MinGW cross-compilation toolchain automatically applies static runtime linking (`-static`, `-static-libgcc`, `-static-libstdc++`, static `libgomp.a`, and static `libwinpthread.a`).
 
-This ensures that output binaries (`vlc-whisper-worker.exe`, `vlc_whisper_plugin.dll`, `sample_whisper_pcm.exe`) are completely self-contained and run natively on Windows without requiring external MinGW runtime DLLs (`libgomp-1.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`, etc.).
-
----
-
-## Windows Installation (Plug & Play Setup)
-
-For end users with VLC 3.0 (64-bit) already installed on Windows 10/11:
-
-### Option 1: Standalone Windows Installer (.exe) — Recommended
-1. Download `vlc-whisper-0.3.0-win64-setup.exe` from GitHub Releases.
-2. Run the installer. It will automatically detect your 64-bit VLC directory (e.g. `C:\Program Files\VideoLAN\VLC`), deploy `libvlc_whisper_plugin.dll` to `plugins\audio_filter\`, place the AI worker and models into `models\`, rebuild the VLC plugin cache (`plugins.dat`), and generate desktop/start menu shortcuts.
-3. Launch VLC using the created shortcut **"VLC (with AI Whisper Captions)"** (or pass `--audio-filter=vlc_whisper`).
-4. Play any video or audio stream — AI subtitles appear automatically in real time!
-
-### Option 2: Portable Release Archive (.zip)
-1. Download `vlc-whisper-0.3.0-win64.zip`.
-2. Extract the contents directly into your VLC installation folder (e.g. `C:\Program Files\VideoLAN\VLC`).
-3. Open a terminal in the VLC folder and regenerate the plugin cache:
-   ```cmd
-   vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
-   ```
-4. Launch VLC with `--audio-filter=vlc_whisper`.
-
----
-
-## Compiling the Windows Installer & Packaging Releases
-
-To compile the standalone Windows installer with both Vulkan GPU worker and CPU fallback (requires `nsis` / `makensis`):
-
-```bash
-# 1. Install NSIS compiler
-sudo apt-get install -y nsis
-
-# 2. (Optional) Build CPU fallback worker to bundle alongside GPU worker
-cmake --preset windows-x64-release-cpu
-cmake --build --preset windows-x64-release-cpu -j4
-cp build/windows-x64-release-cpu/worker/vlc-whisper-worker-cpu.exe build/windows-x64-release/worker/ 2>/dev/null || true
-
-# 3. Build Windows release binaries and NSIS setup installer
-cmake --preset windows-x64-release
-cmake --build --preset windows-x64-release --target installer
-
-# 4. Generate portable release ZIP archive
-cpack --config build/windows-x64-release/CPackConfig.cmake
-```
-
-_Outputs generated in `build/windows-x64-release/`:_
-- `vlc-whisper-0.3.0-win64-setup.exe` (~74 MB standalone setup wizard with embedded Whisper tiny.en + Silero VAD weights)
-- `vlc-whisper-0.3.0-win64.zip` (Portable release archive)
+All output binaries (`vlc-whisper-worker.exe`, `libvlc_whisper_plugin.dll`, and sample executables) are completely self-contained and run natively on Windows without requiring external MinGW runtime DLLs (`libgomp-1.dll`, `libwinpthread-1.dll`, `libstdc++-6.dll`).
 
 ---
 
 ## Manual Plugin Installation (Windows Developer Workflow)
 
-To install and verify the VLC plugin manually during development:
+To manually install and test the plugin during local development:
 
-1. **Install DLL**: Copy the compiled `libvlc_whisper_plugin.dll` to your VLC installation's plugin directory:
+1. **Install Plugin DLL**: Copy `libvlc_whisper_plugin.dll` to your VLC installation folder:
    - Path: `C:\Program Files\VideoLAN\VLC\plugins\audio_filter\libvlc_whisper_plugin.dll`
-
-2. **Install Worker**: Copy the compiled `vlc-whisper-worker.exe` to your VLC root directory:
+2. **Install AI Worker**: Copy `vlc-whisper-worker.exe` to your VLC root folder:
    - Path: `C:\Program Files\VideoLAN\VLC\vlc-whisper-worker.exe`
-   - The worker is self-contained: all MinGW runtime is statically linked — zero external DLL dependencies (ADR-010).
-
-3. **Install the Models**:
-   - Speech Model: `C:\Program Files\VideoLAN\VLC\models\ggml-tiny.en.bin`
+3. **Install Lua Settings Extension**: Copy `lua\extensions\vlc_whisper_settings.lua`:
+   - Path: `C:\Program Files\VideoLAN\VLC\lua\extensions\vlc_whisper_settings.lua`
+4. **Install Models**:
+   - Speech Model: `C:\Program Files\VideoLAN\VLC\models\ggml-tiny.bin`
    - VAD Model: `C:\Program Files\VideoLAN\VLC\models\ggml-silero-vad.bin`
-
-4. **Reset Plugin Cache & Verify Registration**:
+5. **Rebuild Cache and Launch VLC**:
    ```cmd
    "C:\Program Files\VideoLAN\VLC\vlc-cache-gen.exe" "C:\Program Files\VideoLAN\VLC\plugins"
-   "C:\Program Files\VideoLAN\VLC\vlc.exe" --reset-plugins-cache --list | findstr /i whisper
-   ```
-
-5. **Run VLC with AI Subtitles**:
-   ```cmd
-   "C:\Program Files\VideoLAN\VLC\vlc.exe" --audio-filter=vlc_whisper C:\path\to\media.mp4
+   "C:\Program Files\VideoLAN\VLC\vlc.exe" -vvv --audio-filter=vlc_whisper C:\path\to\media.mp4
    ```
 
 ---
@@ -338,9 +407,10 @@ To install and verify the VLC plugin manually during development:
 VLC-Whisper is released under the permissive [MIT License](LICENSE).
 
 All bundled models and runtime components adhere to open-source licensing:
+
 - `whisper.cpp` & `ggml`: MIT License
-- OpenAI Whisper Weights: MIT License
-- Silero VAD Weights: MIT License
+- OpenAI Whisper Models: MIT License
+- Silero VAD Models: MIT License
 - VLC Media Player Plugin API: LGPL v2.1+ (Dynamic Linking / Out-of-tree plugin)
 - Windows Media Foundation: Standard Windows OS Component
 - Vulkan SDK Headers & Loader: Apache License 2.0

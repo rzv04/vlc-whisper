@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ggml-backend.h"
 #include "vw_log.h"
 #include "whisper.h"
 
@@ -18,10 +19,30 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   if (!ctx) {
     return NULL;
   }
-  // whisper's GPU fallback is silent (always returns a valid context); make the effective
-  // backend observable. whisper itself logs "no GPU found" at INFO when the GPU path degrades.
+  // Runtime backend truth: mirror whisper's own GPU selection (whisper_backend_init_gpu walks
+  // ggml's registered devices and picks the gpu_device-th GPU/IGPU; "no GPU found" degrades to
+  // CPU while still returning a valid context). Re-derive that decision so STATUS can report the
+  // backend actually used instead of the one requested. Must run AFTER whisper init: backend
+  // registration happens during library init, so a pre-init probe would see no devices.
+  bool gpu_active = false;
+  if (cparams.use_gpu) {
+    int remaining = cparams.gpu_device;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+      ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+      enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
+      if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+        if (remaining == 0) {
+          gpu_active = true;
+          break;
+        }
+        remaining--;
+      }
+    }
+  }
   vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE",
-               cparams.use_gpu ? "inference backend: gpu (auto CPU fallback if no device)" : "inference backend: cpu");
+               cparams.use_gpu ? (gpu_active ? "inference backend: gpu"
+                                             : "inference backend: gpu REQUESTED but no usable device; running cpu")
+                               : "inference backend: cpu");
 
   vw_whisper_engine_t* eng = (vw_whisper_engine_t*)calloc(1, sizeof(vw_whisper_engine_t));
   if (!eng) {
@@ -36,8 +57,12 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
     free(eng);
     return NULL;
   }
+  // Default language/threads (overridable via setters from config). Clamp threads 1..16.
+  snprintf(eng->language, sizeof(eng->language), "en");
+  eng->n_threads = 4;
+  eng->gpu_active = gpu_active;
 
-  // Perform one silent warmup pass on 100ms of zeros
+  // Perform one silent warmup pass on 100ms of zeros (uses configured language/threads)
   float silent[1600] = {0};
   struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   wparams.print_progress = false;
@@ -45,11 +70,29 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   wparams.print_realtime = false;
   wparams.print_timestamps = false;
   wparams.translate = false;
-  wparams.language = "en";
-  wparams.n_threads = 2;
+  wparams.language = eng->language;
+  wparams.n_threads = eng->n_threads;
   whisper_full(eng->ctx, wparams, silent, 1600);
 
   return eng;
+}
+
+bool vw_whisper_engine_is_gpu_active(const vw_whisper_engine_t* engine) { return engine && engine->gpu_active; }
+
+bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* language) {
+  if (!engine || !language || language[0] == '\0') return false;
+  if (strcmp(language, "auto") == 0) return false;
+  if (strlen(language) >= sizeof(engine->language)) return false;
+  snprintf(engine->language, sizeof(engine->language), "%s", language);
+  return true;
+}
+
+bool vw_whisper_engine_set_n_threads(vw_whisper_engine_t* engine, int n_threads) {
+  if (!engine) return false;
+  if (n_threads < 1) n_threads = 1;
+  if (n_threads > 16) n_threads = 16;
+  engine->n_threads = n_threads;
+  return true;
 }
 
 void vw_whisper_engine_free(vw_whisper_engine_t* engine) {
@@ -83,12 +126,14 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.max_len = 0;  // Natural transformer acoustic boundaries
   wparams.token_timestamps = false;
   wparams.translate = false;
-  wparams.language = "en";
-  wparams.n_threads = 4;
+  // Use configured language/threads (defaults "en"/4 if not set via setters).
+  wparams.language = (engine->language[0] != '\0') ? engine->language : "en";
+  int thr = engine->n_threads;
+  if (thr < 1) thr = 1;
+  wparams.n_threads = thr;
   wparams.print_progress = false;
   wparams.print_realtime = false;
   wparams.print_timestamps = false;
-
   if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
     return false;
   }

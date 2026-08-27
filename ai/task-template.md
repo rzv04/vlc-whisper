@@ -35,7 +35,7 @@ Exact commands, fixtures, target OS/VLC build, and manual verification steps.
 ## Definition of done
 - [ ] C17 code; no project-authored C++ introduced
 - [ ] No blocking work in VLC audio callback
-- [ ] No network access, telemetry, transcript/PCM persistence, or sensitive logs introduced
+- [ ] No unapproved network access, telemetry, transcript/PCM persistence, or sensitive logs introduced; any approved egress is documented and opt-in
 - [ ] Memory, audio queue, frame, text, and retry limits are bounded
 - [ ] Error path is safe: captions may stop, playback does not
 - [ ] Unit/contract/integration tests pass as applicable

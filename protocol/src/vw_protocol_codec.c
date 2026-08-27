@@ -131,6 +131,24 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_FIELD(p->queued_audio_us);
       ENC_FIELD(p->inference_us);
       ENC_FIELD(p->dropped_audio_us);
+      ENC_BYTES(p->resolved_backend, 16);
+      break;
+    }
+    case VW_MSG_MODEL_CTRL: {
+      const vw_msg_model_ctrl_t* p = (const vw_msg_model_ctrl_t*)payload;
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      ENC_FIELD(p->action);
+      ENC_BYTES(p->model_id, 32);
+      break;
+    }
+    case VW_MSG_MODEL_PROGRESS: {
+      const vw_msg_model_progress_t* p = (const vw_msg_model_progress_t*)payload;
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      ENC_FIELD(p->stage);
+      ENC_FIELD(p->pct);
+      ENC_FIELD(p->bytes_done);
+      ENC_FIELD(p->bytes_total);
+      ENC_BYTES(p->model_id, 32);
       break;
     }
     case VW_MSG_ERROR: {
@@ -277,11 +295,45 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     }
     case VW_MSG_STATUS: {
       vw_msg_status_t* p = (vw_msg_status_t*)out_payload;
+      if (buffer_size >= 60) {
+        DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+        DEC_FIELD(p->state);
+        DEC_FIELD(p->queued_audio_us);
+        DEC_FIELD(p->inference_us);
+        DEC_FIELD(p->dropped_audio_us);
+        DEC_BYTES(p->resolved_backend, 16);
+        // Ensure NUL termination for string safety (spec: NUL-padded "gpu"|"cpu").
+        p->resolved_backend[15] = '\0';
+      } else {
+        if (buffer_size < 44) return false;
+        DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+        DEC_FIELD(p->state);
+        DEC_FIELD(p->queued_audio_us);
+        DEC_FIELD(p->inference_us);
+        DEC_FIELD(p->dropped_audio_us);
+        memset(p->resolved_backend, 0, 16);
+      }
+      break;
+    }
+    case VW_MSG_MODEL_CTRL: {
+      vw_msg_model_ctrl_t* p = (vw_msg_model_ctrl_t*)out_payload;
+      if (buffer_size != VW_MSG_MODEL_CTRL_PAYLOAD_BYTES) return false;
       DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
-      DEC_FIELD(p->state);
-      DEC_FIELD(p->queued_audio_us);
-      DEC_FIELD(p->inference_us);
-      DEC_FIELD(p->dropped_audio_us);
+      DEC_FIELD(p->action);
+      DEC_BYTES(p->model_id, 32);
+      p->model_id[31] = '\0';
+      break;
+    }
+    case VW_MSG_MODEL_PROGRESS: {
+      vw_msg_model_progress_t* p = (vw_msg_model_progress_t*)out_payload;
+      if (buffer_size != VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES) return false;
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      DEC_FIELD(p->stage);
+      DEC_FIELD(p->pct);
+      DEC_FIELD(p->bytes_done);
+      DEC_FIELD(p->bytes_total);
+      DEC_BYTES(p->model_id, 32);
+      p->model_id[31] = '\0';
       break;
     }
     case VW_MSG_ERROR: {

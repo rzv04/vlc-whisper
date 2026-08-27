@@ -4,7 +4,7 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=2` (Protocol v1.2); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=4` (Protocol v1.4); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
@@ -24,6 +24,7 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 > **Wire `pts_us` domain (v1.1):**
 > - In **Live Streaming Mode** (or live IPTV), AUDIO chunk timestamps are stamped by the plugin from VLC's audio-filter block PTS in the system-date domain.
 > - In **Look-Ahead Source Mode** (v1.1), `start_pts_us` and `end_pts_us` are media-relative PTS timestamps decoded directly by the native demuxer. The plugin translates them to the SPU presentation time using the sampled `input_time_us` from VLC (`start_tick = mdate() + (start_pts_us - input_time_us)`).
+> - The plugin explicitly marks whether a segment uses the media timeline. Live mode anchors finalized cues at `mdate()` and must never subtract `INPUT_GET_TIME` media position from a live system-date segment PTS. In source mode, position zero is valid; only `-1` means unavailable.
 
 ## Envelope
 
@@ -102,9 +103,36 @@ Plugin to worker. Payload: session ID, `u16 reason`.
 
 Plugin to worker. Payload: Empty (header only). Instructs worker to close transport handles and exit process cleanly with code `0`.
 
-### STATUS
+### STATUS (v1.3)
 
-Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`. Emitted periodically for performance monitoring.
+Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`, `char resolved_backend[16]` — 60 bytes on the wire in v1.3.
+
+- `resolved_backend`: NUL-padded `"gpu"` or `"cpu"` — the backend **actually used for inference**, not the requested one. A Vulkan-enabled worker in `auto`/`gpu` mode without a usable GPU/IGPU device transparently falls back to CPU at runtime (whisper.cpp behavior) and MUST report `"cpu"`. The plugin mirrors this value into the read-only `whisper-backend-active` config var, which the settings GUI displays.
+- Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted periodically for performance monitoring.
+- Compatibility: v1.2 (44-byte) STATUS payloads remain decodable — a v1.3 decoder zero-fills the missing tail, yielding an empty `resolved_backend`; a v1.3 encoder always writes the full 60-byte payload. Same major version, so no capability flag is required (both peers ship together).
+
+### MODEL_CTRL (v1.4)
+
+Plugin to worker. Payload 49 bytes: session ID, `u8 action` (`DOWNLOAD=1`, `ABORT=2`), `char model_id[32]` (NUL-padded catalog id: `tiny.en|tiny|base.en|base|small|medium|large`; ignored for `ABORT`) — 49 bytes on the wire.
+
+- Semantics: user-initiated model fetch. This is worker-scoped, so a zero session ID is valid when `START` was
+  rejected because the selected model is missing. The worker downloads the requested catalog model to the per-user
+  directory, streaming sha256 verification against the committed catalog (`worker/include/vw_model_catalog.h`),
+  writing to `.part` and atomically renaming on success. Single-flight: a second `DOWNLOAD` while active yields an
+  immediate `MODEL_PROGRESS` `FAILED` response. Unknown `model_id` → `MODEL_PROGRESS` `FAILED`. `ABORT` cancels
+  the download thread and removes its partial file; worker shutdown or IPC disconnect performs the same cleanup.
+
+### MODEL_PROGRESS (v1.4)
+
+Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADING=1`, `VERIFYING=2`, `DONE=3`, `FAILED=4`, `ABORTING=5`), `u8 pct` (0–100), `u64 bytes_done`, `u64 bytes_total`, `char model_id[32]` (NUL-padded) — 66 bytes on the wire.
+
+- Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). The initial `IDLE` snapshot is informational, not a terminal result: the plugin must retain the matching pending command until `DONE`, `FAILED`, `ABORTING`, worker shutdown, or transport death. Terminal `FAILED` frames may report `bytes_total = 0` when failure occurs before catalog or destination inspection. Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) and renders progress through a dedicated C presenter SPU channel. Lua only submits commands; it does not poll, sleep, or refresh the dialog in a loop, so playback pause does not pause downloading.
+
+### Model storage
+
+Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Each destination is protected by an OS-level interprocess lock for the transfer lifetime; worker startup never deletes another worker's partial file. Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. At worker startup, an existing configured path wins; when a relative configured path is absent, its filename is also tried under `--model-dir`, allowing a downloaded catalog model to load after a worker restart. Network policy: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
+
+The worker records model-download diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory). The plugin logs `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`, `PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` through VLC Messages. These diagnostics may include bounded local paths and byte counters, but never auth tokens, PCM, transcripts, or network credentials.
 
 ### ERROR
 
@@ -140,11 +168,12 @@ vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [
 |---|---|---|---|
 | `--pipe <path>` | Yes | (none) | Named pipe name (Win32) or Unix domain socket path (POSIX). |
 | `--token <64_hex>` | Yes | (none) | 32-byte secret authentication token in 64 hexadecimal characters. |
-| `--model <path>` | No | `models/ggml-tiny.en.bin` | Path to Whisper GGML model file. |
+| `--model <path>` | No | bundled `models/ggml-tiny.bin` | Path to Whisper GGML model file. |
 | `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). If not specified, the worker auto-discovers `ggml-silero-vad.bin` in the model directory alongside `--model`. If absent, gracefully falls back to RMS Energy VAD. |
 | `--backend <type>` | No | `auto` | Inference accelerator backend: `auto`, `gpu`, or `cpu`. |
 | `--gpu-device <id>` | No | `0` | GPU/IGPU device index for hardware acceleration. |
 | `--log-file <path>` | No | (temp directory) | Custom destination for diagnostic log output. |
+| `--model-dir <path>` | No | per-user model directory | Destination for explicit catalog downloads; creates the directory on demand. |
 
 ## Compatibility rules
 

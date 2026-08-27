@@ -1,15 +1,77 @@
 {
-  "version": "1.0",
-  "default_model_id": "tiny.en",
+  "version": "1.1",
+  "_catalog_note": "mirrors worker/include/vw_model_catalog.h; update both together",
+  "default_model_id": "tiny",
   "models": [
     {
       "id": "tiny.en",
       "filename": "ggml-tiny.en.bin",
       "language": "en",
-      "sha256": "c78c86576ed16665798939f268b20902c347d21098f98d71be68b3d61e0b0486",
+      "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
       "disk_bytes": 77704715,
       "ram_bytes_estimate": 286365440,
-      "multilingual": false
+      "multilingual": false,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+    },
+    {
+      "id": "tiny",
+      "filename": "ggml-tiny.bin",
+      "language": "universal",
+      "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+      "disk_bytes": 77691713,
+      "ram_bytes_estimate": 287459338,
+      "multilingual": true,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+    },
+    {
+      "id": "base.en",
+      "filename": "ggml-base.en.bin",
+      "language": "en",
+      "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+      "disk_bytes": 147964211,
+      "ram_bytes_estimate": 547467581,
+      "multilingual": false,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+    },
+    {
+      "id": "base",
+      "filename": "ggml-base.bin",
+      "language": "universal",
+      "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+      "disk_bytes": 147951465,
+      "ram_bytes_estimate": 547420420,
+      "multilingual": true,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+    },
+    {
+      "id": "small",
+      "filename": "ggml-small.bin",
+      "language": "universal",
+      "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "disk_bytes": 487601967,
+      "ram_bytes_estimate": 1804127278,
+      "multilingual": true,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+    },
+    {
+      "id": "medium",
+      "filename": "ggml-medium.bin",
+      "language": "universal",
+      "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+      "disk_bytes": 1533763059,
+      "ram_bytes_estimate": 5674923318,
+      "multilingual": true,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+    },
+    {
+      "id": "large",
+      "filename": "ggml-large-v3.bin",
+      "language": "universal",
+      "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+      "disk_bytes": 3095033483,
+      "ram_bytes_estimate": 11451623887,
+      "multilingual": true,
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
     },
     {
       "id": "silero-vad",

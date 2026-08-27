@@ -164,10 +164,13 @@ int main(void) {
     vw_worker_client_disconnect(c);
   }
 
-  // 6. Model worker (only if models/ggml-tiny.en.bin is present; else print a skip notice):
+  // 6. Model worker (only if model is present; else print a skip notice):
   // STARTED via the client API, 4 synthetic silence chunks streamed, STOP, SHUTDOWN, exit 0.
-  const char* model_paths[] = {"models/ggml-tiny.en.bin", "../../../models/ggml-tiny.en.bin",
-                               "../../models/ggml-tiny.en.bin", "../models/ggml-tiny.en.bin"};
+  const char* model_paths[] = {
+      "models/ggml-tiny.bin",          "../../../models/ggml-tiny.bin", "../../models/ggml-tiny.bin",
+      "../models/ggml-tiny.bin",       "models/ggml-tiny.en.bin",       "../../../models/ggml-tiny.en.bin",
+      "../../models/ggml-tiny.en.bin", "../models/ggml-tiny.en.bin",
+  };
   const char* model_path = NULL;
   for (size_t i = 0; i < sizeof(model_paths) / sizeof(model_paths[0]); i++) {
     FILE* f = fopen(model_paths[i], "rb");
@@ -178,7 +181,7 @@ int main(void) {
     }
   }
   if (!model_path) {
-    printf("test_worker_lifecycle: model ggml-tiny.en.bin absent - skipping model-gated section (exit 0)\n");
+    printf("test_worker_lifecycle: model absent - skipping model-gated section (exit 0)\n");
   } else if (running_under_valgrind()) {
     // Same policy as test_whisper_engine: skip heavy model load under memcheck (loader noise).
     printf("test_worker_lifecycle: running under Valgrind - skipping model-gated section\n");
