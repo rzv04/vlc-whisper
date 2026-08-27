@@ -4,20 +4,21 @@
 #include "vw_log.h"
 
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static vw_log_sink_fn g_log_sink = NULL;
-static void* g_log_user_data = NULL;
-static FILE* g_log_file = NULL;
+static _Atomic(vw_log_sink_fn) g_log_sink = ATOMIC_VAR_INIT(NULL);
+static _Atomic(void*) g_log_user_data = ATOMIC_VAR_INIT(NULL);
+static _Atomic(FILE*) g_log_file = ATOMIC_VAR_INIT(NULL);
 
 void vw_log_set_sink(vw_log_sink_fn sink, void* user_data) {
-  g_log_sink = sink;
-  g_log_user_data = user_data;
+  atomic_store(&g_log_user_data, user_data);
+  atomic_store(&g_log_sink, sink);
 }
 
-void vw_log_set_file(FILE* file) { g_log_file = file; }
+void vw_log_set_file(FILE* file) { atomic_store(&g_log_file, file); }
 
 static const char* vw_log_level_to_string(vw_log_level_t level) {
   switch (level) {
@@ -48,8 +49,10 @@ void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, .
   vsnprintf(message_buf, sizeof(message_buf), fmt, args);
   va_end(args);
 
-  if (g_log_sink != NULL) {
-    g_log_sink(level, event_id, message_buf, g_log_user_data);
+  vw_log_sink_fn sink = atomic_load(&g_log_sink);
+  void* udata = atomic_load(&g_log_user_data);
+  if (sink != NULL) {
+    sink(level, event_id, message_buf, udata);
   } else {
     // Default fallback sink: print to stderr with tags
     fprintf(stderr, "[%s] [%s] %s\n", vw_log_level_to_string(level), event_id, message_buf);
@@ -57,8 +60,9 @@ void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, .
   }
 
   // Optional additional FILE* output (e.g. the worker's default-on temp log file).
-  if (g_log_file != NULL) {
-    fprintf(g_log_file, "[%s] [%s] %s\n", vw_log_level_to_string(level), event_id, message_buf);
-    fflush(g_log_file);
+  FILE* log_file = atomic_load(&g_log_file);
+  if (log_file != NULL) {
+    fprintf(log_file, "[%s] [%s] %s\n", vw_log_level_to_string(level), event_id, message_buf);
+    fflush(log_file);
   }
 }

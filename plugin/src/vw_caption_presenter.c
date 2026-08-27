@@ -266,6 +266,17 @@ static float vw_caption_presenter_get_rate(vw_caption_presenter_t* presenter) {
     if (var_Get(obj, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
       return rval.f_float;
     }
+    vlc_list_t* children = vlc_list_children(obj);
+    if (children) {
+      for (int i = 0; i < children->i_count; i++) {
+        vlc_object_t* child = (vlc_object_t*)children->p_values[i].p_address;
+        if (child && var_Get(child, "rate", &rval) == VLC_SUCCESS && rval.f_float > 0.05f) {
+          vlc_list_release(children);
+          return rval.f_float;
+        }
+      }
+      vlc_list_release(children);
+    }
     obj = obj->obj.parent;
   }
   return 1.0f;

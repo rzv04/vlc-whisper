@@ -72,8 +72,6 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
   OVERLAPPED ov = {0};
   ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
   if (!ov.hEvent) {
-    // Close handle before returning
-    CloseHandle(pipe);
     return false;
   }
   DWORD bytes_written = 0;
@@ -82,8 +80,7 @@ bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
       if (WaitForSingleObject(ov.hEvent, 3000) == WAIT_OBJECT_0) {
-        GetOverlappedResult(pipe, &ov, &bytes_written, FALSE);
-        res = TRUE;
+        res = GetOverlappedResult(pipe, &ov, &bytes_written, FALSE);
       } else {
         CancelIo(pipe);
         res = FALSE;
@@ -113,8 +110,7 @@ int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buf
     DWORD err = GetLastError();
     if (err == ERROR_IO_PENDING) {
       if (WaitForSingleObject(ov.hEvent, (DWORD)(((uint64_t)timeout_us + 999) / 1000)) == WAIT_OBJECT_0) {
-        GetOverlappedResult(pipe, &ov, &bytes_read, FALSE);
-        res = TRUE;
+        res = GetOverlappedResult(pipe, &ov, &bytes_read, FALSE);
       } else {
         CancelIo(pipe);
         timed_out = true;

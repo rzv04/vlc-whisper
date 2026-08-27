@@ -91,10 +91,14 @@ vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
   return handle;
 }
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
   if (!handle) return false;
   int fd = (int)(intptr_t)handle->pipe_handle;
-  ssize_t bytes = send(fd, data, size, 0);
+  ssize_t bytes = send(fd, data, size, MSG_NOSIGNAL);
   return bytes == (ssize_t)size;
 }
 

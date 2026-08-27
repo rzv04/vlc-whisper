@@ -79,6 +79,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   vw_process_t worker_process = (vw_process_t)0;
   if (executable_path) {
     char token_hex[VW_AUTH_TOKEN_BYTES * 2 + 1];  // null terminated
+    char gpu_buf[16];
     token_to_hex(auth_token, token_hex);
     // 19b: argv grows from 8 to 16 to carry --backend/--gpu-device/--language/--n-threads
     const char* argv[20];
@@ -97,7 +98,6 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     argv[argc++] = "--backend";
     argv[argc++] = eff_backend;
     if (gpu_device >= 0) {
-      static char gpu_buf[16];
       snprintf(gpu_buf, sizeof(gpu_buf), "%d", gpu_device);
       argv[argc++] = "--gpu-device";
       argv[argc++] = gpu_buf;
@@ -321,19 +321,23 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
 
     if (resp_hdr.type == VW_MSG_STARTED) {
       if (resp_hdr.payload_length > 0) {
-        uint8_t resp_payload[32];
-        size_t to_read =
-            resp_hdr.payload_length < sizeof(resp_payload) ? resp_hdr.payload_length : sizeof(resp_payload);
-        if (receive_all(client->pipe_handle, resp_payload, to_read, deadline_us) != VW_IPC_RECV_OK) {
+        uint8_t* resp_payload = (uint8_t*)malloc(resp_hdr.payload_length);
+        if (!resp_payload) {
+          vw_worker_client_drop_transport(client);
+          return false;
+        }
+        if (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) != VW_IPC_RECV_OK) {
+          free(resp_payload);
           vw_worker_client_drop_transport(client);
           return false;
         }
         vw_msg_started_t started_msg = {0};
-        if (vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, to_read, &started_msg)) {
+        if (vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, resp_hdr.payload_length, &started_msg)) {
           client->worker_source_active = (started_msg.source_active == VW_SOURCE_ACTIVE_ACTIVE);
         } else {
           client->worker_source_active = false;
         }
+        free(resp_payload);
       } else {
         client->worker_source_active = false;
       }
@@ -552,7 +556,6 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
   // between the header and payload messages cannot desync the stream. Any payload failure (timeout
   // or fatal) still drops: the header is gone, so a later call would read the payload as a header.
   const int64_t deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)timeout_us;
-  const int64_t frame_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
 
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t hdr_buf[sizeof(vw_frame_header_t)];
@@ -578,6 +581,8 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
       return VW_IPC_RECV_FATAL;
     }
 
+    const int64_t payload_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
+
     // Read the declared payload, if any. A failure here (timeout OR fatal) is always a desync:
     // the header message was already consumed, so a subsequent call would read the payload as a
     // new header and fail validation. Drop the transport rather than return a false timeout.
@@ -588,7 +593,7 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
         vw_worker_client_drop_transport(client);
         return VW_IPC_RECV_FATAL;
       }
-      if (receive_all(client->pipe_handle, payload, hdr.payload_length, frame_deadline_us) != VW_IPC_RECV_OK) {
+      if (receive_all(client->pipe_handle, payload, hdr.payload_length, payload_deadline_us) != VW_IPC_RECV_OK) {
         free(payload);
         vw_worker_client_drop_transport(client);
         return VW_IPC_RECV_FATAL;  // desync: header consumed but payload incomplete; framing is lost
