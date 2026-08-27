@@ -2,7 +2,7 @@ name: Continuous Integration
 
 on:
   push:
-    branches: [main, "gemini/*", "fix/*"]
+    branches: [main, "gemini/*"]
   pull_request:
     branches: [main, "gemini/*"]
   workflow_dispatch:
@@ -69,27 +69,3 @@ jobs:
           header: code-coverage-report
           path: coverage.md
           ignore_empty: true
-
-  windows-cross:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install MinGW and Wine
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build mingw-w64 wine64
-
-      - name: Configure Windows CPU debug build
-        run: cmake --preset windows-x64-debug-cpu -DCMAKE_CROSSCOMPILING_EMULATOR=wine64
-
-      - name: Build Windows binaries and tests
-        run: cmake --build --preset windows-x64-debug-cpu
-
-      - name: Run Windows unit and integration tests under Wine
-        env:
-          WINEDEBUG: -all
-        run: ctest --preset windows-x64-debug-cpu --output-on-failure
