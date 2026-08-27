@@ -2,7 +2,22 @@
 // Covers the --token/--pipe/--model success paths and the worker argv startup
 // failure paths: malformed --token (bad length / non-hex), unknown option,
 // dangling flag with no value, and NULL config (all map to exit code 2).
+#include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+#define VW_TEST_MKDIR(path) _mkdir(path)
+#define VW_TEST_RMDIR(path) _rmdir(path)
+#define VW_TEST_PID() _getpid()
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define VW_TEST_MKDIR(path) mkdir(path, 0700)
+#define VW_TEST_RMDIR(path) rmdir(path)
+#define VW_TEST_PID() getpid()
+#endif
 
 #include "vw_test.h"
 #include "vw_worker_config.h"
@@ -19,7 +34,7 @@ int main(void) {
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_none[] = {"vlc-whisper-worker", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 1, argv_none) == 0);
-    EXPECT_EQ_STR(cfg.model_path, "models/ggml-tiny.en.bin");
+    EXPECT_EQ_STR(cfg.model_path, "models/ggml-tiny.bin");
     EXPECT_EQ_STR(cfg.language, "en");
     EXPECT(cfg.sample_rate == 16000u);
     EXPECT(cfg.pipe_name[0] == '\0');
@@ -185,15 +200,23 @@ int main(void) {
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_mid) == 0);
     EXPECT(cfg.n_threads == 16);
   }
-  // --- failure: --language auto rejected, empty, too long, dangling ---
+  // --- success: --language auto accepted (19c), length still enforced ---
   {
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_auto[] = {"vlc-whisper-worker", "--language", "auto", NULL};
-    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 2);
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 0);
+    EXPECT_EQ_STR(cfg.language, "auto");
+  }
+  // --- failure: --language empty, too long, dangling ---
+  {
+    vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_long[] = {"vlc-whisper-worker", "--language", "this_is_way_too_long_for_lang", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_long) == 2);
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_empty[] = {"vlc-whisper-worker", "--language", "", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_empty) == 2);
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_dangling_lang[] = {"vlc-whisper-worker", "--language", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling_lang) == 2);
@@ -203,6 +226,64 @@ int main(void) {
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_bad_thr[] = {"vlc-whisper-worker", "--n-threads", "abc", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_bad_thr) == 2);
+  }
+
+  // --- success: --model-dir accepted (roundtrip) ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    EXPECT(cfg.model_dir[0] == '\0');
+    char* argv_dir[] = {"vlc-whisper-worker", "--model-dir", "/tmp/vlc-whisper/models", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_dir) == 0);
+    EXPECT_EQ_STR(cfg.model_dir, "/tmp/vlc-whisper/models");
+  }
+
+  // --- model lookup: relative configured path resolves by filename in --model-dir ---
+  {
+    char model_dir[64];
+    char model_file[112];
+    snprintf(model_dir, sizeof(model_dir), "vw_test_model_dir_%ld", (long)VW_TEST_PID());
+#ifdef _WIN32
+    snprintf(model_file, sizeof(model_file), "%s\\ggml-tiny.en.bin", model_dir);
+#else
+    snprintf(model_file, sizeof(model_file), "%s/ggml-tiny.en.bin", model_dir);
+#endif
+    EXPECT(VW_TEST_MKDIR(model_dir) == 0);
+    FILE* model = fopen(model_file, "wb");
+    EXPECT(model != NULL);
+    if (model) fclose(model);
+
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    snprintf(cfg.model_path, sizeof(cfg.model_path), "%s", "models/ggml-tiny.en.bin");
+    snprintf(cfg.model_dir, sizeof(cfg.model_dir), "%s", model_dir);
+    char resolved[VW_PATH_MAX_BYTES];
+    EXPECT(vw_worker_config_resolve_model_path(&cfg, resolved, sizeof(resolved)));
+    EXPECT_EQ_STR(resolved, model_file);
+
+    EXPECT(remove(model_file) == 0);
+    EXPECT(VW_TEST_RMDIR(model_dir) == 0);
+  }
+
+  // --- failure: --model-dir oversize, missing arg ---
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    // Build an oversize path >= VW_PATH_MAX_BYTES
+    char oversize[VW_PATH_MAX_BYTES + 16];
+    memset(oversize, 'a', sizeof(oversize) - 1);
+    oversize[sizeof(oversize) - 1] = '\0';
+    oversize[0] = '/';
+    char* argv_oversize[] = {"vlc-whisper-worker", "--model-dir", oversize, NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_oversize) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_dangling[] = {"vlc-whisper-worker", "--model-dir", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_dangling) == 2);
+
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_oversize_model[] = {"vlc-whisper-worker", "--model", oversize, NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_oversize_model) == 2);
   }
 
   // --- failure: NULL config ---

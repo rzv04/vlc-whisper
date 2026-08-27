@@ -32,13 +32,13 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                         const char* model_path);
 
-// Extended launch that forwards 19b config keys to the worker argv:
-// --backend <backend> (auto|gpu|cpu), --language <code>, --n-threads <int>, --gpu-device <id> if >=0.
-// NULL/empty backend/language fall back to "auto"/"en"; n_threads <=0 defaults to 4; gpu_device <0 omits the flag.
+// Extended launch forwarding backend, language, thread, gpu-device and model-directory flags to worker argv; NULL or
+// empty values are defaulted or omitted automatically including model_dir as --model-dir when provided and non-empty.
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
-                                                           const char* language, int n_threads, int gpu_device);
+                                                           const char* language, int n_threads, int gpu_device,
+                                                           const char* model_dir);
 
 // Starts a new captioning session by transmitting a START frame with media origin and optional source URL over
 // IPC, waiting for confirmation from worker.
@@ -52,6 +52,10 @@ bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_
 
 // Encodes and sends a PCM audio chunk over the IPC pipe to the worker during an active caption session.
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk);
+
+// Sends a worker-scoped MODEL_CTRL request over authenticated IPC, allowing download or abort with a zero session ID
+// before caption START succeeds.
+bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action, const char* model_id);
 
 // Sends a STOP control frame over IPC to request the worker to stop processing the current caption session.
 // The 'reason' argument can include in the future, SEEK_DISCONTINUITY.
@@ -76,10 +80,11 @@ void vw_worker_client_disconnect(vw_worker_client_t* client);
 // A worker-to-plugin frame decoded by vw_worker_client_receive_frame. Exactly one field is valid
 // depending on `type`; segment.text_utf8 always points into text_buf (owned storage).
 typedef struct vw_worker_recv {
-  vw_message_type_t type;            // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR; 0 when timeout
+  vw_message_type_t type;            // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR | MODEL_PROGRESS
   vw_caption_segment_t segment;      // valid when type == VW_MSG_CAPTION_SEGMENT; text_utf8 points into text_buf
   vw_msg_status_t status;            // valid when type == VW_MSG_STATUS
   vw_msg_error_t error;              // valid when type == VW_MSG_ERROR
+  vw_msg_model_progress_t progress;  // valid when type == VW_MSG_MODEL_PROGRESS
   char text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.text_utf8 (NUL-terminated)
 } vw_worker_recv_t;
 

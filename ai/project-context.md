@@ -2,14 +2,14 @@
 
 ## Mission
 
-Build offline, real-time speech captions inside VLC for local media. The first deliverable is Windows 10/11 x64, one pinned VLC 3.x build, English local files, tiny.en CPU model, no GUI, no seeking. Playback reliability and privacy outrank caption completeness.
+Build local-first, real-time speech captions inside VLC for local media. The first deliverable is Windows 10/11 x64, one pinned VLC 3.x build, English local files, tiny.en CPU model, no GUI, no seeking. Playback reliability and privacy outrank caption completeness.
 
 ## Non-negotiables
 
 - Author project code in C17. Third-party whisper.cpp is pinned and unmodified; call its public C API from the worker.
 - The VLC module must be native C and is version-coupled to the selected VLC build. Do not invent a stable VLC plugin SDK/ABI.
 - Never perform inference, pipe I/O, blocking wait, or unbounded allocation in VLC's audio callback.
-- No network traffic at runtime: no HTTP/TCP listener, cloud service, telemetry, auto-update, or automatic model download.
+- Runtime network is limited to explicit worker-only downloads of pinned model catalog files and separately governed future opt-in translation; no HTTP/TCP listener, cloud transcription, telemetry, auto-update, or automatic download is allowed.
 - Audio/transcripts are in-memory only in MVP. Logs must not contain PCM, transcript text, full local paths, or authentication tokens.
 - Windows IPC is authenticated current-user-only message-mode named pipe; Linux abstraction is Unix `SOCK_SEQPACKET`.
 - Use media PTS in signed 64-bit microseconds; never synchronize captions using wall clock.

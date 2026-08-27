@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,8 +36,14 @@ static int64_t g_mock_mdate = 100000000LL;  // 100s
 static float g_mock_rate = 1.0f;
 static int64_t g_last_subpic_start = 0;
 static int64_t g_last_subpic_stop = 0;
+static int g_last_subpic_channel = -1;
 static bool g_last_subpic_b_subtitle = false;
 static bool g_last_subpic_b_ephemer = false;
+static char g_last_subpic_text[128];
+static int g_flushed_channels[64];
+static int g_operation_sequence = 0;
+static int g_last_put_sequence = 0;
+static int g_last_flush_sequence = 0;
 
 vlc_tick_t mdate(void) { return (vlc_tick_t)g_mock_mdate; }
 
@@ -48,14 +55,18 @@ int vout_RegisterSubpictureChannel(vout_thread_t* vout) {
 
 void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
   (void)vout;
+  g_last_put_sequence = ++g_operation_sequence;
   g_put_subpicture_calls++;
   if (subpic) {
     g_last_subpic_start = subpic->i_start;
     g_last_subpic_stop = subpic->i_stop;
+    g_last_subpic_channel = subpic->i_channel;
     g_last_subpic_b_subtitle = subpic->b_subtitle;
     g_last_subpic_b_ephemer = subpic->b_ephemer;
     if (subpic->p_region) {
       if (subpic->p_region->p_text) {
+        snprintf(g_last_subpic_text, sizeof(g_last_subpic_text), "%s",
+                 subpic->p_region->p_text->psz_text ? subpic->p_region->p_text->psz_text : "");
         text_segment_Delete(subpic->p_region->p_text);
       }
       subpicture_region_Delete(subpic->p_region);
@@ -66,6 +77,10 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
 
 void vout_FlushSubpictureChannel(vout_thread_t* vout, int channel) {
   (void)vout;
+  g_last_flush_sequence = ++g_operation_sequence;
+  if (g_flush_calls < (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]))) {
+    g_flushed_channels[g_flush_calls] = channel;
+  }
   g_flush_calls++;
   g_flush_channel = channel;
 }
@@ -144,6 +159,17 @@ void vout_OSDText(vout_thread_t* vout, int channel, int position, vlc_tick_t dur
   g_osd_text_calls++;
 }
 
+static bool was_channel_flushed(int channel) {
+  int count = g_flush_calls;
+  if (count > (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]))) {
+    count = (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]));
+  }
+  for (int i = 0; i < count; i++) {
+    if (g_flushed_channels[i] == channel) return true;
+  }
+  return false;
+}
+
 int main(void) {
   // Test 1: NULL text handling
   assert(!vw_caption_presenter_display(NULL, NULL, 1000000LL));
@@ -163,13 +189,13 @@ int main(void) {
                                   .is_final = true,
                                   .text_utf8 = "Hello Whisper AI"};
 
-  assert(vw_caption_presenter_show_segment(&presenter, &segment, 1000000LL));
+  assert(vw_caption_presenter_show_segment(&presenter, &segment, 1000000LL, false));
 
   // Test 5: NULL segment handling
-  assert(!vw_caption_presenter_show_segment(&presenter, NULL, 0));
+  assert(!vw_caption_presenter_show_segment(&presenter, NULL, 0, false));
 
   vw_caption_segment_t empty_seg = {.text_utf8 = NULL};
-  assert(!vw_caption_presenter_show_segment(&presenter, &empty_seg, 0));
+  assert(!vw_caption_presenter_show_segment(&presenter, &empty_seg, 0, false));
 
   (void)presenter;
   (void)empty_seg;
@@ -189,28 +215,36 @@ int main(void) {
 
   g_register_spu_calls = 0;
   g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
+  g_operation_sequence = 0;
+  g_last_put_sequence = 0;
+  g_last_flush_sequence = 0;
   g_mock_register_channel_return = 42;
   g_mock_mdate = 100000000LL;
 
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0));
-  assert(vw_caption_presenter_flush(&spu_presenter, 0));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0, false));
+  assert(vw_caption_presenter_flush(&spu_presenter, 0, false));
   assert(g_register_spu_calls == 1);
   assert(spu_presenter.spu_channel_id == 42);
   assert(spu_presenter.spu_channel_registered == true);
   assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_channel == 42);
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 102000000LL);
   assert(g_last_subpic_b_subtitle == false);
-  // b_ephemer is the designated overlap-prevention mechanism (ADR-021): VLC keeps only the
-  // newest same-channel ephemeral subpicture, so a successor cue auto-evicts this one. If this
-  // flag ever regresses, adjacent short cues WOULD visibly overlap — the very bug Greptile flags.
+  assert(g_flush_calls == 1);
+  assert(g_flush_channel == 42);
+  assert(g_last_flush_sequence < g_last_put_sequence);
+  // Ephemeral selection remains a secondary VLC cleanup mechanism after the explicit live-channel replacement.
   assert(g_last_subpic_b_ephemer == true);
 
   // Subsequent call reuses already-registered channel
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0));
-  assert(vw_caption_presenter_flush(&spu_presenter, 0));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0, false));
+  assert(vw_caption_presenter_flush(&spu_presenter, 0, false));
   assert(g_register_spu_calls == 1);  // No duplicate registration call
   assert(g_put_subpicture_calls == 2);
+  assert(g_flush_calls == 2);
+  assert(g_last_flush_sequence < g_last_put_sequence);
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 102000000LL);
 
@@ -221,8 +255,8 @@ int main(void) {
   g_osd_text_calls = 0;
   g_put_subpicture_calls = 0;
 
-  assert(vw_caption_presenter_show_segment(&fallback_presenter, &sys_segment, 1000000LL));
-  assert(vw_caption_presenter_flush(&fallback_presenter, 1000000LL));
+  assert(vw_caption_presenter_show_segment(&fallback_presenter, &sys_segment, 1000000LL, false));
+  assert(vw_caption_presenter_flush(&fallback_presenter, 1000000LL, false));
   assert(fallback_presenter.spu_channel_id == -1);
   assert(fallback_presenter.spu_channel_registered == false);
   assert(g_osd_text_calls == 1);  // OSD fallback was used
@@ -233,7 +267,10 @@ int main(void) {
   // Test 8: Blank presenter flushes both SPU channel and OSD channel
   g_flush_calls = 0;
   g_flush_channel = -1;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0, false));
+  assert(spu_presenter.has_pending);
   vw_caption_presenter_blank(&spu_presenter);
+  assert(!spu_presenter.has_pending);
   assert(spu_presenter.p_filter_ctx == &fake_filter);
   assert(g_flush_calls >= 2);  // SPU channel 42 + OSD channel 1
 
@@ -248,8 +285,8 @@ int main(void) {
   spu_presenter.p_filter_ctx = &fake_filter;
   g_register_spu_calls = 0;
   g_mock_register_channel_return = 42;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 3000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 3000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 3000000LL, false));
+  assert(vw_caption_presenter_flush(&spu_presenter, 3000000LL, false));
   assert(g_register_spu_calls == 1);
   assert(spu_presenter.spu_channel_id == 42);
   assert(spu_presenter.p_held_vout == (void*)&fake_filter);
@@ -265,11 +302,13 @@ int main(void) {
                                      .text_bytes = 14,
                                      .is_final = true};
   g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
   g_mock_rate = 1.0f;
   // Current input playhead is 10s -> lead is +5s
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 10000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 10000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
+  assert(g_flush_calls == 0);                              // Source look-ahead cues must remain queued on the channel.
   assert(g_last_subpic_start == 100000000LL + 5000000LL);  // mdate (100s) + 5s lead = 105s
   assert(g_last_subpic_stop == 100000000LL + 7000000LL);   // mdate (100s) + 7s lead = 107s
 
@@ -277,8 +316,8 @@ int main(void) {
   // 2.0x playback rate: 10s media lead -> 5s wall-clock lead; 2s duration -> 1s wall-clock duration
   g_mock_rate = 2.0f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 5000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 5000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 5000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 5000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_start == 100000000LL + 5000000LL);  // 100s + (10s media / 2.0) = 105s
   assert(g_last_subpic_stop == 100000000LL + 6000000LL);   // 105s + (2s media / 2.0) = 106s
@@ -286,8 +325,8 @@ int main(void) {
   // 0.5x playback rate: 10s media lead -> 20s wall-clock lead; 2s duration -> 4s wall-clock duration
   g_mock_rate = 0.5f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 5000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 5000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 5000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 5000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_start == 100000000LL + 20000000LL);  // 100s + (10s media / 0.5) = 120s
   assert(g_last_subpic_stop == 100000000LL + 24000000LL);   // 120s + (2s media / 0.5) = 124s
@@ -318,11 +357,11 @@ int main(void) {
   g_put_subpicture_calls = 0;
 
   // Display phrase 1 (buffered)
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &phrase1, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &phrase1, 10000000LL, true));
   assert(g_put_subpicture_calls == 0);
 
   // Display phrase 2 (dispatches phrase 1 to SPU)
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &phrase2, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &phrase2, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   int64_t phrase1_start = g_last_subpic_start;
   int64_t phrase1_stop = g_last_subpic_stop;
@@ -330,7 +369,7 @@ int main(void) {
   assert(phrase1_stop == 102800000LL);   // 100.5s + 2.3s = 102.8s
 
   // Flush phrase 2
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 2);
   int64_t phrase2_start = g_last_subpic_start;
   int64_t phrase2_stop = g_last_subpic_stop;
@@ -348,8 +387,8 @@ int main(void) {
                                     .is_final = true};
   g_mock_rate = 1.0f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 100000000LL + 1000000LL);  // Clamped to 1.0s minimum floor (101.0s)
@@ -370,10 +409,10 @@ int main(void) {
                                .is_final = true};
   g_mock_rate = 1.0f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &cueA, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &cueA, 10000000LL, true));
   assert(g_put_subpicture_calls == 0);  // cueA held pending
 
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &cueB, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &cueB, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);  // cueA dispatched, clipped to cueB start
   int64_t cueA_start = g_last_subpic_start;
   int64_t cueA_stop = g_last_subpic_stop;
@@ -382,7 +421,7 @@ int main(void) {
   assert(g_last_subpic_b_ephemer == true);
   assert(g_last_subpic_b_subtitle == false);
 
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 2);  // cueB dispatched with full 1.0s floor
   int64_t cueB_start = g_last_subpic_start;
   int64_t cueB_stop = g_last_subpic_stop;
@@ -398,8 +437,8 @@ int main(void) {
   // At 2.0x rate: 200ms raw acoustic duration -> clamped to 2.0s media floor -> 1.0s wall-clock duration
   g_mock_rate = 2.0f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
   assert(g_last_subpic_b_ephemer == true);
@@ -408,8 +447,8 @@ int main(void) {
   // At 0.5x rate: 200ms raw acoustic duration -> clamped to 0.5s media floor -> 1.0s wall-clock duration
   g_mock_rate = 0.5f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &short_cue, 10000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
   assert(g_last_subpic_b_ephemer == true);
@@ -423,18 +462,78 @@ int main(void) {
                                    .is_final = true};
   g_mock_rate = 1.0f;
   g_put_subpicture_calls = 0;
-  assert(vw_caption_presenter_show_segment(&spu_presenter, &long_cue, 10000000LL));
-  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL));
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &long_cue, 10000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 3500000LL);  // Full 3.5s duration preserved
   assert(g_last_subpic_b_ephemer == true);
   assert(g_last_subpic_b_subtitle == false);
+
+  // Test 19: A late live-network cue ignores INPUT_GET_TIME and renders immediately at mdate(). Its system-date
+  // segment PTS must never be compared with the unrelated positive media-position value.
+  vw_caption_segment_t live_network_cue = {.start_pts_us = 29829210000LL,
+                                           .end_pts_us = 29836210000LL,
+                                           .text_utf8 = (char*)"Late live caption",
+                                           .text_bytes = 17,
+                                           .is_final = true};
+  g_mock_mdate = 29836655000LL;
+  g_mock_rate = 1.0f;
+  g_put_subpicture_calls = 0;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &live_network_cue, 40000000LL, false));
+  assert(vw_caption_presenter_flush(&spu_presenter, 40000000LL, false));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_start == g_mock_mdate);
+  assert(g_last_subpic_stop == g_mock_mdate + 7000000LL);
+
+  // Test 20: Media position zero is valid and schedules a source cue at its future media-relative lead.
+  vw_caption_segment_t source_start_cue = {.start_pts_us = 3000000LL,
+                                           .end_pts_us = 4000000LL,
+                                           .text_utf8 = (char*)"Future source caption",
+                                           .text_bytes = 21,
+                                           .is_final = true};
+  g_mock_mdate = 500000000LL;
+  g_put_subpicture_calls = 0;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &source_start_cue, 0, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 0, true));
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_start == g_mock_mdate + 3000000LL);
+  assert(g_last_subpic_stop == g_mock_mdate + 4000000LL);
+
+  // Test 21: Model progress uses an independent OSD-clock SPU channel and survives caption blanking.
+  g_mock_register_channel_return = 77;
+  g_register_spu_calls = 0;
+  g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
+  g_mock_mdate = 200000000LL;
+  vw_msg_model_progress_t progress = {.stage = VW_MODEL_STAGE_DOWNLOADING, .pct = 42};
+  snprintf(progress.model_id, sizeof(progress.model_id), "%s", "tiny");
+  assert(vw_caption_presenter_show_model_progress(&spu_presenter, &progress));
+  assert(g_register_spu_calls == 1);
+  assert(spu_presenter.model_progress_channel_id == 77);
+  assert(spu_presenter.model_progress_channel_registered == true);
+  assert(g_put_subpicture_calls == 1);
+  assert(g_last_subpic_channel == 77);
+  assert(g_last_subpic_start == 200000000LL);
+  assert(g_last_subpic_stop == 200000000LL + VW_MODEL_PROGRESS_DISPLAY_DURATION_US);
+  assert(g_last_subpic_b_subtitle == false);
+  assert(g_last_subpic_b_ephemer == true);
+  assert(strcmp(g_last_subpic_text, "Model tiny: downloading (42%)") == 0);
+
+  g_flush_calls = 0;
+  vw_caption_presenter_blank(&spu_presenter);
+  assert(!was_channel_flushed(77));
+  assert(spu_presenter.model_progress_channel_registered == true);
+
+  vw_caption_presenter_clear_model_progress(&spu_presenter);
+  assert(was_channel_flushed(77));
+  assert(spu_presenter.model_progress_channel_id == -1);
+  assert(spu_presenter.model_progress_channel_registered == false);
 
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (18/18 tests)\n");
+  printf("test_caption_presenter PASSED (21/21 tests)\n");
   return 0;
 }

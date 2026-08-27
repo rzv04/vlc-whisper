@@ -22,7 +22,7 @@ bool vw_vad_detect_speech(const float* pcm32, size_t sample_count, struct whispe
   }
 
   if (vctx != NULL) {
-    if (!whisper_vad_detect_speech_no_reset(vctx, pcm32, (int)sample_count)) {
+    if (!whisper_vad_detect_speech(vctx, pcm32, (int)sample_count)) {
       return false;
     }
     struct whisper_vad_params vad_params = whisper_vad_default_params();

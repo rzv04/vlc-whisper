@@ -124,7 +124,7 @@ Section "VLC Plugin & AI Engine" SecCore
   ; 3. Install AI Models into <VLC>/models
   SetOutPath "$INSTDIR\models"
   File "@CMAKE_SOURCE_DIR@/models/manifest.json"
-  File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.en.bin"
+  File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.bin"
   File /nonfatal "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
 
   ; 4. Install Lua Extension (Settings GUI)
@@ -188,33 +188,40 @@ Section "Uninstall"
   Delete "$INSTDIR\vlc-whisper-worker-cpu.exe"
 
   ; 3. Remove Models
+  Delete "$INSTDIR\models\ggml-tiny.bin"
   Delete "$INSTDIR\models\ggml-tiny.en.bin"
   Delete "$INSTDIR\models\ggml-silero-vad.bin"
   Delete "$INSTDIR\models\manifest.json"
   RMDir "$INSTDIR\models"
 
-  ; 4. Remove Lua Extension (Settings GUI)
+  ; 4. Remove per-user downloaded models and partial files.
+  ; Scope cleanup to the VLC-Whisper directory owned by this application.
+  SetShellVarContext current
+  RMDir /r "$LOCALAPPDATA\vlc-whisper\models"
+  RMDir "$LOCALAPPDATA\vlc-whisper"
+  SetShellVarContext all
+
+  ; 5. Remove Lua Extension (Settings GUI)
   Delete "$INSTDIR\lua\extensions\vlc_whisper_settings.lua"
   RMDir "$INSTDIR\lua\extensions"
   RMDir "$INSTDIR\lua"
 
-  ; 5. Remove Licenses
+  ; 6. Remove Licenses
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
 
-  ; 6. Remove Shortcuts
+  ; 7. Remove Shortcuts
   Delete "$SMPROGRAMS\VLC-Whisper\VLC (with AI Whisper Captions).lnk"
   Delete "$SMPROGRAMS\VLC-Whisper\Uninstall VLC-Whisper.lnk"
   RMDir "$SMPROGRAMS\VLC-Whisper"
   Delete "$DESKTOP\VLC (with AI Whisper Captions).lnk"
 
-  ; 7. Remove Uninstaller & Registry Entries (Machine-wide HKLM)
+  ; 8. Remove Uninstaller & Registry Entries (Machine-wide HKLM)
   Delete "$INSTDIR\uninstall-vlc-whisper.exe"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLC-Whisper"
   DeleteRegKey HKLM "Software\VLC-Whisper"
 
-  ; 8. Invalidate VLC Plugin Cache without the plugin
+  ; 9. Invalidate VLC Plugin Cache without the plugin
   ; VLC rebuilds its plugin cache automatically on the next unprivileged launch.
   DetailPrint "Invalidating VLC plugin cache; VLC rebuilds it automatically on next launch."
 SectionEnd
-

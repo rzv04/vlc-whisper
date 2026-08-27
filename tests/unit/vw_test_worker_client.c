@@ -56,22 +56,46 @@ static void* vw_fake_server_thread(void* arg) {
   vw_ipc_send(server, hdr_buf, 20);
   vw_ipc_send(server, payload, ack_len);
 
-  // Step 3: Receive START_SESSION payload sent by vw_worker_client_start_session
+  // Step 3: Model provisioning may arrive before START_SESSION. The zero session ID is intentional when it does.
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)4;
   }
   vw_protocol_decode_header(hdr_buf, 20, &hdr);
-  if (hdr.type != VW_MSG_START_SESSION) {
-    vw_ipc_close(server);
-    return (void*)5;
-  }
   if (vw_ipc_receive(server, payload, hdr.payload_length) != (int32_t)hdr.payload_length) {
     vw_ipc_close(server);
     return (void*)6;
   }
+  if (hdr.type == VW_MSG_MODEL_CTRL) {
+    vw_msg_model_ctrl_t model_ctrl;
+    const uint8_t zero_session[VW_SESSION_ID_BYTES] = {0};
+    if (!vw_protocol_decode_payload(VW_MSG_MODEL_CTRL, payload, hdr.payload_length, &model_ctrl) ||
+        memcmp(model_ctrl.session_id.bytes, zero_session, sizeof(zero_session)) != 0 ||
+        model_ctrl.action != VW_MODEL_ACTION_DOWNLOAD || strcmp(model_ctrl.model_id, "tiny") != 0) {
+      vw_ipc_close(server);
+      return (void*)7;
+    }
 
-  // Step 4: Delay 100ms (testing client's polling/waiting loop), then reply with zero-payload STARTED frame
+    // Step 4: Receive START_SESSION after the pre-session model request.
+    if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
+      vw_ipc_close(server);
+      return (void*)8;
+    }
+    vw_protocol_decode_header(hdr_buf, 20, &hdr);
+    if (hdr.type != VW_MSG_START_SESSION) {
+      vw_ipc_close(server);
+      return (void*)9;
+    }
+    if (vw_ipc_receive(server, payload, hdr.payload_length) != (int32_t)hdr.payload_length) {
+      vw_ipc_close(server);
+      return (void*)10;
+    }
+  } else if (hdr.type != VW_MSG_START_SESSION) {
+    vw_ipc_close(server);
+    return (void*)10;
+  }
+
+  // Step 5: Delay 100ms (testing client's polling/waiting loop), then reply with zero-payload STARTED frame
   vw_platform_sleep_ms(100);
   vw_frame_header_t started_hdr = {
       .magic = VW_PROTOCOL_MAGIC,
@@ -83,7 +107,7 @@ static void* vw_fake_server_thread(void* arg) {
   vw_protocol_encode_header(&started_hdr, hdr_buf, 20);
   vw_ipc_send(server, hdr_buf, 20);
 
-  // Step 5: Receive AUDIO_PCM payload sent by vw_worker_client_send_audio (verifying vw_ipc_receive_timeout)
+  // Step 6: Receive AUDIO_PCM payload sent by vw_worker_client_send_audio (verifying vw_ipc_receive_timeout)
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)7;
@@ -105,7 +129,7 @@ static void* vw_fake_server_thread(void* arg) {
   }
   free(big_payload);
 
-  // Step 6: Receive PAUSE control frame sent by vw_worker_client_pause_session
+  // Step 7: Receive PAUSE control frame sent by vw_worker_client_pause_session
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)10;
@@ -126,7 +150,7 @@ static void* vw_fake_server_thread(void* arg) {
     return (void*)15;
   }
 
-  // Step 7: Receive RESUME control frame sent by vw_worker_client_resume_session
+  // Step 8: Receive RESUME control frame sent by vw_worker_client_resume_session
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)13;
@@ -147,7 +171,7 @@ static void* vw_fake_server_thread(void* arg) {
     return (void*)17;
   }
 
-  // Step 8: Receive STOP_SESSION control frame sent by vw_worker_client_stop_session
+  // Step 9: Receive STOP_SESSION control frame sent by vw_worker_client_stop_session
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)18;
@@ -168,7 +192,7 @@ static void* vw_fake_server_thread(void* arg) {
     return (void*)23;
   }
 
-  // Step 9: Receive SHUTDOWN control frame sent by vw_worker_client_shutdown
+  // Step 10: Receive SHUTDOWN control frame sent by vw_worker_client_shutdown
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {
     vw_ipc_close(server);
     return (void*)21;
@@ -392,17 +416,20 @@ int main(void) {
   vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, pipe_name, auth_token, NULL);
   EXPECT(client != NULL);
 
-  // Test 2: Start session and wait for STARTED confirmation
+  // Test 2: Send MODEL_CTRL before START_SESSION; the worker-scoped download path has no caption session yet.
+  EXPECT(vw_worker_client_send_model_ctrl(client, VW_MODEL_ACTION_DOWNLOAD, "tiny"));
+
+  // Test 3: Start session and wait for STARTED confirmation
   EXPECT(vw_worker_client_start_session(client, 1000, "ggml-tiny.en.bin", NULL));
 
-  // Test 3: Transport receive timeout — the socket is idle between frames (the
+  // Test 4: Transport receive timeout — the socket is idle between frames (the
   // server waits for AUDIO), so a short probe must time out, exercising the
   // VW_IPC_RECV_TIMEOUT path of vw_ipc_receive_timeout.
   uint8_t probe[1];
   EXPECT(vw_ipc_receive_timeout((vw_ipc_handle_t*)client->pipe_handle, probe, sizeof(probe), 1000) ==
          VW_IPC_RECV_TIMEOUT);
 
-  // Test 4: Frame and send PCM audio chunk
+  // Test 5: Frame and send PCM audio chunk
   uint8_t pcm_data[320] = {0};  // 10ms of 16kHz Mono S16LE audio (320 bytes)
   vw_audio_chunk_t chunk = {
       .start_pts_us = 1000,
@@ -414,7 +441,7 @@ int main(void) {
   memcpy(chunk.pcm_data, pcm_data, 320);
   EXPECT(vw_worker_client_send_audio(client, &chunk));
 
-  // Test 5: Send PAUSE and RESUME control frames (session stays active), then STOP + SHUTDOWN
+  // Test 6: Send PAUSE and RESUME control frames (session stays active), then STOP + SHUTDOWN
   vw_worker_client_pause_session(client);
   vw_worker_client_resume_session(client);
   vw_worker_client_stop_session(client, VW_CTRL_REASON_SEEK_DISCONTINUITY);

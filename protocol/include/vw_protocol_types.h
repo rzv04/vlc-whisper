@@ -23,10 +23,10 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 3U
-#define VW_CLIENT_VERSION "1.3.0"
+#define VW_PROTOCOL_VERSION_MINOR 4U
+#define VW_CLIENT_VERSION "1.4.0"
 #define VW_CLIENT_VERSION_LENGTH 5U
-#define VW_WORKER_VERSION "1.3.0"
+#define VW_WORKER_VERSION "1.4.0"
 #define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
@@ -81,9 +81,11 @@ typedef enum vw_message_type {
   VW_MSG_CAPTION_SEGMENT = 8,
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
-  VW_MSG_SHUTDOWN = 11,  // zero-payload: instruct worker to exit
-  VW_MSG_STARTED = 12,   // worker confirms session started; carries uint8_t source_active
-  VW_MSG_POSITION = 13   // plugin sends media playback position and pacing updates
+  VW_MSG_SHUTDOWN = 11,       // zero-payload: instruct worker to exit
+  VW_MSG_STARTED = 12,        // worker confirms session started; carries uint8_t source_active
+  VW_MSG_POSITION = 13,       // plugin sends media playback position and pacing updates
+  VW_MSG_MODEL_CTRL = 14,     // plugin requests model download or abort by catalog id
+  VW_MSG_MODEL_PROGRESS = 15  // worker reports model download progress and stage
 } vw_message_type_t;
 
 typedef struct vw_frame_header {
@@ -182,6 +184,43 @@ typedef struct vw_msg_status {
   int64_t dropped_audio_us;
   char resolved_backend[16];  // "gpu" | "cpu", NUL-padded
 } vw_msg_status_t;
+// VW_MODEL_ACTION_DOWNLOAD and VW_MODEL_ACTION_ABORT identify the requested operation in
+// vw_msg_model_ctrl_t; download starts a transfer while abort cancels an in-flight download immediately.
+#define VW_MODEL_ACTION_DOWNLOAD 1U
+#define VW_MODEL_ACTION_ABORT 2U
+
+// VW_MODEL_STAGE_* values track the lifecycle of a model download inside vw_msg_model_progress_t,
+// ranging from idle through downloading, verifying, done, failed, and aborting states.
+#define VW_MODEL_STAGE_IDLE 0U
+#define VW_MODEL_STAGE_DOWNLOADING 1U
+#define VW_MODEL_STAGE_VERIFYING 2U
+#define VW_MODEL_STAGE_DONE 3U
+#define VW_MODEL_STAGE_FAILED 4U
+#define VW_MODEL_STAGE_ABORTING 5U
+
+// VW_MSG_MODEL_CTRL_PAYLOAD_BYTES and VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES define the exact wire
+// sizes of the fixed-field model control and progress frames, validating that 49 and 66 byte payloads are received.
+#define VW_MSG_MODEL_CTRL_PAYLOAD_BYTES 49U
+#define VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES 66U
+
+// Plugin-to-worker request to download or abort a catalog model; carries session id, action code,
+// and NUL-padded model identifier fixed field.
+typedef struct vw_msg_model_ctrl {
+  vw_session_id_t session_id;
+  uint8_t action;
+  char model_id[32];
+} vw_msg_model_ctrl_t;
+
+// Worker-to-plugin progress update for model download; includes session id, stage, percent, byte
+// counters, and NUL-padded model identifier field, emitted at 1 Hz and on stage transitions.
+typedef struct vw_msg_model_progress {
+  vw_session_id_t session_id;
+  uint8_t stage;
+  uint8_t pct;
+  uint64_t bytes_done;
+  uint64_t bytes_total;
+  char model_id[32];
+} vw_msg_model_progress_t;
 
 typedef struct vw_msg_error {
   vw_session_id_t session_id;
