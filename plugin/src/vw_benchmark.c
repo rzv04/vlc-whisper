@@ -117,6 +117,7 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "translation_tier1_count=%llu\n", (unsigned long long)benchmark->translation_tier1_count);
   fprintf(report, "translation_tier2_count=%llu\n", (unsigned long long)benchmark->translation_tier2_count);
   fprintf(report, "translation_tier3_count=%llu\n", (unsigned long long)benchmark->translation_tier3_count);
+  fprintf(report, "translation_failure_count=%llu\n", (unsigned long long)benchmark->translation_failure_count);
   fprintf(report, "translation_timeout_count=%llu\n", (unsigned long long)benchmark->translation_timeout_count);
   fprintf(report, "translation_duration_us=%llu\n", (unsigned long long)benchmark->translation_duration_us);
   fprintf(report, "translation_latency_samples=%zu\n", benchmark->translation_latency_sample_count);
@@ -201,6 +202,10 @@ void vw_benchmark_record_caption_filtered(vw_benchmark_t* benchmark, bool paused
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success) {
   if (!benchmark || !benchmark->active) return;
   benchmark->translation_requests_sent++;
+  benchmark->translation_duration_us += latency_us;
+  if (benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
+    benchmark->translation_latency_samples[benchmark->translation_latency_sample_count++] = (int64_t)latency_us;
+  }
   if (success) {
     benchmark->translation_success_count++;
     if (tier == 1) {
@@ -210,12 +215,10 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
     } else if (tier == 3) {
       benchmark->translation_tier3_count++;
     }
-    benchmark->translation_duration_us += latency_us;
-    if (benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
-      benchmark->translation_latency_samples[benchmark->translation_latency_sample_count++] = (int64_t)latency_us;
-    }
-  } else {
+  } else if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US) {
     benchmark->translation_timeout_count++;
+  } else {
+    benchmark->translation_failure_count++;
   }
 }
 
