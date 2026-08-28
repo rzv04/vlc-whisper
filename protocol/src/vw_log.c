@@ -12,6 +12,9 @@
 static _Atomic(vw_log_sink_fn) g_log_sink = ATOMIC_VAR_INIT(NULL);
 static _Atomic(void*) g_log_user_data = ATOMIC_VAR_INIT(NULL);
 static _Atomic(FILE*) g_log_file = ATOMIC_VAR_INIT(NULL);
+static _Atomic bool g_log_enabled = ATOMIC_VAR_INIT(false);
+
+void vw_log_set_enabled(bool enabled) { atomic_store(&g_log_enabled, enabled); }
 
 void vw_log_set_sink(vw_log_sink_fn sink, void* user_data) {
   atomic_store(&g_log_user_data, user_data);
@@ -36,6 +39,7 @@ static const char* vw_log_level_to_string(vw_log_level_t level) {
 }
 
 void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, ...) {
+  if (!atomic_load(&g_log_enabled)) return;
   if (event_id == NULL) {
     event_id = "UNKNOWN_EVENT";
   }
@@ -59,7 +63,7 @@ void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, .
     fflush(stderr);
   }
 
-  // Optional additional FILE* output (e.g. the worker's default-on temp log file).
+  // Optional additional FILE* output (e.g. the worker's opt-in temp log file).
   FILE* log_file = atomic_load(&g_log_file);
   if (log_file != NULL) {
     fprintf(log_file, "[%s] [%s] %s\n", vw_log_level_to_string(level), event_id, message_buf);

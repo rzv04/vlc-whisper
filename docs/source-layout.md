@@ -10,8 +10,8 @@ The codebase is an ensemble: a native C17 VLC integration module, an isolated lo
 
 | Area        | Owns                                                                                   | Must not own                                             |
 | ----------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `plugin/`   | VLC lifecycle, audio capture, bounded queues, worker supervision, caption presentation | Whisper inference, VAD decisions, persistent transcripts |
-| `worker/`   | IPC session handling, VAD, audio windows, Whisper inference, final caption segments    | VLC callbacks, subtitle internals                        |
+| `plugin/`   | VLC lifecycle, audio capture, bounded queues, worker supervision, caption presentation, aggregate per-session benchmark reports | Whisper inference, VAD decisions, persistent transcripts |
+| `worker/`   | IPC session handling, VAD, audio windows, Whisper inference, final caption segments, inference timing | VLC callbacks, subtitle internals                        |
 | `protocol/` | Versioned frames, encoding, decoding, validation, transport abstraction                | VLC or Whisper APIs, application policy                  |
 | `models/`   | Local GGML whisper model binary storage and model manifest validation                  | Model downloading over network at runtime                |
 | `tests/`    | Automated verification, fixtures, manual E2E procedure                                 | Production implementation logic                          |
@@ -31,6 +31,7 @@ vlc-whisper/
 │   │   ├── vw_session.h                       # Playback session lifecycle & discontinuity state machine
 │   │   ├── vw_audio_capture.h                 # Decoded PCM extraction & monotonic media PTS assignment
 │   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC SPU/OSD caption cues with 1.0s reading floor
+│   │   ├── vw_benchmark.h                     # Per-session benchmark counters, latency samples, and report lifecycle
 │   │   ├── vw_worker_client.h                 # Authenticated IPC client, worker process supervisor
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
 │   │   └── vw_platform.h                      # OS abstraction: CSPRNG, timing, process spawning
@@ -39,6 +40,7 @@ vlc-whisper/
 │       ├── vw_session.c                       # Session lifecycle logic (start, pause, resume, seek reset)
 │       ├── vw_audio_capture.c                 # Audio callback handler & PCM format normalization
 │       ├── vw_caption_presenter.c             # Schedules and renders timed text captions via SPU with 1.0s floor & OSD fallback
+│       ├── vw_benchmark.c                     # Bounded per-session metrics and private temporary text report writer
 │       ├── vw_worker_client.c                 # Worker process launcher, IPC client & HELLO handshake
 │       ├── vw_queue.c                         # Non-blocking lock-free SPSC queue implementation
 │       ├── vw_platform_win32.c                # Windows: paths, BCrypt CSPRNG, process spawn, timing
@@ -113,6 +115,7 @@ vlc-whisper/
 │   │   ├── test_hallucination_filter.c        # Non-speech tag & isolated punctuation filter tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
+│   │   ├── test_benchmark.c                   # Per-session metric and temporary report tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
@@ -165,7 +168,8 @@ The `models/` directory serves as the local offline store for GGML model files a
 | `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |
 | `vw_worker_client.c`     | Launch worker, IPC connect, HELLO handshake, send/receive, cleanup        |
 | `vw_caption_presenter.c` | VLC caption SPU rendering with OSD fallback and look-ahead scheduling; owns a separate wall-clock SPU channel for model-download progress that survives pause/seek blanking |
-| `vw_log.c`               | Privacy-safe diagnostics; never log PCM/transcript by default             |
+| `vw_benchmark.c`        | Bounded aggregate session metrics, live PTS-to-monotonic latency samples, and unique temporary key/value report snapshots |
+| `vw_log.c`               | Opt-in privacy-safe diagnostics; disabled by default and never logs PCM/transcripts |
 | `vw_platform_win32.c`    | Windows: paths, handles, BCrypt CSPRNG, process spawn, timing helpers     |
 | `vw_platform_linux.c`    | Linux/Unix: random bytes, posix_spawn, timing helpers                     |
 
@@ -179,7 +183,7 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_worker.c`          | IPC event loop, protocol dispatch, look-ahead decoding & state     |
 | `vw_source_decoder_mf.c` | Windows Media Foundation native audio demuxer & resampler        |
 | `vw_source_decoder_ffmpeg.c` | Linux FFmpeg native audio demuxer & resampler                |
-| `vw_whisper_engine.c`  | Whisper C API adapter: model load/unload, inference, per-segment accessors |
+| `vw_whisper_engine.c`  | Whisper C API adapter: model load/unload, inference timing, per-segment accessors |
 | `vw_vad.c`             | Voice-activity detection state and window decisions                |
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
 | `vw_segment_builder.c` | Ordered timed segments, final-subtitles dedup, dynamic queue growth |

@@ -10,6 +10,7 @@ local w_engine = nil
 local w_model = nil
 local w_language = nil
 local w_threads = nil
+local w_logging = nil
 local w_status = nil
 local w_model_status = nil
 local w_download = nil
@@ -32,6 +33,19 @@ local function cfg_set(name, value)
     return false
   end)
   return ok and result == true
+end
+
+local function logging_enabled()
+  local value = cfg_get("whisper-logging")
+  return value == true or value == 1 or value == "1" or value == "true"
+end
+
+local function log_info(message)
+  if logging_enabled() then vlc.msg.info(message) end
+end
+
+local function log_error(message)
+  if logging_enabled() then vlc.msg.err(message) end
 end
 
 -- id -> string maps for dropdown get_value() results (Lua 5.1-safe).
@@ -245,6 +259,7 @@ local function on_apply()
   local mod_id = w_model and w_model:get_value() or default_model_id
   local lang_id = w_language and w_language:get_value() or 1
   local thr_text = w_threads and w_threads:get_text() or "4"
+  local logging = w_logging and w_logging:get_checked() or false
 
   local engine = engine_map[eng_id] or "auto"
   local model_label = model_map[mod_id] or "tiny"
@@ -266,11 +281,15 @@ local function on_apply()
   pcall(function() cfg_set("model-path", model_path) end)
   pcall(function() cfg_set("whisper-language", language) end)
   pcall(function() cfg_set("whisper-threads", threads) end)
+  pcall(function() cfg_set("whisper-logging", logging) end)
 
-  vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. engine)
-  vlc.msg.info("[VLC-Whisper] applied model-path=" .. model_path .. " (" .. model_label .. ")")
-  vlc.msg.info("[VLC-Whisper] applied whisper-language=" .. language)
-  vlc.msg.info("[VLC-Whisper] applied whisper-threads=" .. tostring(threads))
+  if logging then
+    vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. engine)
+    vlc.msg.info("[VLC-Whisper] applied model-path=" .. model_path .. " (" .. model_label .. ")")
+    vlc.msg.info("[VLC-Whisper] applied whisper-language=" .. language)
+    vlc.msg.info("[VLC-Whisper] applied whisper-threads=" .. tostring(threads))
+    vlc.msg.info("[VLC-Whisper] applied whisper-logging=true")
+  end
 
   -- Refresh detected-backend status label if present (reflects last STATUS
   -- drain; meaningful after first session STARTED).
@@ -286,7 +305,7 @@ end
 local function on_abort_download()
   pcall(function() cfg_set("whisper-model-download", "abort") end)
   pcall(function() cfg_set("whisper-model-status", "aborting") end)
-  vlc.msg.info("[VLC-Whisper] abort requested")
+  log_info("[VLC-Whisper] abort requested")
   pcall(function()
     if w_status ~= nil then
       w_status:set_text("Model download: aborting...")
@@ -319,7 +338,7 @@ local function on_download()
   pcall(function() refresh_language_dropdown(sel_id, selected_language) end)
   local availability = refresh_model_status(sel_id)
   if availability.bundled or availability.user then
-    vlc.msg.info("[VLC-Whisper] model already present; download remains available for refresh: " .. tostring(catalog_id))
+    log_info("[VLC-Whisper] model already present; download remains available for refresh: " .. tostring(catalog_id))
   end
 
   -- Check if playback is active / worker is connected.
@@ -345,13 +364,13 @@ local function on_download()
   -- Some VLC 3.0 builds expose config.set without a useful config.get readback.
   -- Treat nil as unverifiable, but reject an explicit mismatched value.
   if not control_written or control_visible == false then
-    vlc.msg.err("[VLC-Whisper] download control was not retained by VLC config: " .. tostring(catalog_id))
+    log_error("[VLC-Whisper] download control was not retained by VLC config: " .. tostring(catalog_id))
     if w_status ~= nil then
       pcall(function() w_status:set_text("Model config unavailable; restart VLC and retry") end)
     end
     return
   end
-  vlc.msg.info("[VLC-Whisper] download requested " .. tostring(catalog_id))
+  log_info("[VLC-Whisper] download requested " .. tostring(catalog_id))
 
   if w_status ~= nil then
     local status = is_playing and "download requested" or "queued (play media to start worker)"
@@ -367,17 +386,20 @@ local function build_dialog()
   local cur_model_path = nil
   local cur_language = nil
   local cur_threads = nil
+  local cur_logging = nil
   local cur_active = nil
   pcall(function() cur_backend = cfg_get("whisper-backend") end)
   pcall(function() cur_model_path = cfg_get("model-path") end)
   pcall(function() cur_language = cfg_get("whisper-language") end)
   pcall(function() cur_threads = cfg_get("whisper-threads") end)
+  pcall(function() cur_logging = cfg_get("whisper-logging") end)
   pcall(function() cur_active = cfg_get("whisper-backend-active") end)
 
   if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
   if cur_model_path == nil or cur_model_path == "" then cur_model_path = default_model_path end
   if cur_language == nil or cur_language == "" then cur_language = "en" end
   if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
+  cur_logging = cur_logging == true or cur_logging == 1 or cur_logging == "1" or cur_logging == "true"
   cur_threads = tostring(cur_threads)
   if cur_active == nil or cur_active == "" then cur_active = "(pending -- start playback)" end
 
@@ -416,20 +438,23 @@ local function build_dialog()
   dlg:add_label("Threads (CPU engine):", 1, 4, 1, 1)
   w_threads = dlg:add_text_input(cur_threads, 2, 4, 3, 1)
 
-  -- Row 5: Action Buttons (Apply & Download Selected Model)
-  dlg:add_button("Apply", on_apply, 1, 5, 2, 1)
-  w_download = dlg:add_button("Download Selected Model", on_download, 3, 5, 2, 1)
+  -- Row 5: Diagnostic logging, off by default.
+  w_logging = dlg:add_check_box("Enable diagnostic logging", cur_logging, 1, 5, 4, 1)
+
+  -- Row 6: Action Buttons (Apply & Download Selected Model)
+  dlg:add_button("Apply", on_apply, 1, 6, 2, 1)
+  w_download = dlg:add_button("Download Selected Model", on_download, 3, 6, 2, 1)
   refresh_model_status(sel_model)
 
-  -- Row 6: Detected backend / download status
-  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 6, 4, 1)
+  -- Row 7: Detected backend / download status
+  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 7, 4, 1)
 
-  -- Row 7: Model availability
-  w_model_status = dlg:add_label("Model availability: checking...", 1, 7, 4, 1)
+  -- Row 8: Model availability
+  w_model_status = dlg:add_label("Model availability: checking...", 1, 8, 4, 1)
   refresh_model_status(sel_model)
 
-  -- Row 8: Hint
-  dlg:add_label(".en models force English; downloads are hash-checked by the worker.", 1, 8, 4, 1)
+  -- Row 9: Hint
+  dlg:add_label(".en models force English; downloads are hash-checked by the worker.", 1, 9, 4, 1)
 end
 
 function descriptor()
@@ -444,6 +469,7 @@ function descriptor()
       .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
       .. "plugin polls config and respawns worker mid-play (brief caption gap); download progress is rendered by C. "
       .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
+      .. "Diagnostic logging is disabled by default and can be enabled with the checkbox; "
       .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent. "
       .. ".en models force English; bundled and per-user model files are checked before download. "
       .. "Menu entries: VLC-Whisper Settings, Download selected model, Abort model download.",
@@ -452,7 +478,7 @@ function descriptor()
 end
 
 function activate()
-  vlc.msg.info("[VLC-Whisper] extension activate -- building dialog")
+  log_info("[VLC-Whisper] extension activate -- building dialog")
   if dlg ~= nil then
     pcall(function() dlg:hide() end)
     dlg = nil
@@ -461,17 +487,18 @@ function activate()
   w_model = nil
   w_language = nil
   w_threads = nil
+  w_logging = nil
   w_status = nil
   w_model_status = nil
   w_download = nil
   build_dialog()
   dlg:show()
-  vlc.msg.info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads (CPU engine))")
+  log_info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads (CPU engine))")
   return true
 end
 
 function deactivate()
-  vlc.msg.info("[VLC-Whisper] extension deactivate")
+  log_info("[VLC-Whisper] extension deactivate")
   if dlg ~= nil then
     pcall(function() dlg:hide() end)
     dlg = nil
@@ -480,13 +507,14 @@ function deactivate()
   w_model = nil
   w_language = nil
   w_threads = nil
+  w_logging = nil
   w_status = nil
   w_model_status = nil
   w_download = nil
 end
 
 function close()
-  vlc.msg.info("[VLC-Whisper] extension close (user closed dialog)")
+  log_info("[VLC-Whisper] extension close (user closed dialog)")
   pcall(function() vlc.deactivate() end)
 end
 
@@ -495,7 +523,7 @@ function menu()
 end
 
 function trigger_menu(id)
-  vlc.msg.info("[VLC-Whisper] trigger_menu id=" .. tostring(id))
+  log_info("[VLC-Whisper] trigger_menu id=" .. tostring(id))
   if id == 2 then
     on_download()
     return

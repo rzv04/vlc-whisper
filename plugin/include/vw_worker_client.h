@@ -32,13 +32,13 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                         const char* model_path);
 
-// Extended launch forwarding backend, language, thread, gpu-device and model-directory flags to worker argv; NULL or
-// empty values are defaulted or omitted automatically including model_dir as --model-dir when provided and non-empty.
+// Extended launch forwards backend, language, threads, logging, gpu-device, and model-directory flags to worker argv;
+// NULL or empty values are defaulted or omitted automatically, including model_dir when absent.
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
                                                            const char* language, int n_threads, int gpu_device,
-                                                           const char* model_dir);
+                                                           const char* model_dir, bool logging_enabled);
 
 // Starts a new captioning session by transmitting a START frame with media origin and optional source URL over
 // IPC, waiting for confirmation from worker.

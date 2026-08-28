@@ -85,6 +85,7 @@ int main(void) {
 
   float pcm[16000] = {0};
   EXPECT(vw_whisper_engine_transcribe_pcm(eng, pcm, 16000));
+  EXPECT(vw_whisper_engine_get_total_inference_us(eng) > 0);
   const char* text = vw_whisper_engine_get_text(eng);
   EXPECT(text != NULL);
 

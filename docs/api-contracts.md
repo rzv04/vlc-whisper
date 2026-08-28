@@ -108,7 +108,7 @@ Plugin to worker. Payload: Empty (header only). Instructs worker to close transp
 Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`, `char resolved_backend[16]` — 60 bytes on the wire in v1.3.
 
 - `resolved_backend`: NUL-padded `"gpu"` or `"cpu"` — the backend **actually used for inference**, not the requested one. A Vulkan-enabled worker in `auto`/`gpu` mode without a usable GPU/IGPU device transparently falls back to CPU at runtime (whisper.cpp behavior) and MUST report `"cpu"`. The plugin mirrors this value into the read-only `whisper-backend-active` config var, which the settings GUI displays.
-- Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted periodically for performance monitoring.
+- Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted after inference work. `inference_us` is cumulative wall time spent inside `whisper_full()` for the worker lifetime, excluding VAD, segment filtering, and IPC presentation.
 - Compatibility: v1.2 (44-byte) STATUS payloads remain decodable — a v1.3 decoder zero-fills the missing tail, yielding an empty `resolved_backend`; a v1.3 encoder always writes the full 60-byte payload. Same major version, so no capability flag is required (both peers ship together).
 
 ### MODEL_CTRL (v1.4)
@@ -132,7 +132,7 @@ Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADI
 
 Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Each destination is protected by an OS-level interprocess lock for the transfer lifetime; worker startup never deletes another worker's partial file. Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. At worker startup, an existing configured path wins; when a relative configured path is absent, its filename is also tried under `--model-dir`, allowing a downloaded catalog model to load after a worker restart. Network policy: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
 
-The worker records model-download diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory). The plugin logs `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`, `PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` through VLC Messages. These diagnostics may include bounded local paths and byte counters, but never auth tokens, PCM, transcripts, or network credentials.
+Diagnostic logging is disabled by default. When enabled by the `whisper-logging` config key, the worker records model-download diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory), and the plugin emits events through VLC Messages. These diagnostics may include bounded local paths and byte counters, but never auth tokens, PCM, transcripts, or network credentials.
 
 ### ERROR
 
@@ -161,7 +161,7 @@ Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_cod
 The worker executable (`vlc-whisper-worker.exe` / `vlc-whisper-worker`) is spawned by the plugin or launched manually during testing with the following command-line interface:
 
 ```text
-vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [--vad-model <vad_path>] [--backend auto|gpu|cpu] [--gpu-device <id>] [--log-file <log_path>]
+vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [--vad-model <vad_path>] [--backend auto|gpu|cpu] [--gpu-device <id>] [--log-file <log_path>] [--enable-logging]
 ```
 
 | Parameter | Required | Default | Description |
@@ -172,7 +172,8 @@ vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [
 | `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). If not specified, the worker auto-discovers `ggml-silero-vad.bin` in the model directory alongside `--model`. If absent, gracefully falls back to RMS Energy VAD. |
 | `--backend <type>` | No | `auto` | Inference accelerator backend: `auto`, `gpu`, or `cpu`. |
 | `--gpu-device <id>` | No | `0` | GPU/IGPU device index for hardware acceleration. |
-| `--log-file <path>` | No | (temp directory) | Custom destination for diagnostic log output. |
+| `--log-file <path>` | No | disabled | Custom destination for diagnostic log output; implies `--enable-logging`. |
+| `--enable-logging` | No | disabled | Enables worker diagnostic logging and its temp-file output. |
 | `--model-dir <path>` | No | per-user model directory | Destination for explicit catalog downloads; creates the directory on demand. |
 
 ## Compatibility rules

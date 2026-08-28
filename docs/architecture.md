@@ -34,7 +34,7 @@ caption receiver thread (step 15) -- timed segments --> caption presenter (C)
 | Component                          | Owns                                                                                                                                                                                                                                                                                | Must not do                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Capture module                     | Audio-format validation, PTS mapping, bounded PCM enqueue                                                                                                                                                                                                                           | Wait for worker, infer, write pipe, allocate per audio block            |
-| Plugin sender (14c, 15, 16)        | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR, dispatch SEGMENT frames to the caption presenter, poll input pause state and send PAUSE/RESUME                                                                                        | Block on inference; call VLC presentation API from the audio callback   |
+| Plugin sender (14c, 15, 16)        | Session handshake, PCM framing, queue drain, backpressure, drain worker SEGMENT/STATUS/ERROR, dispatch SEGMENT frames to the caption presenter, poll input pause state and send PAUSE/RESUME, write bounded benchmark snapshots | Block on inference; call VLC presentation API from the audio callback   |
 | Worker IPC Reader (14c, `ADR-013`) | Pipe frame reading, protocol validation, worker frame queue enqueue                                                                                                                                                                                                                 | Block on whisper.cpp inference or delay transport reading; send replies |
 | Worker frame queue (14c)           | Bounded FIFO of `{type, payload}` frames; drop-oldest AUDIO; controls never evicted for audio; overflow evicts only PAUSE/RESUME, same-type, or the oldest non-SHUTDOWN control for a required incoming (START/STOP); a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming | Block; allocate unbounded                                               |
 | Worker Engine (`ADR-015`, 17a)     | Model-once lifetime, VAD/windowing, GPU/CPU inference, builder; Vulkan backend default ON with transparent CPU fallback (`--backend auto|gpu|cpu`, `--gpu-device`)                                                                                                                    | Read arbitrary paths, expose network service, control VLC               |
@@ -120,7 +120,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 | `AUDIO`                   | plugin -> worker         | session ID, `start_pts_us`, `duration_us`, PCM byte count, PCM bytes                   |
 | `PAUSE`, `RESUME`, `STOP` | plugin -> worker         | session ID, reason where applicable                                                    |
 | `SEGMENT`                 | worker -> plugin         | segment ID, start/end PTS, `final`, UTF-8 text, optional confidence                    |
-| `STATUS`                  | worker -> plugin         | state, queue depth, inference latency, dropped audio                                   |
+| `STATUS`                  | worker -> plugin         | state, queue depth, cumulative inference wall time, dropped audio, resolved backend   |
 | `ERROR`                   | both                     | session ID, error code, recoverable flag, redacted message                             |
 | `MODEL_CTRL`              | plugin -> worker         | worker-scoped download/abort request; zero session ID is valid before `START`          |
 | `MODEL_PROGRESS`          | worker -> plugin         | download stage, percent, byte counters, catalog model ID                             |
@@ -137,6 +137,11 @@ remains responsible for SHA-256 verification during download. VLC 3.0's Lua widg
 callbacks nor button enabled/disabled state, so `.en` language enforcement occurs on Apply while model availability
 presentation is refreshed by dialog construction and bounded action callbacks. The full language list remains visible
 while a model is being selected because Lua cannot react to dropdown changes.
+
+Diagnostic events are disabled by default and are enabled together for the worker and plugin through the persisted
+`whisper-logging` setting. When enabled, the worker writes diagnostic events to its temp log while the plugin mirrors
+bounded lifecycle events to VLC Messages. These diagnostics may include bounded local paths and byte counters, but
+never auth tokens, PCM, transcripts, or network credentials.
 
 `MODEL_PROGRESS(IDLE)` is an initial state snapshot emitted before the worker's asynchronous downloader changes to
 `DOWNLOADING`; it is not a failed or completed command. The plugin sender keeps the pending catalog-id correlation
