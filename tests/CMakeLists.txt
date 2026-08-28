@@ -90,6 +90,7 @@ endif()
 
 if(WIN32)
     # Windows Media Foundation and BCrypt libraries
+    target_link_libraries(test_whisper_engine PRIVATE bcrypt)
     target_link_libraries(test_source_decoder PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
     target_link_libraries(test_worker_ipc PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
     target_link_libraries(test_worker_lifecycle PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
