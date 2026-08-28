@@ -8,6 +8,7 @@
 #include "vw_protocol_types.h"
 
 #define VW_BENCHMARK_MAX_LATENCY_SAMPLES 1024U
+#define VW_BENCHMARK_TRANSLATION_TIMEOUT_US 800000U
 
 typedef struct vw_benchmark {
   bool active;
@@ -43,6 +44,7 @@ typedef struct vw_benchmark {
   uint64_t translation_tier1_count;
   uint64_t translation_tier2_count;
   uint64_t translation_tier3_count;
+  uint64_t translation_failure_count;
   uint64_t translation_timeout_count;
   uint64_t translation_duration_us;
   int64_t translation_latency_samples[VW_BENCHMARK_MAX_LATENCY_SAMPLES];
@@ -51,7 +53,8 @@ typedef struct vw_benchmark {
   bool live_clock_valid;
 } vw_benchmark_t;
 
-// Records translation telemetry for a caption segment, tracking tier distribution, timeouts, and latency percentiles.
+// Records translation telemetry for every attempted caption, including failed latency. Failures at/above the global
+// translation deadline are classified as timeouts; earlier transport/parser failures are counted separately.
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
 
 // Starts a bounded benchmark session, creates its private temporary report, and writes the initial active snapshot
