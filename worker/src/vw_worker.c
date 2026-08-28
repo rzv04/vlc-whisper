@@ -14,6 +14,7 @@
 #include "vw_protocol_types.h"
 #include "vw_protocol_util.h"
 #include "vw_source_decoder.h"
+#include "vw_translate.h"
 #include "vw_vad.h"
 #include "vw_worker_queue.h"
 
@@ -352,6 +353,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
   int64_t decoded_pts_us = 0;
   const int64_t lead_target_us = 30000000LL;  // 30s look-ahead horizon
 
+  // Translation configuration state
+  bool translate_enabled = false;
+  char translate_src_lang[16] = "auto";
+  char translate_dst_lang[16] = "en";
+  uint8_t translate_mode = 1;
+
   vw_worker_queue_t* queue = vw_worker_queue_create(32);
   if (!queue) {
     free(window_samples);
@@ -428,6 +435,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
         vw_msg_status_t status;
         vw_msg_position_t position;
         vw_msg_model_ctrl_t model_ctrl;
+        vw_msg_translate_ctrl_t translate_ctrl;
       } payload_decoded;
 
       memset(&payload_decoded, 0, sizeof(payload_decoded));
@@ -892,6 +900,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
           break;
         }
 
+        case VW_MSG_TRANSLATE_CTRL: {
+          translate_enabled = (payload_decoded.translate_ctrl.enabled != 0);
+          snprintf(translate_src_lang, sizeof(translate_src_lang), "%s", payload_decoded.translate_ctrl.source_lang);
+          snprintf(translate_dst_lang, sizeof(translate_dst_lang), "%s", payload_decoded.translate_ctrl.target_lang);
+          translate_mode = payload_decoded.translate_ctrl.mode;
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_TRANSLATE", "translate config: enabled=%d from=%s to=%s mode=%d",
+                       (int)translate_enabled, translate_src_lang, translate_dst_lang, (int)translate_mode);
+          break;
+        }
+
         case VW_MSG_SHUTDOWN:
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "shutdown requested; exiting");
           if (source_decoder) {
@@ -1066,7 +1084,34 @@ int vw_worker_run(const vw_worker_config_t* config) {
       vw_caption_segment_t seg;
       while (vw_segment_builder_pop(builder, &seg)) {
         memcpy(seg.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
-        uint8_t seg_payload[VW_CAPTION_SEGMENT_FIXED_BYTES + VW_SEGMENT_BUILDER_MAX_TEXT_BYTES];
+
+        char trans_text[VW_TRANSLATE_MAX_TEXT_BYTES];
+        trans_text[0] = '\0';
+        uint8_t trans_tier = VW_TRANSLATE_TIER_NONE;
+        uint32_t trans_latency_us = 0;
+        seg.translated_text_utf8 = NULL;
+        seg.translated_text_bytes = 0;
+        seg.translation_tier = 0;
+        seg.translation_latency_us = 0;
+
+        if (translate_enabled && seg.text_utf8 && seg.text_utf8[0] != '\0') {
+          if (vw_translate_text(seg.text_utf8, translate_src_lang, translate_dst_lang, trans_text, sizeof(trans_text),
+                                &trans_tier, &trans_latency_us)) {
+            seg.translated_text_utf8 = trans_text;
+            seg.translated_text_bytes = (uint16_t)strlen(trans_text);
+            seg.translation_tier = trans_tier;
+            seg.translation_latency_us = trans_latency_us;
+            vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_TRANSLATE", "translated cue (%s->%s tier=%u lat=%uus): '%s'",
+                         translate_src_lang, translate_dst_lang, (unsigned int)trans_tier,
+                         (unsigned int)trans_latency_us, trans_text);
+          } else {
+            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_TRANSLATE",
+                         "translation failed or timed out (%s->%s); degrading to source transcript", translate_src_lang,
+                         translate_dst_lang);
+          }
+        }
+
+        uint8_t seg_payload[VW_CAPTION_SEGMENT_FIXED_BYTES + VW_SEGMENT_BUILDER_MAX_TEXT_BYTES * 2 + 64];
         size_t seg_len = 0;
         if (vw_protocol_encode_payload(VW_MSG_CAPTION_SEGMENT, &seg, seg_payload, sizeof(seg_payload), &seg_len)) {
           vw_frame_header_t seg_hdr = {.magic = VW_PROTOCOL_MAGIC,
@@ -1079,9 +1124,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
           vw_ipc_send(handle, seg_hdr_buf, sizeof(seg_hdr_buf));
           vw_ipc_send(handle, seg_payload, seg_len);
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEGMENT",
-                       "emitted segment id=%llu start=%lld end=%lld is_final=%d text_len=%zu",
+                       "emitted segment id=%llu start=%lld end=%lld is_final=%d text_len=%zu trans_len=%u",
                        (unsigned long long)seg.segment_id, (long long)seg.start_pts_us, (long long)seg.end_pts_us,
-                       seg.is_final, seg.text_utf8 ? strlen(seg.text_utf8) : 0);
+                       seg.is_final, seg.text_utf8 ? strlen(seg.text_utf8) : 0,
+                       (unsigned int)seg.translated_text_bytes);
         }
         if (seg.text_utf8) free(seg.text_utf8);
       }

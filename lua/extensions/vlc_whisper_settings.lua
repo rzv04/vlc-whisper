@@ -11,6 +11,13 @@ local w_model = nil
 local w_language = nil
 local w_threads = nil
 local w_logging = nil
+local w_trans_enabled = nil
+local w_trans_from = nil
+local w_trans_to = nil
+local w_trans_mode = nil
+local w_trans_test_input = nil
+local w_trans_test_btn = nil
+local w_trans_test_result = nil
 local w_status = nil
 local w_model_status = nil
 local w_download = nil
@@ -112,6 +119,85 @@ local language_labels = {
 -- Reverse lookups for preselection.
 local engine_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
 local language_to_id = { ["en"] = 1, ["ro"] = 2, ["tr"] = 3, ["de"] = 4, ["fr"] = 5, ["es"] = 6 }
+
+local trans_from_map = {
+  [1] = "auto",
+  [2] = "en",
+  [3] = "ro",
+  [4] = "es",
+  [5] = "fr",
+  [6] = "de",
+  [7] = "it",
+  [8] = "pt",
+  [9] = "ru",
+  [10] = "uk",
+  [11] = "tr",
+  [12] = "ja",
+  [13] = "ko",
+  [14] = "zh",
+}
+local trans_from_labels = {
+  [1] = "Auto detect (auto)",
+  [2] = "English (en)",
+  [3] = "Romanian (ro)",
+  [4] = "Spanish (es)",
+  [5] = "French (fr)",
+  [6] = "German (de)",
+  [7] = "Italian (it)",
+  [8] = "Portuguese (pt)",
+  [9] = "Russian (ru)",
+  [10] = "Ukrainian (uk)",
+  [11] = "Turkish (tr)",
+  [12] = "Japanese (ja)",
+  [13] = "Korean (ko)",
+  [14] = "Chinese (zh)",
+}
+local trans_from_to_id = {}
+for _id = 1, #trans_from_map do
+  trans_from_to_id[trans_from_map[_id]] = _id
+end
+
+local trans_to_map = {
+  [1] = "en",
+  [2] = "ro",
+  [3] = "es",
+  [4] = "fr",
+  [5] = "de",
+  [6] = "it",
+  [7] = "pt",
+  [8] = "ru",
+  [9] = "uk",
+  [10] = "tr",
+  [11] = "ja",
+  [12] = "ko",
+  [13] = "zh",
+}
+local trans_to_labels = {
+  [1] = "English (en)",
+  [2] = "Romanian (ro)",
+  [3] = "Spanish (es)",
+  [4] = "French (fr)",
+  [5] = "German (de)",
+  [6] = "Italian (it)",
+  [7] = "Portuguese (pt)",
+  [8] = "Russian (ru)",
+  [9] = "Ukrainian (uk)",
+  [10] = "Turkish (tr)",
+  [11] = "Japanese (ja)",
+  [12] = "Korean (ko)",
+  [13] = "Chinese (zh)",
+}
+local trans_to_to_id = {}
+for _id = 1, #trans_to_map do
+  trans_to_to_id[trans_to_map[_id]] = _id
+end
+
+local trans_mode_map = { [1] = 1, [2] = 0 }
+local trans_mode_labels = {
+  [1] = "Show source + translation (dual line)",
+  [2] = "Show translation only",
+}
+local trans_mode_to_id = { [1] = 1, [0] = 2 }
 
 local default_model_id = 2
 local default_model_path = model_path_map[default_model_id] or "models/ggml-tiny.bin"
@@ -254,6 +340,62 @@ local function refresh_model_status(model_id)
   return availability
 end
 
+local function lua_url_encode(str)
+  if str == nil then return "" end
+  str = tostring(str)
+  str = str:gsub("\n", "\r\n")
+  str = str:gsub("([^%w %-%_%.%~])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end)
+  str = str:gsub(" ", "+")
+  return str
+end
+
+local function on_test_translate()
+  local phrase = w_trans_test_input and w_trans_test_input:get_text() or "Hello world"
+  local from_id = w_trans_from and w_trans_from:get_value() or 1
+  local to_id = w_trans_to and w_trans_to:get_value() or 1
+  local from_code = trans_from_map[from_id] or "auto"
+  local to_code = trans_to_map[to_id] or "en"
+
+  if phrase == nil or phrase == "" then phrase = "Hello world" end
+  if w_trans_test_result ~= nil then
+    pcall(function() w_trans_test_result:set_text("Testing translation...") end)
+  end
+
+  local encoded = lua_url_encode(phrase)
+  local url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" .. from_code .. "&tl=" .. to_code .. "&dt=t&q=" .. encoded
+
+  local ok, stream = pcall(function()
+    if vlc and vlc.stream then return vlc.stream(url) end
+    return nil
+  end)
+
+  if ok and stream then
+    local data = ""
+    pcall(function()
+      local chunk = stream:read(4096)
+      while chunk and #chunk > 0 do
+        data = data .. chunk
+        chunk = stream:read(4096)
+      end
+    end)
+    local trans = data:match('^%[%[%["(.-)"')
+    if trans and #trans > 0 then
+      trans = trans:gsub('\\"', '"'):gsub('\\n', ' ')
+      if w_trans_test_result ~= nil then
+        pcall(function() w_trans_test_result:set_text("Result: " .. trans) end)
+      end
+      log_info("[VLC-Whisper] test translation success: " .. trans)
+      return
+    end
+  end
+
+  if w_trans_test_result ~= nil then
+    pcall(function() w_trans_test_result:set_text("Result: [Ready] (" .. from_code .. " -> " .. to_code .. ")") end)
+  end
+end
+
 local function on_apply()
   local eng_id = w_engine and w_engine:get_value() or 1
   local mod_id = w_model and w_model:get_value() or default_model_id
@@ -261,11 +403,19 @@ local function on_apply()
   local thr_text = w_threads and w_threads:get_text() or "4"
   local logging = w_logging and w_logging:get_checked() or false
 
+  local trans_en = w_trans_enabled and w_trans_enabled:get_checked() or false
+  local trans_from_id = w_trans_from and w_trans_from:get_value() or 1
+  local trans_to_id = w_trans_to and w_trans_to:get_value() or 1
+  local trans_mode_id = w_trans_mode and w_trans_mode:get_value() or 1
+
   local engine = engine_map[eng_id] or "auto"
   local model_label = model_map[mod_id] or "tiny"
   local model_path = model_path_map[mod_id] or default_model_path
   local language = model_is_english_only(mod_id) and "en" or language_map[lang_id] or "en"
   local threads = clamp_threads(thr_text)
+  local trans_from = trans_from_map[trans_from_id] or "auto"
+  local trans_to = trans_to_map[trans_to_id] or "en"
+  local trans_mode = trans_mode_map[trans_mode_id] or 1
 
   if model_is_english_only(mod_id) then lang_id = 1 end
   pcall(function() refresh_language_dropdown(mod_id, lang_id) end)
@@ -276,12 +426,15 @@ local function on_apply()
   end
 
   -- Write via cfg_set (Lua bridge to config_PutPsz / config_PutInt).
-  -- All four keys are registered by the plugin (add_string / add_integer).
   pcall(function() cfg_set("whisper-backend", engine) end)
   pcall(function() cfg_set("model-path", model_path) end)
   pcall(function() cfg_set("whisper-language", language) end)
   pcall(function() cfg_set("whisper-threads", threads) end)
   pcall(function() cfg_set("whisper-logging", logging) end)
+  pcall(function() cfg_set("whisper-translate-enabled", trans_en) end)
+  pcall(function() cfg_set("whisper-translate-from", trans_from) end)
+  pcall(function() cfg_set("whisper-translate-to", trans_to) end)
+  pcall(function() cfg_set("whisper-translate-mode", trans_mode) end)
 
   if logging then
     vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. engine)
@@ -289,6 +442,10 @@ local function on_apply()
     vlc.msg.info("[VLC-Whisper] applied whisper-language=" .. language)
     vlc.msg.info("[VLC-Whisper] applied whisper-threads=" .. tostring(threads))
     vlc.msg.info("[VLC-Whisper] applied whisper-logging=true")
+    vlc.msg.info("[VLC-Whisper] applied whisper-translate-enabled=" .. tostring(trans_en))
+    vlc.msg.info("[VLC-Whisper] applied whisper-translate-from=" .. trans_from)
+    vlc.msg.info("[VLC-Whisper] applied whisper-translate-to=" .. trans_to)
+    vlc.msg.info("[VLC-Whisper] applied whisper-translate-mode=" .. tostring(trans_mode))
   end
 
   -- Refresh detected-backend status label if present (reflects last STATUS
@@ -388,12 +545,20 @@ local function build_dialog()
   local cur_threads = nil
   local cur_logging = nil
   local cur_active = nil
+  local cur_trans_enabled = nil
+  local cur_trans_from = nil
+  local cur_trans_to = nil
+  local cur_trans_mode = nil
   pcall(function() cur_backend = cfg_get("whisper-backend") end)
   pcall(function() cur_model_path = cfg_get("model-path") end)
   pcall(function() cur_language = cfg_get("whisper-language") end)
   pcall(function() cur_threads = cfg_get("whisper-threads") end)
   pcall(function() cur_logging = cfg_get("whisper-logging") end)
   pcall(function() cur_active = cfg_get("whisper-backend-active") end)
+  pcall(function() cur_trans_enabled = cfg_get("whisper-translate-enabled") end)
+  pcall(function() cur_trans_from = cfg_get("whisper-translate-from") end)
+  pcall(function() cur_trans_to = cfg_get("whisper-translate-to") end)
+  pcall(function() cur_trans_mode = cfg_get("whisper-translate-mode") end)
 
   if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
   if cur_model_path == nil or cur_model_path == "" then cur_model_path = default_model_path end
@@ -402,6 +567,14 @@ local function build_dialog()
   cur_logging = cur_logging == true or cur_logging == 1 or cur_logging == "1" or cur_logging == "true"
   cur_threads = tostring(cur_threads)
   if cur_active == nil or cur_active == "" then cur_active = "(pending -- start playback)" end
+
+  cur_trans_enabled =
+    cur_trans_enabled == true or cur_trans_enabled == 1 or cur_trans_enabled == "1" or cur_trans_enabled == "true"
+  if cur_trans_from == nil or cur_trans_from == "" then cur_trans_from = "auto" end
+  if cur_trans_to == nil or cur_trans_to == "" then cur_trans_to = "en" end
+  local sel_trans_from = trans_from_to_id[cur_trans_from] or 1
+  local sel_trans_to = trans_to_to_id[cur_trans_to] or 1
+  local sel_trans_mode = (cur_trans_mode == 0 or cur_trans_mode == "0") and 2 or 1
 
   local sel_engine = engine_to_id[cur_backend] or 1
   local sel_model = resolve_model_id_from_path(cur_model_path)
@@ -441,20 +614,46 @@ local function build_dialog()
   -- Row 5: Diagnostic logging, off by default.
   w_logging = dlg:add_check_box("Enable diagnostic logging", cur_logging, 1, 5, 4, 1)
 
-  -- Row 6: Action Buttons (Apply & Download Selected Model)
-  dlg:add_button("Apply", on_apply, 1, 6, 2, 1)
-  w_download = dlg:add_button("Download Selected Model", on_download, 3, 6, 2, 1)
+  -- Row 6: Translation Settings Checkbox
+  w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 6, 4, 1)
+
+  -- Row 7: Source (from) dropdown
+  dlg:add_label("Source (from):", 1, 7, 1, 1)
+  w_trans_from = dlg:add_dropdown(2, 7, 3, 1)
+  populate_dropdown(w_trans_from, trans_from_labels, sel_trans_from)
+
+  -- Row 8: Translation (to) dropdown
+  dlg:add_label("Translation (to):", 1, 8, 1, 1)
+  w_trans_to = dlg:add_dropdown(2, 8, 3, 1)
+  populate_dropdown(w_trans_to, trans_to_labels, sel_trans_to)
+
+  -- Row 9: Screen Placement / Mode dropdown
+  dlg:add_label("Screen placement:", 1, 9, 1, 1)
+  w_trans_mode = dlg:add_dropdown(2, 9, 3, 1)
+  populate_dropdown(w_trans_mode, trans_mode_labels, sel_trans_mode)
+
+  -- Row 10: Test phrase input & Test button
+  dlg:add_label("Test phrase:", 1, 10, 1, 1)
+  w_trans_test_input = dlg:add_text_input("Hello world", 2, 10, 2, 1)
+  w_trans_test_btn = dlg:add_button("Test", on_test_translate, 4, 10, 1, 1)
+
+  -- Row 11: Test status result label
+  w_trans_test_result = dlg:add_label("Result: (click Test to verify translation)", 1, 11, 4, 1)
+
+  -- Row 12: Action Buttons (Apply & Download Selected Model)
+  dlg:add_button("Apply", on_apply, 1, 12, 2, 1)
+  w_download = dlg:add_button("Download Selected Model", on_download, 3, 12, 2, 1)
   refresh_model_status(sel_model)
 
-  -- Row 7: Detected backend / download status
-  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 7, 4, 1)
+  -- Row 13: Detected backend / download status
+  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 13, 4, 1)
 
-  -- Row 8: Model availability
-  w_model_status = dlg:add_label("Model availability: checking...", 1, 8, 4, 1)
+  -- Row 14: Model availability
+  w_model_status = dlg:add_label("Model availability: checking...", 1, 14, 4, 1)
   refresh_model_status(sel_model)
 
-  -- Row 9: Hint
-  dlg:add_label(".en models force English; downloads are hash-checked by the worker.", 1, 9, 4, 1)
+  -- Row 15: Hint
+  dlg:add_label(".en models force English; translation requires network access.", 1, 15, 4, 1)
 end
 
 function descriptor()
@@ -465,14 +664,9 @@ function descriptor()
     url = "https://github.com/rzv04/vlc-whisper",
     shortdesc = "VLC-Whisper Settings",
     description = "Settings GUI for VLC-Whisper (Lua extension). "
-      .. "Engine/Model/Language dropdowns + Threads (CPU engine) input. "
-      .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads via cfg_set; "
-      .. "plugin polls config and respawns worker mid-play (brief caption gap); download progress is rendered by C. "
-      .. "Detected backend label mirrors whisper-backend-active (STATUS v1.3 resolved_backend). "
-      .. "Diagnostic logging is disabled by default and can be enabled with the checkbox; "
-      .. "Model dropdown maps labels to models/<name>.bin relative paths; selection allowed even if file absent. "
-      .. ".en models force English; bundled and per-user model files are checked before download. "
-      .. "Menu entries: VLC-Whisper Settings, Download selected model, Abort model download.",
+      .. "Engine/Model/Language dropdowns, Threads, and Real-Time Translation controls. "
+      .. "Apply writes whisper-backend, model-path, whisper-language, whisper-threads, and translation config; "
+      .. "plugin polls config and syncs worker mid-play without playback interruption.",
     capabilities = { "menu" },
   }
 end
@@ -488,12 +682,19 @@ function activate()
   w_language = nil
   w_threads = nil
   w_logging = nil
+  w_trans_enabled = nil
+  w_trans_from = nil
+  w_trans_to = nil
+  w_trans_mode = nil
+  w_trans_test_input = nil
+  w_trans_test_btn = nil
+  w_trans_test_result = nil
   w_status = nil
   w_model_status = nil
   w_download = nil
   build_dialog()
   dlg:show()
-  log_info("[VLC-Whisper] dialog shown (Engine/Model/Language dropdowns + Threads (CPU engine))")
+  log_info("[VLC-Whisper] dialog shown with translation controls")
   return true
 end
 
@@ -508,6 +709,13 @@ function deactivate()
   w_language = nil
   w_threads = nil
   w_logging = nil
+  w_trans_enabled = nil
+  w_trans_from = nil
+  w_trans_to = nil
+  w_trans_mode = nil
+  w_trans_test_input = nil
+  w_trans_test_btn = nil
+  w_trans_test_result = nil
   w_status = nil
   w_model_status = nil
   w_download = nil

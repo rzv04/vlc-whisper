@@ -444,3 +444,47 @@ The question is where and under what conditions that egress is permitted.
   mid-session and no MS Store support (cannot write Program Files/WindowsApps); rejected.
 - **Helper scripts only (`vw_download_*`)** — poor UX, requires manual file placement and offers no live
   progress in the settings dialog; retained only as a developer fallback, not the product path.
+
+
+## ADR-024: Keyless Real-Time Subtitle Translation Fallback Engine & Governance
+
+**Status:** Accepted (2026-08-28).
+
+**Context.** Users watching foreign-language media frequently desire live translated subtitles in their native language
+(e.g., Romanian, Spanish, French, German, Turkish, etc.) alongside or replacing the original Whisper-transcribed audio cues.
+Paid cloud translation APIs require API keys, billing subscriptions, and complex account provisioning, which imposes a high
+barrier to entry. Additionally, online translation network requests must adhere to the project's strict privacy and realtime
+callback guarantees (AGENTS.md Rule 4 & 5).
+
+**Decision.**
+1. **Opt-In Real-Time Subtitle Translation Subsystem**:
+   - Subtitle translation is strictly opt-in via user configuration (`whisper-translate-enabled = true`, default `false`).
+   - Source language (`whisper-translate-from`, default `"auto"`) and target language (`whisper-translate-to`, default `"en"` / `"ro"`)
+     are configured in the settings dialog.
+   - Display modes supported: Dual-line subtitle (`<source>\n<translated>`) or Translation-only (`<translated>`), governed by
+     `whisper-translate-mode` (0=translation only, 1=dual line).
+2. **Worker-Confined 3-Tier Fallback Translation Engine**:
+   - Translation execution is strictly confined to the out-of-process worker (`vlc-whisper-worker`), running in `vw_worker.c`
+     prior to caption segment emission.
+   - **Tier 1 (Google Web RPC)**: POST `https://translate.google.com/_/TranslateWebserverUi/data/batchexecute` with `f.req`
+     envelope and `MkEWBc` RPC id.
+   - **Tier 2 (Legacy GTX Query)**: GET `https://translate.googleapis.com/translate_a/single?client=gtx&sl=...&tl=...&dt=t&q=...`.
+   - **Tier 3 (Mobile Web Scrape)**: GET `https://translate.google.com/m?sl=...&tl=...&q=...` parsing `.result-container`.
+   - Bounded timeout: 800ms per HTTP request; on timeout or total failure, the worker falls back gracefully to emitting the original
+     Whisper-transcribed text without stalling playback.
+3. **Realtime Audio Callback & Plugin Safety**:
+   - The VLC realtime audio callback (`vw_plugin_filter`) and VLC SPU video presenter perform ZERO network requests, ZERO heap allocations,
+     and ZERO blocking locks.
+   - The plugin communicates with the worker over authenticated local IPC (`VW_MSG_TRANSLATE_CTRL`, Protocol v1.5).
+4. **Single-Dialog UI Integration**:
+   - All translation settings (checkbox, from/to dropdowns, display mode, test phrase input, interactive `[ Test ]` button) reside
+     in the existing unified settings dialog (`lua/extensions/vlc_whisper_settings.lua`).
+5. **Benchmark & Telemetry Integration**:
+   - Translation latency is measured per segment in microseconds (`translation_latency_us`) and serialized in session benchmark
+     reports (`p50`, `p95`, `min`, `max`, tier distribution, timeout drops).
+
+**Consequences.**
+- Seamless real-time subtitle translation without requiring API keys, accounts, or credit cards.
+- Full privacy compliance: audio PCM is never transmitted over the network; only finalized Whisper text fragments are sent when opted-in.
+- Graceful degradation: network disconnection seamlessly displays original transcription cues without caption freezes or VLC media drops.
+

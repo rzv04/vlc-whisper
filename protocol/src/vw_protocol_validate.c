@@ -134,6 +134,21 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
         uint8_t c = (uint8_t)p->text_utf8[i];
         if (c < 0x20 && c != '\n' && c != ' ') return false;
       }
+      if (p->translated_text_bytes > 0) {
+        if (p->translated_text_bytes > VW_MAX_TEXT_BYTES) return false;
+        if (!p->translated_text_utf8) return false;
+        if (!is_valid_utf8(p->translated_text_utf8, p->translated_text_bytes)) return false;
+        for (size_t i = 0; i < p->translated_text_bytes; i++) {
+          uint8_t c = (uint8_t)p->translated_text_utf8[i];
+          if (c < 0x20 && c != '\n' && c != ' ') return false;
+        }
+      }
+      return true;
+    }
+    case VW_MSG_TRANSLATE_CTRL: {
+      const vw_msg_translate_ctrl_t* p = (const vw_msg_translate_ctrl_t*)payload;
+      if (p->enabled > 1) return false;
+      if (p->mode > 1) return false;
       return true;
     }
     case VW_MSG_MODEL_CTRL: {

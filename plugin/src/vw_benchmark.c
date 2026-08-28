@@ -55,6 +55,16 @@ static int64_t vw_benchmark_percentile(const vw_benchmark_t* benchmark, unsigned
   return sorted[index];
 }
 
+static int64_t vw_benchmark_trans_percentile(const vw_benchmark_t* benchmark, unsigned percentile) {
+  if (!benchmark || benchmark->translation_latency_sample_count == 0) return 0;
+  int64_t sorted[VW_BENCHMARK_MAX_LATENCY_SAMPLES];
+  memcpy(sorted, benchmark->translation_latency_samples,
+         benchmark->translation_latency_sample_count * sizeof(sorted[0]));
+  qsort(sorted, benchmark->translation_latency_sample_count, sizeof(sorted[0]), vw_benchmark_compare_i64);
+  size_t index = ((size_t)percentile * (benchmark->translation_latency_sample_count - 1U) + 99U) / 100U;
+  return sorted[index];
+}
+
 static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, int64_t end_us) {
   if (!benchmark || !benchmark->active || benchmark->report_path[0] == '\0') return false;
   char temp_path[VW_PATH_MAX_BYTES];
@@ -102,6 +112,20 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "utterance_latency_max_us=%lld\n",
           (long long)(benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 100) : 0));
   fprintf(report, "queue_audio_dropped_us=%llu\n", (unsigned long long)benchmark->dropped_audio_us);
+  fprintf(report, "translation_requests_sent=%llu\n", (unsigned long long)benchmark->translation_requests_sent);
+  fprintf(report, "translation_success_count=%llu\n", (unsigned long long)benchmark->translation_success_count);
+  fprintf(report, "translation_tier1_count=%llu\n", (unsigned long long)benchmark->translation_tier1_count);
+  fprintf(report, "translation_tier2_count=%llu\n", (unsigned long long)benchmark->translation_tier2_count);
+  fprintf(report, "translation_tier3_count=%llu\n", (unsigned long long)benchmark->translation_tier3_count);
+  fprintf(report, "translation_timeout_count=%llu\n", (unsigned long long)benchmark->translation_timeout_count);
+  fprintf(report, "translation_duration_us=%llu\n", (unsigned long long)benchmark->translation_duration_us);
+  fprintf(report, "translation_latency_samples=%zu\n", benchmark->translation_latency_sample_count);
+  fprintf(report, "translation_latency_min_us=%lld\n",
+          (long long)(benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 0) : 0));
+  fprintf(report, "translation_latency_p50_us=%lld\n", (long long)vw_benchmark_trans_percentile(benchmark, 50));
+  fprintf(report, "translation_latency_p95_us=%lld\n", (long long)vw_benchmark_trans_percentile(benchmark, 95));
+  fprintf(report, "translation_latency_max_us=%lld\n",
+          (long long)(benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 100) : 0));
   fprintf(report, "latency_clock=live_pts_to_monotonic_only\n");
   fprintf(report, "post_filtering_included_in_speed=false\n");
   bool success = fflush(report) == 0;
@@ -172,6 +196,27 @@ void vw_benchmark_record_caption_filtered(vw_benchmark_t* benchmark, bool paused
   if (paused) benchmark->captions_paused++;
   if (stale) benchmark->captions_stale++;
   if (presenter_rejected) benchmark->captions_presenter_rejected++;
+}
+
+void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success) {
+  if (!benchmark || !benchmark->active) return;
+  benchmark->translation_requests_sent++;
+  if (success) {
+    benchmark->translation_success_count++;
+    if (tier == 1) {
+      benchmark->translation_tier1_count++;
+    } else if (tier == 2) {
+      benchmark->translation_tier2_count++;
+    } else if (tier == 3) {
+      benchmark->translation_tier3_count++;
+    }
+    benchmark->translation_duration_us += latency_us;
+    if (benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
+      benchmark->translation_latency_samples[benchmark->translation_latency_sample_count++] = (int64_t)latency_us;
+    }
+  } else {
+    benchmark->translation_timeout_count++;
+  }
 }
 
 void vw_benchmark_record_caption_sent(vw_benchmark_t* benchmark, int64_t now_us) {

@@ -4,7 +4,7 @@
 
 This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=4` (Protocol v1.4); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=5` (Protocol v1.5); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
 
 ## Transport Timeouts & Guarantees
 
@@ -68,10 +68,13 @@ Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u
 
 ### SEGMENT
 
-Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `bool is_final`, `u16 text_bytes`, UTF-8 text. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
+### SEGMENT (v1.5)
+
+Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `bool is_final`, `u16 text_bytes`, UTF-8 text, optional `u16 translated_text_bytes`, optional UTF-8 translated text, optional `u32 translation_latency_us`, optional `u8 translation_tier`. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
 
 - **Phrase-by-Phrase Timing (`ADR-017`)**: Segment timing is derived from internal Whisper sub-segment boundaries ($t_0, t_1$ in centiseconds scaled by `10000LL` to microsecond PTS), rather than coarse 8-second window spans.
 - **`is_final` Invariant**: `is_final == true` denotes an immutable, committed subtitle cue to be rendered on screen via SPU (`vout_PutSubpicture`). Uncommitted/in-flight hypotheses are held until their window onset is finalized or drained.
+- **Real-Time Translation Fields (v1.5)**: When translation is enabled, the worker translates finalized subtitle cues using its 3-tier keyless Google Translate fallback engine before emitting `VW_MSG_CAPTION_SEGMENT`. `translated_text_utf8` carries the translated text, `translation_latency_us` carries the network RPC duration in microseconds, and `translation_tier` reports the resolving tier (`1 = Web RPC`, `2 = GTX`, `3 = Mobile scrape`).
 - **Silence Screen Blanking**: Non-contiguous phrases (e.g. 0.6s pause between speakers) generate distinct non-overlapping subpictures, naturally blanking the screen during conversational pauses.
 
 Example semantic value, shown as JSON only for readability:
@@ -83,9 +86,18 @@ Example semantic value, shown as JSON only for readability:
   "start_pts_us": 12000000,
   "end_pts_us": 14100000,
   "final": true,
-  "text": "Example caption."
+  "text": "Hello world.",
+  "translated_text": "Salut lume.",
+  "translation_latency_us": 145000,
+  "translation_tier": 1
 }
 ```
+
+### TRANSLATE_CTRL (v1.5)
+
+Plugin to worker. Payload 50 bytes: session ID (`16 bytes`), `u8 enabled` (0=disabled, 1=enabled), `char source_lang[16]` (NUL-padded language code or `"auto"`), `char target_lang[16]` (NUL-padded destination language code e.g. `"ro"` / `"en"`), `u8 mode` (0=translation only, 1=dual line).
+
+- Semantics: dynamically synchronizes translation preferences to the active worker mid-stream without requiring worker process restart or playback disruption.
 
 ### STARTED (v1.2)
 

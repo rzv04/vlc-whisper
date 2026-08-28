@@ -154,15 +154,15 @@ Provide user-opt-in real-time translation of transcribed subtitles (PotPlayer pa
   - Extend `vw_caption_segment_t` with `uint16_t translated_bytes`, `char translated_text[VW_MAX_CAPTION_TEXT_BYTES]`, `uint32_t translation_latency_us`, and `uint8_t translation_tier`.
 
 ## Acceptance Criteria
-- [ ] Settings dialog displays all translation controls in the same dialog: Auto Translation checkbox, Source dropdown, Target dropdown, Screen placement dropdown, Test input field, Test button, and Test status label.
-- [ ] Clicking "Test" in settings translates the test phrase and displays the translated text in the status label.
-- [ ] When Auto Translation is enabled and media is playing, subtitles appear translated in the selected target language.
-- [ ] When Dual-Line mode is selected, both source transcript and translated subtitles render cleanly on screen.
-- [ ] Translation latency metrics (min, p50, p95, max, tier breakdown, timeouts) are accurately captured in `vw_benchmark_t` and output to the session benchmark report.
-- [ ] When network is offline or translation times out (>800ms), original Whisper subtitles continue rendering without delay or stutter.
-- [ ] When Auto Translation is disabled, zero network requests are issued.
-- [ ] 100% of unit and integration tests pass under `ctest --preset linux-x64-debug` and Windows MinGW cross-build.
-- [ ] Code complies with standard C17, Google C style (`clang-format`), and symbol namespacing (`vw_`).
+- [x] Settings dialog displays all translation controls in the same dialog: Auto Translation checkbox, Source dropdown, Target dropdown, Screen placement dropdown, Test input field, Test button, and Test status label.
+- [x] Clicking "Test" in settings translates the test phrase and displays the translated text in the status label.
+- [x] When Auto Translation is enabled and media is playing, subtitles appear translated in the selected target language.
+- [x] When Dual-Line mode is selected, both source transcript and translated subtitles render cleanly on screen.
+- [x] Translation latency metrics (min, p50, p95, max, tier breakdown, timeouts) are accurately captured in `vw_benchmark_t` and output to the session benchmark report.
+- [x] When network is offline or translation times out (>800ms), original Whisper subtitles continue rendering without delay or stutter.
+- [x] When Auto Translation is disabled, zero network requests are issued.
+- [x] 100% of unit and integration tests pass under `ctest --preset linux-x64-debug` and Windows MinGW cross-build.
+- [x] Code complies with standard C17, Google C style (`clang-format`), and symbol namespacing (`vw_`).
 
 ## Test Plan
 1. **Unit Tests**:
@@ -183,8 +183,8 @@ Provide user-opt-in real-time translation of transcribed subtitles (PotPlayer pa
      ```
 
 ## Definition of Done
-- [ ] All authored code is standard C17 (`-std=c17`); no project-authored C++ introduced.
-- [ ] No blocking operations, locks, or allocations in VLC audio callbacks.
-- [ ] Network requests occur only when explicitly enabled by the user; no telemetry or disk logging of transcripts.
-- [ ] Translation queue is strictly bounded with timeout fallbacks and latency tracking.
-- [ ] Documentation updated: `docs/plans/step21b_translation_plan.md`, `docs/decisions.md` (ADR-024), `docs/api-contracts.md`, `docs/source-layout.md`, and `README.md`.
+- [x] All authored code is standard C17 (`-std=c17`); no project-authored C++ introduced.
+- [x] No blocking operations, locks, or allocations in VLC audio callbacks.
+- [x] Network requests occur only when explicitly enabled by the user; no telemetry or disk logging of transcripts.
+- [x] Translation queue is strictly bounded with timeout fallbacks and latency tracking.
+- [x] Documentation updated: `docs/plans/step21b_translation_plan.md`, `docs/decisions.md` (ADR-024), `docs/api-contracts.md`, `docs/source-layout.md`, and `README.md`.

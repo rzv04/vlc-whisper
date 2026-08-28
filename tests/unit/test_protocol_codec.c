@@ -146,11 +146,12 @@ int main(void) {
   EXPECT(vw_protocol_encode_payload(VW_MSG_SHUTDOWN, NULL, buffer, sizeof(buffer), &written));
   EXPECT(written == 0);
 
-  // ---- v1.4 MODEL_CTRL / MODEL_PROGRESS ----
-  _Static_assert(VW_PROTOCOL_VERSION_MINOR == 4U, "protocol v1.4 minor must be 4");
-  EXPECT(VW_PROTOCOL_VERSION_MINOR == 4U);
+  // ---- v1.5 PROTOCOL VERSION ----
+  _Static_assert(VW_PROTOCOL_VERSION_MINOR == 5U, "protocol v1.5 minor must be 5");
+  EXPECT(VW_PROTOCOL_VERSION_MINOR == 5U);
   EXPECT(VW_MSG_MODEL_CTRL_PAYLOAD_BYTES == 49U);
   EXPECT(VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES == 66U);
+  EXPECT(VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES == 50U);
 
   // MODEL_CTRL golden bytes (little-endian, fixed layout: 16 session + 1 action + 32 model_id)
   {
@@ -367,11 +368,52 @@ int main(void) {
     EXPECT(strlen(decp.model_id) < 32);
   }
 
-  // Unknown type still rejected
+  // TRANSLATE_CTRL (v1.5)
   {
-    EXPECT(!vw_protocol_encode_payload((vw_message_type_t)99, &header, buffer, sizeof(buffer), &written));
-    EXPECT(!vw_protocol_decode_payload((vw_message_type_t)99, buffer, 10, &header));
-    EXPECT(!vw_protocol_validate_payload((vw_message_type_t)99, &header));
+    vw_msg_translate_ctrl_t tctrl = {
+        .enabled = 1,
+        .mode = 1,
+    };
+    memset(tctrl.session_id.bytes, 0x55, VW_SESSION_ID_BYTES);
+    strcpy(tctrl.source_lang, "auto");
+    strcpy(tctrl.target_lang, "ro");
+    EXPECT(vw_protocol_encode_payload(VW_MSG_TRANSLATE_CTRL, &tctrl, buffer, sizeof(buffer), &written));
+    EXPECT(written == VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES);
+    vw_msg_translate_ctrl_t decoded_tctrl = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_TRANSLATE_CTRL, buffer, written, &decoded_tctrl));
+    EXPECT(decoded_tctrl.enabled == 1);
+    EXPECT(decoded_tctrl.mode == 1);
+    EXPECT_EQ_STR(decoded_tctrl.source_lang, "auto");
+    EXPECT_EQ_STR(decoded_tctrl.target_lang, "ro");
+    EXPECT(vw_protocol_validate_payload(VW_MSG_TRANSLATE_CTRL, &decoded_tctrl));
+  }
+
+  // CAPTION SEGMENT with translation fields (v1.5)
+  {
+    vw_caption_segment_t tseg = {
+        .segment_id = 42,
+        .start_pts_us = 1000,
+        .end_pts_us = 2000,
+        .is_final = true,
+        .text_bytes = 11,
+        .text_utf8 = (char*)"Hello world",
+        .translated_text_bytes = 10,
+        .translated_text_utf8 = (char*)"Salut lume",
+        .translation_latency_us = 250000,
+        .translation_tier = 1,
+    };
+    memset(tseg.session_id.bytes, 0x77, VW_SESSION_ID_BYTES);
+    EXPECT(vw_protocol_encode_payload(VW_MSG_CAPTION_SEGMENT, &tseg, buffer, sizeof(buffer), &written));
+    vw_caption_segment_t dec_tseg = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, buffer, written, &dec_tseg));
+    EXPECT(dec_tseg.segment_id == 42);
+    EXPECT(dec_tseg.text_bytes == 11);
+    EXPECT(strncmp(dec_tseg.text_utf8, "Hello world", 11) == 0);
+    EXPECT(dec_tseg.translated_text_bytes == 10);
+    EXPECT(strncmp(dec_tseg.translated_text_utf8, "Salut lume", 10) == 0);
+    EXPECT(dec_tseg.translation_latency_us == 250000);
+    EXPECT(dec_tseg.translation_tier == 1);
+    EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &dec_tseg));
   }
 
   printf("test_protocol_codec PASSED\n");

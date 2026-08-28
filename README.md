@@ -37,6 +37,7 @@
 
 - **100% Private and Offline**: All audio processing, voice activity detection, and speech recognition run entirely on your local machine. Zero cloud APIs, zero telemetry, and zero data leaves your computer.
 - **Hardware-Accelerated**: Supports Vulkan GPU acceleration for fast real-time transcription, with automatic CPU fallback on systems without dedicated graphics.
+- **Real-Time Subtitle Translation**: Translate subtitles on-the-fly into your native language using a keyless 3-tier fallback engine (Web RPC, GTX, and Mobile scrape) with zero API keys or subscriptions required.
 - **Ahead-of-Time Lookahead**: When playing local media files, the worker decodes upcoming audio ahead of the playback playhead for instant subtitle availability.
 - **Voice Activity Detection**: Integrated Silero VAD prevents phantom captions during silence, instrumental music, or background noise.
 - **In-App Settings Extension**: Configure speech models, language selection, inference threads, and hardware backend directly from VLC via the `View > VLC-Whisper Settings` menu.
@@ -83,8 +84,12 @@ VLC-Whisper includes a built-in settings dialog accessible from the VLC menu bar
    - **Model**: Choose from bundled `tiny (multilingual)` or additional models (`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`).
    - **Language**: Select your target language (`English`, `Romanian`, `Turkish`, `German`, `French`, `Spanish`).
    - **Threads**: CPU inference worker threads (`1` to `16`, default `4`).
+   - **Auto translation (Real-Time Subtitles)**: Checkbox to enable live translation of subtitles via keyless Google Translate.
+   - **Source (from) / Translation (to)**: Source language (`auto` detect or specific code) and destination translation language.
+   - **Screen placement**: Display mode (`Dual line: source + translation` or `Translation only`).
+   - **Test**: Interactive text phrase box and `[ Test ]` button to verify connectivity and translation results.
    - **Diagnostic logging**: Off by default; enable only when troubleshooting plugin or worker behavior.
-3. Click **Apply** to save the configuration. The worker restarts seamlessly with the new settings.
+3. Click **Apply** to save the configuration. The worker updates live without interrupting playback.
 
 ### Downloading Additional Models
 

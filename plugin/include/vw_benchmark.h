@@ -38,9 +38,21 @@ typedef struct vw_benchmark {
   int64_t live_pts_to_monotonic_us;
   int64_t latency_samples[VW_BENCHMARK_MAX_LATENCY_SAMPLES];
   size_t latency_sample_count;
+  uint64_t translation_requests_sent;
+  uint64_t translation_success_count;
+  uint64_t translation_tier1_count;
+  uint64_t translation_tier2_count;
+  uint64_t translation_tier3_count;
+  uint64_t translation_timeout_count;
+  uint64_t translation_duration_us;
+  int64_t translation_latency_samples[VW_BENCHMARK_MAX_LATENCY_SAMPLES];
+  size_t translation_latency_sample_count;
   bool first_caption_recorded;
   bool live_clock_valid;
 } vw_benchmark_t;
+
+// Records translation telemetry for a caption segment, tracking tier distribution, timeouts, and latency percentiles.
+void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
 
 // Starts a bounded benchmark session, creates its private temporary report, and writes the initial active snapshot
 // without recording transcript or PCM data.
