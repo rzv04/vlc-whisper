@@ -121,6 +121,34 @@ static bool vw_worker_send_model_progress(vw_ipc_handle_t* handle, const uint8_t
   return true;
 }
 
+// Sends cumulative inference timing and queue-drop status without adding a new wire message or blocking inference.
+static bool vw_worker_send_status(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESSION_ID_BYTES],
+                                  const vw_worker_config_t* config, const vw_whisper_engine_t* engine,
+                                  const vw_worker_queue_t* queue, uint32_t* sequence) {
+  if (!handle || !session_id || !config || !sequence) return false;
+  vw_msg_status_t status;
+  memset(&status, 0, sizeof(status));
+  memcpy(status.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
+  status.state = 1;
+  status.inference_us = (int64_t)(engine ? vw_whisper_engine_get_total_inference_us(engine) : 0);
+  status.dropped_audio_us = queue ? (int64_t)vw_worker_queue_get_dropped_audio_us(queue) : 0;
+  const char* resolved =
+      (config->backend == VW_WORKER_BACKEND_CPU || !engine || !vw_whisper_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
+  snprintf(status.resolved_backend, sizeof(status.resolved_backend), "%s", resolved);
+
+  uint8_t payload[64];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_STATUS, &status, payload, sizeof(payload), &payload_len)) return false;
+  vw_frame_header_t header = {.magic = VW_PROTOCOL_MAGIC,
+                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                              .type = VW_MSG_STATUS,
+                              .payload_length = (uint32_t)payload_len,
+                              .sequence = ++(*sequence)};
+  uint8_t header_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&header, header_buf, sizeof(header_buf))) return false;
+  return vw_ipc_send(handle, header_buf, sizeof(header_buf)) && vw_ipc_send(handle, payload, payload_len);
+}
+
 // Dedicated IPC reader thread (ADR-013): the only thread that reads from the pipe. Continuously
 // drains frames into the bounded worker frame queue so inference on the main loop never stalls
 // transport reads. Never sends; all replies stay single-writer in vw_worker_run's main loop.
@@ -564,37 +592,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
           if (started_written > 0) {
             vw_ipc_send(handle, started_payload_buf, started_written);
           }
-          // Immediately after STARTED, emit one STATUS with resolved backend truth
-          {
-            vw_msg_status_t st;
-            memset(&st, 0, sizeof(st));
-            memcpy(st.session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
-            st.state = 1;
-            st.queued_audio_us = 0;
-            st.inference_us = 0;
-            st.dropped_audio_us = 0;
-            // Runtime truth, not the request: whisper transparently falls back to CPU when the
-            // requested GPU/IGPU ordinal does not exist; the engine re-derives whisper's own
-            // device selection after init, so a Vulkan-built worker without a usable device
-            // reports "cpu". Engine init failure also reports "cpu" (no inference is running).
-            const char* resolved =
-                (config->backend == VW_WORKER_BACKEND_CPU || !vw_whisper_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
-            snprintf(st.resolved_backend, sizeof(st.resolved_backend), "%s", resolved);
-            uint8_t st_payload[64];
-            size_t st_len = 0;
-            if (vw_protocol_encode_payload(VW_MSG_STATUS, &st, st_payload, sizeof(st_payload), &st_len)) {
-              vw_frame_header_t st_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                          .major = VW_PROTOCOL_VERSION_MAJOR,
-                                          .type = VW_MSG_STATUS,
-                                          .payload_length = (uint32_t)st_len,
-                                          .sequence = ++sequence};
-              uint8_t st_hdr_buf[sizeof(vw_frame_header_t)];
-              vw_protocol_encode_header(&st_hdr, st_hdr_buf, sizeof(st_hdr_buf));
-              vw_ipc_send(handle, st_hdr_buf, sizeof(st_hdr_buf));
-              vw_ipc_send(handle, st_payload, st_len);
-              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_STATUS", "STATUS sent resolved_backend=%s", resolved);
-            }
-          }
+          // Immediately after STARTED, emit one STATUS with resolved backend truth.
+          vw_worker_send_status(handle, payload_decoded.start.session_id.bytes, config, engine, queue, &sequence);
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_STATUS", "STATUS sent resolved backend and zero inference time");
           break;
         }
 
@@ -695,6 +695,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_INFERENCE", "whisper_full FAILED @%lldus",
                                  (long long)window_pts_us);
                   }
+                  vw_worker_send_status(handle, session_id.bytes, config, engine, queue, &sequence);
                 }
               }
               vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
@@ -995,6 +996,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 }
               }
             }
+            vw_worker_send_status(handle, session_id.bytes, config, engine, queue, &sequence);
             // Non-Overlapping Drain
             vw_audio_buffer_drain(audio_buf, cut_samples);
           } else {
@@ -1042,6 +1044,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   }
                 }
               }
+              vw_worker_send_status(handle, session_id.bytes, config, engine, queue, &sequence);
               vw_audio_buffer_drain(audio_buf, cut_samples);
             }
           }

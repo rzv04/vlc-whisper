@@ -83,6 +83,7 @@ VLC-Whisper includes a built-in settings dialog accessible from the VLC menu bar
    - **Model**: Choose from bundled `tiny (multilingual)` or additional models (`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`).
    - **Language**: Select your target language (`English`, `Romanian`, `Turkish`, `German`, `French`, `Spanish`).
    - **Threads**: CPU inference worker threads (`1` to `16`, default `4`).
+   - **Diagnostic logging**: Off by default; enable only when troubleshooting plugin or worker behavior.
 3. Click **Apply** to save the configuration. The worker restarts seamlessly with the new settings.
 
 ### Downloading Additional Models
@@ -97,6 +98,12 @@ The installer includes the lightweight multilingual `ggml-tiny.bin` model out of
 
 > [!NOTE]
 > Pausing media playback does not interrupt or pause ongoing model downloads.
+
+### Per-session benchmark reports
+
+Each successful caption session creates a private temporary key/value report. It is updated periodically and finalized when playback stops or the filter closes. If VLC is terminated abruptly, the latest flushed snapshot remains marked as active. Reports contain aggregate timing and counter metrics only; transcripts, PCM, media URLs, and authentication tokens are never written.
+
+Diagnostic logs are disabled by default and can be enabled from the settings checkbox when troubleshooting.
 
 ---
 

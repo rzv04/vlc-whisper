@@ -174,6 +174,9 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         return 2;
       }
       snprintf(config->log_file, sizeof(config->log_file), "%s", argv[++i]);
+      config->logging_enabled = true;
+    } else if (strcmp(argv[i], "--enable-logging") == 0) {
+      config->logging_enabled = true;
     } else if (strcmp(argv[i], "--backend") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --backend\n");

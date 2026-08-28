@@ -16,11 +16,14 @@ typedef enum vw_log_level {
 // Log sink callback function signature for custom logging routes (e.g. VLC msg_* or stderr)
 typedef void (*vw_log_sink_fn)(vw_log_level_t level, const char* event_id, const char* formatted_msg, void* user_data);
 
+// Enables or suppresses all project diagnostic events atomically; logging is disabled by default, including file
+// output.
+void vw_log_set_enabled(bool enabled);
+
 // Sets custom log sink callback (defaults to stderr unbuffered printing if NULL)
 void vw_log_set_sink(vw_log_sink_fn sink, void* user_data);
 
-// Sets an additional FILE* output that every log event is also written to (e.g. the worker's
-// default-on temp log file). Pass NULL to disable. The callback sink/stderr path still runs.
+// Sets an additional FILE* output that enabled log events are also written to; pass NULL to disable file output.
 void vw_log_set_file(FILE* file);
 
 // Privacy-safe variadic log function: NEVER logs PCM samples, transcript text, or secret tokens.

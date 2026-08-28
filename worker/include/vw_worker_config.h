@@ -16,7 +16,8 @@ typedef struct vw_worker_config {
   int n_threads;
   uint32_t sample_rate;
   char pipe_name[256];
-  char log_file[512];  // --log-file override; empty = default temp-dir log
+  char log_file[512];    // --log-file override; empty = default temp-dir log
+  bool logging_enabled;  // --enable-logging or --log-file; false by default
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
   vw_worker_backend_t backend;  // --backend auto|gpu|cpu (default AUTO)
   int gpu_device;               // --gpu-device <id>: ordinal into whisper's GPU/IGPU device list

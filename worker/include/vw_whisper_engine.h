@@ -28,6 +28,8 @@ typedef struct vw_whisper_engine {
   size_t last_text_bytes;       // Capacity of last_text buffer
   char language[16];            // Concrete whisper language code (e.g. "en"), NUL-terminated
   int n_threads;                // CPU threads for inference (1..16, clamped)
+  uint64_t last_inference_us;   // Wall time spent in the most recent whisper_full call.
+  uint64_t total_inference_us;  // Cumulative whisper_full time for the active worker lifetime.
   bool gpu_active;              // True when inference actually runs on a GPU/IGPU device (runtime truth,
                                 // not the requested backend); false after CPU fallback or CPU-forced init
 } vw_whisper_engine_t;
@@ -64,6 +66,10 @@ const char* vw_whisper_engine_get_text(const vw_whisper_engine_t* engine);
 // Returns the number of discrete sub-segments detected during the last transcription run, returning zero if the
 // engine is uninitialized or the audio window contained only silence.
 int vw_whisper_engine_get_segment_count(const vw_whisper_engine_t* engine);
+
+// Returns cumulative whisper_full wall time in microseconds, excluding VAD, segment filtering, and caption emission
+// so processing speed ratios reflect model computation rather than downstream presentation work.
+uint64_t vw_whisper_engine_get_total_inference_us(const vw_whisper_engine_t* engine);
 
 // Populates out_seg with microsecond timestamps and borrowed UTF-8 text for the segment at index, returning true on
 // success or false if out of bounds.
