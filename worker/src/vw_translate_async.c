@@ -26,7 +26,7 @@ struct vw_translate_async {
   pthread_cond_t cond;
   bool thread_started;
   bool stopping;
-  uint64_t min_epoch;
+  uint64_t epoch;
 
   vw_translate_job_t jobs[VW_TRANSLATE_ASYNC_QUEUE_CAPACITY];
   size_t job_head;
@@ -88,7 +88,7 @@ static void* vw_translate_async_thread_main(void* opaque) {
     vw_translate_async_bind_result_text(&result);
 
     pthread_mutex_lock(&async->mutex);
-    if (!async->stopping && result.epoch >= async->min_epoch) {
+    if (!async->stopping && result.epoch == async->epoch) {
       if (async->result_count == VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
         // This should be unreachable with one translator and <=4 pending jobs. Preserve newest playback state if a
         // stalled consumer nevertheless fills the completion ring.
@@ -107,7 +107,7 @@ static void* vw_translate_async_thread_main(void* opaque) {
 vw_translate_async_t* vw_translate_async_create(void) {
   vw_translate_async_t* async = (vw_translate_async_t*)calloc(1, sizeof(*async));
   if (!async) return NULL;
-  async->min_epoch = 1;
+  async->epoch = 1;
   if (pthread_mutex_init(&async->mutex, NULL) != 0) {
     free(async);
     return NULL;
@@ -145,10 +145,10 @@ void vw_translate_async_destroy(vw_translate_async_t* async) {
   free(async);
 }
 
-void vw_translate_async_advance_epoch(vw_translate_async_t* async, uint64_t epoch) {
+void vw_translate_async_invalidate(vw_translate_async_t* async) {
   if (!async) return;
   pthread_mutex_lock(&async->mutex);
-  async->min_epoch = epoch;
+  async->epoch = async->epoch == UINT64_MAX ? 1U : async->epoch + 1U;
   async->job_head = 0;
   async->job_tail = 0;
   async->job_count = 0;
@@ -158,20 +158,20 @@ void vw_translate_async_advance_epoch(vw_translate_async_t* async, uint64_t epoc
   pthread_mutex_unlock(&async->mutex);
 }
 
-bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment, uint64_t epoch,
+bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment,
                                const char* source_lang, const char* target_lang) {
   if (!async || !segment || !segment->text_utf8 || !segment->text_utf8[0]) return false;
   size_t text_len = strlen(segment->text_utf8);
   if (text_len == 0 || text_len > VW_MAX_TEXT_BYTES) return false;
 
   pthread_mutex_lock(&async->mutex);
-  if (async->stopping || epoch < async->min_epoch || async->job_count >= VW_TRANSLATE_ASYNC_QUEUE_CAPACITY) {
+  if (async->stopping || async->job_count >= VW_TRANSLATE_ASYNC_QUEUE_CAPACITY) {
     pthread_mutex_unlock(&async->mutex);
     return false;
   }
   vw_translate_job_t* job = &async->jobs[async->job_head];
   memset(job, 0, sizeof(*job));
-  job->epoch = epoch;
+  job->epoch = async->epoch;
   job->segment = *segment;
   memcpy(job->source_text, segment->text_utf8, text_len);
   job->source_text[text_len] = '\0';
