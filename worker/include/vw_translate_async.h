@@ -28,13 +28,14 @@ vw_translate_async_t* vw_translate_async_create(void);
 // Stops the translation thread, waits for any bounded in-flight request, and releases all synchronization resources.
 void vw_translate_async_destroy(vw_translate_async_t* async);
 
-// Advances the playback/config epoch and immediately drops all queued/completed jobs from older epochs. An in-flight
-// request cannot be force-cancelled portably, but its completion is discarded before it becomes observable.
-void vw_translate_async_advance_epoch(vw_translate_async_t* async, uint64_t epoch);
+// Advances the internal playback/config epoch and immediately drops all queued/completed jobs from older epochs. The
+// IPC reader calls this as soon as a seek/session/config invalidation frame arrives, so an in-flight pre-seek request
+// cannot become observable even before the worker main loop processes that control frame.
+void vw_translate_async_invalidate(vw_translate_async_t* async);
 
-// Copies an immutable finalized caption into the bounded queue. Returns false when translation is unavailable or the
-// pending queue is saturated; callers should emit the source caption immediately in that case.
-bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment, uint64_t epoch,
+// Copies an immutable finalized caption into the bounded queue and snapshots the current internal epoch. Returns false
+// when translation is unavailable or the four-job pending queue is saturated; callers should emit source immediately.
+bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment,
                                const char* source_lang, const char* target_lang);
 
 // Returns true when at least one translated/fallback completion can be popped without blocking.
