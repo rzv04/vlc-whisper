@@ -4,6 +4,7 @@
 #include "vw_translate_async.h"
 
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -160,7 +161,7 @@ void vw_translate_async_advance_epoch(vw_translate_async_t* async, uint64_t epoc
 bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment, uint64_t epoch,
                                const char* source_lang, const char* target_lang) {
   if (!async || !segment || !segment->text_utf8 || !segment->text_utf8[0]) return false;
-  size_t text_len = strnlen(segment->text_utf8, VW_MAX_TEXT_BYTES + 1U);
+  size_t text_len = strlen(segment->text_utf8);
   if (text_len == 0 || text_len > VW_MAX_TEXT_BYTES) return false;
 
   pthread_mutex_lock(&async->mutex);
