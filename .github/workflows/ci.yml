@@ -2,7 +2,7 @@ name: Continuous Integration
 
 on:
   push:
-    branches: [main, "gemini/*"]
+    branches: [main, "gemini/*", "fix/step-21b-review-findings"]
   pull_request:
     branches: [main, "gemini/*"]
   workflow_dispatch:
