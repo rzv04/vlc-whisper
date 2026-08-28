@@ -56,7 +56,7 @@ vlc-whisper/
 │   │   ├── vw_hallucination_filter.h          # Non-speech sound tag and isolated punctuation filter
 │   │   ├── vw_segment_builder.h               # Final-subtitles dedup (no expansion/revision), timed segments
 │   │   ├── vw_audio_buffer.h                  # Rolling PCM ring buffer & window extraction
-│   │   ├── vw_worker_config.h                 # Model path validation, --vad-model CLI & auto-discovery
+│   │   ├── vw_worker_config.h                 # Model/VAD path resolution, --vad-model precedence & compatibility discovery
 │   │   ├── vw_sha256.h                        # Streaming SHA-256 for download verification
 │   │   ├── vw_model_catalog.h                 # Committed catalog (7 models, pinned sha256/bytes)
 │   │   └── vw_model_download.h                # Download engine: thread, single-flight, abort, progress
@@ -71,7 +71,7 @@ vlc-whisper/
 │   │   ├── vw_hallucination_filter.c          # Sound descriptor tag stripping and isolated punctuation filter
 │   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
-│   │   ├── vw_worker_config.c                 # Configuration setup, --vad-model parsing and auto-discovery
+│   │   ├── vw_worker_config.c                 # Configuration setup plus post-model-resolution VAD discovery
 │   │   ├── vw_sha256.c                        # Streaming SHA-256 implementation
 │   │   └── vw_model_download.c                # WinHTTP/curl download, ownership lock, diagnostics, .part → verify → atomic rename
 │   └── third_party/                           # Pinned external C/C++ dependencies
@@ -119,7 +119,7 @@ vlc-whisper/
 │   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
-│   │   ├── test_worker_config.c               # Worker CLI config (--token/--pipe/--model/--vad-model) parsing tests
+│   │   ├── test_worker_config.c               # Worker CLI plus CWD-independent model/VAD directory resolution tests
 │   │   └── test_model_download.c              # Model download: sha256 vectors, catalog, progress, retry tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test

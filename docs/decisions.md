@@ -227,7 +227,7 @@ to REVISE already-emitted subtitles.
 **Decision.** Implement a 3-tier silence and hallucination suppression pipeline in the worker:
 1. **Tier 1 (Pre-Inference Voice Activity Detection)**:
    - Wire vendored Silero GGML VAD (`struct whisper_vad_context*`) via `whisper_vad_detect_speech` and `whisper_vad_segments_from_probs` across all three worker audio ingestion sites (live PCM stream, lookahead full window, and lookahead trailing EOF window).
-   - Auto-discover `ggml-silero-vad.bin` in the model directory alongside `ggml-tiny.en.bin` or via CLI `--vad-model <path>`.
+   - Auto-discover `ggml-silero-vad.bin` beside the effective Whisper model, under `--model-dir`, beside the worker executable in its adjacent `models/` directory, or via CLI `--vad-model <path>`; retain legacy working-directory candidates for compatibility.
    - Provide graceful zero-config fallback to RMS Energy VAD (`0.01f` threshold) when no VAD model file is supplied.
    - Completely skip Whisper inference when no voice activity is detected in the audio window.
 2. **Tier 2 (Post-Inference Acoustic Confidence Gating)**:

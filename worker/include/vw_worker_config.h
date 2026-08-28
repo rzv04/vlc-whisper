@@ -27,12 +27,17 @@ typedef struct vw_worker_config {
 // Returns true on success or false if config pointer is NULL.
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 
-// Parses command-line arguments into the worker configuration structure, performing syntax validation and
-// auto-discovering VAD model files. Returns 0 on success or 2 on error.
+// Parses command-line arguments into the worker configuration structure and performs syntax validation. Returns 0 on
+// success or 2 on error; model paths are resolved during worker initialization.
 int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** argv);
 
 // Resolves relative model paths against --model-dir while preserving absolute and existing paths during worker
 // initialization without changing user configuration or selection.
 bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char* out, size_t out_size);
+
+// Resolves an explicit VAD path or discovers Silero beside the effective model, model directory, install models, then
+// compatibility CWD paths. Returns true only when a usable VAD file is found or explicitly configured.
+bool vw_worker_config_resolve_vad_model_path(const vw_worker_config_t* config, const char* effective_model_path,
+                                             char* out, size_t out_size);
 
 #endif  // VW_WORKER_CONFIG_H_

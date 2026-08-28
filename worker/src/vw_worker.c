@@ -277,15 +277,22 @@ int vw_worker_run(const vw_worker_config_t* config) {
       engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
       engine ? "whisper engine loaded from '%s'" : "whisper engine init FAILED for '%s' (model missing/invalid)",
       effective_model_path);
+  char resolved_vad_model_path[VW_PATH_MAX_BYTES];
+  const char* effective_vad_model_path = NULL;
+  if (vw_worker_config_resolve_vad_model_path(config, effective_model_path, resolved_vad_model_path,
+                                              sizeof(resolved_vad_model_path))) {
+    effective_vad_model_path = resolved_vad_model_path;
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD_RESOLVE", "selected VAD path='%s'", effective_vad_model_path);
+  }
   struct whisper_vad_context* vad_ctx = NULL;
-  if (config->vad_model_path[0] != '\0') {
-    vad_ctx = vw_vad_init_default(config->vad_model_path);
+  if (effective_vad_model_path) {
+    vad_ctx = vw_vad_init_default(effective_vad_model_path);
     if (!vad_ctx) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_VAD",
                    "Silero VAD model failed to load from '%s'; operating on RMS Energy fallback",
-                   config->vad_model_path);
+                   effective_vad_model_path);
     } else {
-      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD", "Silero VAD model loaded (%s)", config->vad_model_path);
+      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD", "Silero VAD model loaded (%s)", effective_vad_model_path);
     }
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD",
