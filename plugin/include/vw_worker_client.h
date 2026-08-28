@@ -20,6 +20,7 @@ typedef struct vw_worker_client {
   bool session_active;
   bool worker_source_active;
   uint32_t worker_capabilities;
+  uint16_t worker_protocol_minor;
 } vw_worker_client_t;
 
 // Returns true if the worker confirmed that look-ahead source file decoding mode is active for the current session via
@@ -57,8 +58,9 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
 // before caption START succeeds.
 bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action, const char* model_id);
 
-// Sends a TRANSLATE_CTRL configuration update over authenticated IPC to enable/disable translation and select
-// languages.
+// Sends a TRANSLATE_CTRL configuration update only when the negotiated worker advertises translation support. A
+// translation-disabled update is a successful no-op for older same-major workers; enabling returns false without
+// damaging the transport when the capability is absent.
 bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabled, const char* source_lang,
                                           const char* target_lang, uint8_t mode);
 
