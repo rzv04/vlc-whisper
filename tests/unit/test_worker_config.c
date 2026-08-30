@@ -1,22 +1,34 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 // Unit tests for worker CLI config parsing (vw_worker_config_parse_args).
 // Covers the --token/--pipe/--model success paths and the worker argv startup
 // failure paths: malformed --token (bad length / non-hex), unknown option,
 // dangling flag with no value, and NULL config (all map to exit code 2).
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
 #ifdef _WIN32
 #include <direct.h>
 #include <process.h>
+#include <windows.h>
 #define VW_TEST_MKDIR(path) _mkdir(path)
 #define VW_TEST_RMDIR(path) _rmdir(path)
 #define VW_TEST_PID() _getpid()
+#define VW_TEST_GETCWD(path, size) _getcwd(path, size)
+#define VW_TEST_CHDIR(path) _chdir(path)
+#define VW_TEST_PATH_SEPARATOR "\\"
 #else
 #include <sys/stat.h>
 #include <unistd.h>
 #define VW_TEST_MKDIR(path) mkdir(path, 0700)
 #define VW_TEST_RMDIR(path) rmdir(path)
 #define VW_TEST_PID() getpid()
+#define VW_TEST_GETCWD(path, size) getcwd(path, size)
+#define VW_TEST_CHDIR(path) chdir(path)
+#define VW_TEST_PATH_SEPARATOR "/"
 #endif
 
 #include "vw_test.h"
@@ -24,6 +36,54 @@
 
 // 64 hex chars decoding to bytes 0x00, 0x01, ..., 0x1f
 static char kTokenHex[] = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+static bool vw_test_join_path(char* out, size_t out_size, const char* directory, const char* name) {
+  if (!out || !out_size || !directory || !name) return false;
+  size_t directory_len = strlen(directory);
+  size_t name_len = strlen(name);
+  size_t separator_len = directory_len && directory[directory_len - 1] != VW_TEST_PATH_SEPARATOR[0] ? 1 : 0;
+  if (directory_len + separator_len + name_len + 1 > out_size) return false;
+  memcpy(out, directory, directory_len);
+  if (separator_len) out[directory_len] = VW_TEST_PATH_SEPARATOR[0];
+  memcpy(out + directory_len + separator_len, name, name_len + 1);
+  return true;
+}
+
+static bool vw_test_file_exists(const char* path) {
+  FILE* file = fopen(path, "rb");
+  if (!file) return false;
+  fclose(file);
+  return true;
+}
+
+static bool vw_test_get_executable_dir(char* out, size_t out_size) {
+  if (!out || out_size == 0) return false;
+  char executable_path[VW_PATH_MAX_BYTES];
+  size_t path_length;
+#ifdef _WIN32
+  DWORD windows_path_length = GetModuleFileNameA(NULL, executable_path, (DWORD)sizeof(executable_path));
+  if (windows_path_length == 0 || windows_path_length >= sizeof(executable_path)) return false;
+  path_length = (size_t)windows_path_length;
+#elif defined(__linux__)
+  ssize_t linux_path_length = readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1);
+  if (linux_path_length <= 0 || (size_t)linux_path_length >= sizeof(executable_path)) return false;
+  path_length = (size_t)linux_path_length;
+#else
+  return false;
+#endif
+  executable_path[path_length] = '\0';
+
+  const char* slash = strrchr(executable_path, '/');
+  const char* bslash = strrchr(executable_path, '\\');
+  if (bslash && (!slash || bslash > slash)) slash = bslash;
+  if (!slash) return false;
+  size_t directory_length = (size_t)(slash - executable_path);
+  if (directory_length == 0) directory_length = 1;
+  if (directory_length >= out_size) return false;
+  memcpy(out, executable_path, directory_length);
+  out[directory_length] = '\0';
+  return true;
+}
 
 int main(void) {
   uint8_t zeros[VW_AUTH_TOKEN_BYTES] = {0};
@@ -57,20 +117,30 @@ int main(void) {
     }
   }
 
-  // --- success: --log-file override; empty default when flag absent ---
+  // --- success: logging is disabled by default; explicit file/flag enables it ---
   {
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
+    EXPECT(!cfg.logging_enabled);
     char* argv_log[] = {"vlc-whisper-worker", "--log-file", "/var/log/vw.log", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_log) == 0);
     EXPECT_EQ_STR(cfg.log_file, "/var/log/vw.log");
+    EXPECT(cfg.logging_enabled);
   }
   {
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_none[] = {"vlc-whisper-worker", NULL};
     EXPECT(vw_worker_config_parse_args(&cfg, 1, argv_none) == 0);
-    EXPECT(cfg.log_file[0] == '\0');  // empty => default temp-dir log
+    EXPECT(cfg.log_file[0] == '\0');
+    EXPECT(!cfg.logging_enabled);
+  }
+  {
+    vw_worker_config_t cfg;
+    EXPECT(vw_worker_config_init_defaults(&cfg));
+    char* argv_enabled[] = {"vlc-whisper-worker", "--enable-logging", NULL};
+    EXPECT(vw_worker_config_parse_args(&cfg, 2, argv_enabled) == 0);
+    EXPECT(cfg.logging_enabled);
   }
 
   // --- success: --backend and --gpu-device parsing (step 17a) ---
@@ -238,31 +308,126 @@ int main(void) {
     EXPECT_EQ_STR(cfg.model_dir, "/tmp/vlc-whisper/models");
   }
 
-  // --- model lookup: relative configured path resolves by filename in --model-dir ---
+  // --- VAD discovery: absolute model-dir and a genuinely unrelated working directory ---
   {
-    char model_dir[64];
-    char model_file[112];
-    snprintf(model_dir, sizeof(model_dir), "vw_test_model_dir_%ld", (long)VW_TEST_PID());
-#ifdef _WIN32
-    snprintf(model_file, sizeof(model_file), "%s\\ggml-tiny.en.bin", model_dir);
-#else
-    snprintf(model_file, sizeof(model_file), "%s/ggml-tiny.en.bin", model_dir);
-#endif
+    char original_cwd[VW_PATH_MAX_BYTES];
+    char root_dir[VW_PATH_MAX_BYTES];
+    char sibling_dir[VW_PATH_MAX_BYTES];
+    char model_dir[VW_PATH_MAX_BYTES];
+    char unrelated_dir[VW_PATH_MAX_BYTES];
+    char cwd_models_dir[VW_PATH_MAX_BYTES];
+    char sibling_model[VW_PATH_MAX_BYTES];
+    char sibling_vad[VW_PATH_MAX_BYTES];
+    char model_dir_model[VW_PATH_MAX_BYTES];
+    char model_dir_vad[VW_PATH_MAX_BYTES];
+    char cwd_vad[VW_PATH_MAX_BYTES];
+    char executable_dir[VW_PATH_MAX_BYTES];
+    char install_models_dir[VW_PATH_MAX_BYTES];
+    char install_vad[VW_PATH_MAX_BYTES];
+    char root_name[64];
+    EXPECT(VW_TEST_GETCWD(original_cwd, sizeof(original_cwd)) != NULL);
+    snprintf(root_name, sizeof(root_name), "vw_test_vad_%ld", (long)VW_TEST_PID());
+    EXPECT(vw_test_join_path(root_dir, sizeof(root_dir), original_cwd, root_name));
+    EXPECT(vw_test_join_path(sibling_dir, sizeof(sibling_dir), root_dir, "sibling"));
+    EXPECT(vw_test_join_path(model_dir, sizeof(model_dir), root_dir, "models"));
+    EXPECT(vw_test_join_path(unrelated_dir, sizeof(unrelated_dir), root_dir, "unrelated"));
+    EXPECT(vw_test_join_path(cwd_models_dir, sizeof(cwd_models_dir), unrelated_dir, "models"));
+    EXPECT(vw_test_join_path(sibling_model, sizeof(sibling_model), sibling_dir, "ggml-base.en.bin"));
+    EXPECT(vw_test_join_path(sibling_vad, sizeof(sibling_vad), sibling_dir, "ggml-silero-vad.bin"));
+    EXPECT(vw_test_join_path(model_dir_model, sizeof(model_dir_model), model_dir, "ggml-base.en.bin"));
+    EXPECT(vw_test_join_path(model_dir_vad, sizeof(model_dir_vad), model_dir, "ggml-silero-vad.bin"));
+    EXPECT(vw_test_join_path(cwd_vad, sizeof(cwd_vad), cwd_models_dir, "ggml-silero-vad.bin"));
+    EXPECT(vw_test_get_executable_dir(executable_dir, sizeof(executable_dir)));
+    EXPECT(vw_test_join_path(install_models_dir, sizeof(install_models_dir), executable_dir, "models"));
+    EXPECT(vw_test_join_path(install_vad, sizeof(install_vad), install_models_dir, "ggml-silero-vad.bin"));
+
+    EXPECT(VW_TEST_MKDIR(root_dir) == 0);
+    EXPECT(VW_TEST_MKDIR(sibling_dir) == 0);
     EXPECT(VW_TEST_MKDIR(model_dir) == 0);
-    FILE* model = fopen(model_file, "wb");
-    EXPECT(model != NULL);
-    if (model) fclose(model);
+    EXPECT(VW_TEST_MKDIR(unrelated_dir) == 0);
+    EXPECT(VW_TEST_MKDIR(cwd_models_dir) == 0);
+    FILE* sibling_model_file = fopen(sibling_model, "wb");
+    EXPECT(sibling_model_file != NULL);
+    if (sibling_model_file) fclose(sibling_model_file);
+    FILE* sibling_vad_file = fopen(sibling_vad, "wb");
+    EXPECT(sibling_vad_file != NULL);
+    if (sibling_vad_file) fclose(sibling_vad_file);
+    FILE* model_dir_model_file = fopen(model_dir_model, "wb");
+    EXPECT(model_dir_model_file != NULL);
+    if (model_dir_model_file) fclose(model_dir_model_file);
+    FILE* model_dir_vad_file = fopen(model_dir_vad, "wb");
+    EXPECT(model_dir_vad_file != NULL);
+    if (model_dir_vad_file) fclose(model_dir_vad_file);
+    FILE* cwd_vad_file = fopen(cwd_vad, "wb");
+    EXPECT(cwd_vad_file != NULL);
+    if (cwd_vad_file) fclose(cwd_vad_file);
+    int install_mkdir_result = VW_TEST_MKDIR(install_models_dir);
+    bool install_models_created = install_mkdir_result == 0;
+    if (!install_models_created) EXPECT(errno == EEXIST);
+    bool install_vad_owned = false;
+    if (!vw_test_file_exists(install_vad)) {
+      FILE* install_vad_file = fopen(install_vad, "wb");
+      EXPECT(install_vad_file != NULL);
+      if (install_vad_file) {
+        fclose(install_vad_file);
+        install_vad_owned = true;
+      }
+    }
 
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
-    snprintf(cfg.model_path, sizeof(cfg.model_path), "%s", "models/ggml-tiny.en.bin");
+    snprintf(cfg.model_path, sizeof(cfg.model_path), "%s", "models/ggml-base.en.bin");
     snprintf(cfg.model_dir, sizeof(cfg.model_dir), "%s", model_dir);
     char resolved[VW_PATH_MAX_BYTES];
     EXPECT(vw_worker_config_resolve_model_path(&cfg, resolved, sizeof(resolved)));
-    EXPECT_EQ_STR(resolved, model_file);
+    EXPECT_EQ_STR(resolved, model_dir_model);
 
-    EXPECT(remove(model_file) == 0);
+    EXPECT(VW_TEST_CHDIR(unrelated_dir) == 0);
+    char resolved_vad[VW_PATH_MAX_BYTES];
+    // Relative --model resolves from an absolute --model-dir independently of launch CWD.
+    EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, resolved, resolved_vad, sizeof(resolved_vad)));
+    EXPECT_EQ_STR(resolved_vad, model_dir_vad);
+
+    // An explicit --vad-model wins over effective-model and model-dir candidates.
+    snprintf(cfg.vad_model_path, sizeof(cfg.vad_model_path), "%s", "models/custom-vad.bin");
+    EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, resolved, resolved_vad, sizeof(resolved_vad)));
+    EXPECT_EQ_STR(resolved_vad, "models/custom-vad.bin");
+    cfg.vad_model_path[0] = '\0';
+
+    // A VAD sibling of a different effective model wins over the configured model directory.
+    EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, sibling_model, resolved_vad, sizeof(resolved_vad)));
+    EXPECT_EQ_STR(resolved_vad, sibling_vad);
+
+    // With no effective-model sibling, use the VAD in --model-dir.
+    EXPECT(remove(sibling_vad) == 0);
+    EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, sibling_model, resolved_vad, sizeof(resolved_vad)));
+    EXPECT_EQ_STR(resolved_vad, model_dir_vad);
+
+    // With no model directory, the worker executable's adjacent models directory wins over CWD candidates.
+    cfg.model_dir[0] = '\0';
+    EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, sibling_model, resolved_vad, sizeof(resolved_vad)));
+    EXPECT_EQ_STR(resolved_vad, install_vad);
+
+    // Remove the test install candidate to verify the legacy CWD-relative compatibility fallback.
+    if (install_vad_owned) {
+      EXPECT(remove(install_vad) == 0);
+      EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, sibling_model, resolved_vad, sizeof(resolved_vad)));
+      EXPECT_EQ_STR(resolved_vad, "models/ggml-silero-vad.bin");
+    }
+
+    EXPECT(VW_TEST_CHDIR(original_cwd) == 0);
+
+    EXPECT(remove(cwd_vad) == 0);
+    EXPECT(remove(model_dir_vad) == 0);
+    EXPECT(remove(model_dir_model) == 0);
+    EXPECT(remove(sibling_model) == 0);
+    EXPECT(VW_TEST_RMDIR(cwd_models_dir) == 0);
+    EXPECT(VW_TEST_RMDIR(unrelated_dir) == 0);
     EXPECT(VW_TEST_RMDIR(model_dir) == 0);
+    EXPECT(VW_TEST_RMDIR(sibling_dir) == 0);
+    EXPECT(VW_TEST_RMDIR(root_dir) == 0);
+    if (install_vad_owned) EXPECT(!vw_test_file_exists(install_vad));
+    if (install_models_created) EXPECT(VW_TEST_RMDIR(install_models_dir) == 0);
   }
 
   // --- failure: --model-dir oversize, missing arg ---

@@ -25,6 +25,7 @@ add_vw_test(test_segment_builder unit/test_segment_builder.c ${CMAKE_SOURCE_DIR}
 add_vw_test(test_hallucination_filter unit/test_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c)
 add_vw_test(test_worker_queue unit/test_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c)
 add_vw_test(test_caption_timing unit/test_caption_timing.c)
+add_vw_test(test_benchmark unit/test_benchmark.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
 add_vw_test(test_caption_presenter unit/test_caption_presenter.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_caption_presenter.c)
 target_compile_definitions(test_caption_presenter PRIVATE __PLUGIN__ MODULE_STRING="vlc_whisper" _GNU_SOURCE)
 
@@ -49,7 +50,8 @@ add_vw_test(test_audio_buffer unit/test_audio_buffer.c ${CMAKE_SOURCE_DIR}/worke
 add_vw_test(test_vad unit/test_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c)
 target_link_libraries(test_vad PRIVATE whisper)
 
-add_vw_test(test_whisper_engine unit/test_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c)
+add_vw_test(test_whisper_engine unit/test_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c
+            ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_whisper_engine PRIVATE whisper)
 set_tests_properties(test_whisper_engine PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -88,6 +90,7 @@ endif()
 
 if(WIN32)
     # Windows Media Foundation and BCrypt libraries
+    target_link_libraries(test_whisper_engine PRIVATE bcrypt)
     target_link_libraries(test_source_decoder PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
     target_link_libraries(test_worker_ipc PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
     target_link_libraries(test_worker_lifecycle PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys)

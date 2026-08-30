@@ -13,7 +13,7 @@ The primary invariant is: **captioning must never harm playback**. A transcripti
 | Worker integration | Local inference      | Fixed PCM fixtures, VAD boundaries, model missing/hash mismatch, deterministic settings |
 | VLC integration    | Module behavior      | Load/unload, PCM capture format, display scheduling, pause/end/stop                     |
 | End-to-end         | Pinned Windows VLC   | Install, local video, visible captions, worker crash, seek rejection, uninstall         |
-| Performance        | Reference machines   | Real-time factor, p50/p95 caption latency, CPU/RAM, queue drops                         |
+| Performance        | Reference machines   | Real-time factor, p50/p95 caption latency, CPU/RAM, queue drops, per-session report      |
 | Security/privacy   | Local boundary       | Pipe ACLs, random name/token, no listener, no remote traffic, log redaction             |
 
 ## Code Coverage
@@ -29,6 +29,8 @@ Code coverage instrumentation (`--coverage`) is configured for native Linux buil
 Keep legal, small, versioned fixtures: synthetic tones/silence, public-domain or licensed English speech with known transcript/timestamps, short local MP4/MKV containers, malformed frames, and controlled PTS discontinuities. Never commit proprietary films, user audio, production model binaries, or personal transcripts.
 
 Golden expected text should tolerate model-version variance only through explicit normalization policy. Pin model hash and whisper.cpp commit for exact regression tests; if either changes, review differences intentionally rather than silently re-baselining.
+
+Step 20 benchmark reports are aggregate, local, and key/value formatted. They include session duration, audio chunks and duration sent, worker frames and captions received, captions sent to the presenter, plugin-filtered captions (paused, stale, or presenter-rejected), segment audio duration/text bytes, cumulative `whisper_full()` time, real-time factor (`inference / input audio`), processing speed ratio (`input audio / inference`), first sent-caption elapsed time, and live-mode utterance latency min/p50/p95/max. Latency is sampled only when live system-date PTS can be mapped to monotonic time; source-mode media timestamps are not mixed with that clock. Speed metrics exclude post-filtering. Reports are created with unique temporary names, flushed during active playback, finalized on normal teardown, and contain no transcript, PCM, URL, token, or telemetry.
 
 ## Required cases
 
@@ -51,6 +53,7 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/integration/test_worker_lifecycle.c`: wrong-token HELLO rejection (worker exits 1), first-frame-not-HELLO rejection (worker exits 1), client NULL-arg validation (NULL endpoint/token), connect failure with no listener.
 - `tests/integration/test_worker_ipc.c`: `START` with an unsupported sample rate rejected with an `E_AUDIO_FORMAT` error reply; clean `SHUTDOWN` exit.
 - `tests/unit/test_worker_config.c`: worker CLI arg parsing — valid `--token`/`--pipe`/`--model` success, and startup failure paths returning exit code 2 (bad `--token` length, non-hex `--token`, unknown option, dangling `--token`, NULL config).
+- `tests/unit/test_worker_config.c`: logging disabled by default, `--enable-logging`, and `--log-file` implying enabled diagnostics.
 - `tests/unit/vw_test_worker_client.c`: client-API session state machine (`vw_worker_client_start_session`, `vw_worker_client_send_audio`, `vw_worker_client_stop_session`, `vw_worker_client_shutdown`), transport receive timeout (`vw_ipc_receive_timeout`), and protocol framing verification against an in-process mock server.
 - `tests/unit/vw_test_worker_client.c`: worker-scoped `MODEL_CTRL` is accepted before `START_SESSION` with a zero session ID, proving model provisioning remains available when the selected model initially rejects caption startup.
 - `tests/unit/test_worker_queue.c` (14c): bounded worker frame queue FIFO order with mixed types, payload ownership transfer, full-queue eviction dropping only the oldest `AUDIO` frame while control frames survive, `dropped_audio_us` equal to the decoded `duration_us` sum, zero-payload frames, and destroy freeing queued payloads (valgrind).
@@ -84,10 +87,11 @@ Golden expected text should tolerate model-version variance only through explici
 - `tests/unit/test_hallucination_filter.c` (17e.1): non-speech sound tag filtering (`[Music]`, `(applause)`, `♪`, `♫`, etc.), isolated punctuation filtering (`...`, `---`, `! ! !` with zero alphanumeric characters), and preservation of legitimate dialogue and sentence punctuation.
 - `tests/unit/test_vad.c` (17e.1): pure silence, low-level ambient static (<0.005 RMS), speech tone/wave RMS energy detection, NULL context fallback, partial window sample counts, NULL safety for reset/free, model-gated Silero VAD GGML inference on real 16kHz speech fixtures (`jfk.wav`), and Strategy C VAD-guided non-overlapping audio chunk boundary finding (`vw_vad_find_chunk_boundary`) across pure silence, natural dialogue pauses, continuous speech clamping, and EOF tails.
 - `tests/unit/test_whisper_engine.c` (17e.1): `no_speech_prob` float extraction via `whisper_full_get_segment_no_speech_prob` and verification that $P(\text{no\_speech}) \in [0.0, 1.0]$.
-- `tests/unit/test_worker_config.c` (17e.1): `--vad-model <path>` CLI option parsing, unknown option rejection, and `vw_worker_config_autodiscover_vad` searching alongside `--model` and worker binary.
-- `tests/unit/test_worker_config.c`: relative selected model paths resolve to an existing catalog filename under `--model-dir` when the original path is absent.
+- `tests/unit/test_worker_config.c` (17e.1): `--vad-model <path>` CLI parsing and precedence, unknown option rejection, and VAD discovery beside the resolved model, under `--model-dir`, beside the worker executable in its adjacent `models/` directory, and through legacy working-directory fallbacks.
+- `tests/unit/test_worker_config.c`: relative selected model paths and their sibling VAD resolve from `--model-dir` independently of the worker launch directory.
 - `tests/unit/test_caption_presenter.c` (17e.2): `VW_CAPTION_MIN_DISPLAY_DURATION_US` (1.0s) display floor enforcement on sub-second cues, wall-clock floor scaling across variable playback rates ($0.5\times$, $1.0\times$, $2.0\times$), long speech duration preservation ($> 1.0\text{s}$), and OSD fallback minimum floor.
 - `tests/unit/test_whisper_engine.c` (17e.2): deterministic greedy decoding verification (identical PCM buffer transcribes to identical segment counts, timestamps, and UTF-8 text on repeat passes) and bounded decoding parameters (`temperature = 0.0f`, `temperature_inc = 0.2f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`).
+- `tests/unit/test_benchmark.c` (20): bounded metric accounting, negative live look-ahead latency retention, safe ratios, report snapshots/finalization, and aggregate status updates.
 - `cmake/vw_packaging.cmake` & `cmake/vw_installer.nsi.in` (18): Standalone Windows NSIS setup installer compilation (`makensis`), 64-bit VLC auto-discovery (`HKLM\Software\VideoLAN\VLC`), automated plugin deployment (`<VLC>\plugins\audio_filter\`), worker/models deployment, automatic `vlc-cache-gen.exe` cache regeneration, uninstaller clean state rollback, CPack release ZIP generation, and end-to-end acceptance testing covering local media (.mp4, .mkv, .mp3, .flac) and live network streams.
 
 ## Performance contract

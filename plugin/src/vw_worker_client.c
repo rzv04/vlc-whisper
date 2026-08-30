@@ -70,7 +70,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
                                                            const char* language, int n_threads, int gpu_device,
-                                                           const char* model_dir) {
+                                                           const char* model_dir, bool logging_enabled) {
   if (!endpoint_name || !auth_token) {
     return NULL;
   }
@@ -115,6 +115,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
       argv[argc++] = "--model-dir";
       argv[argc++] = model_dir;
     }
+    if (logging_enabled) argv[argc++] = "--enable-logging";
     argv[argc] = NULL;
     if (!vw_platform_spawn_process(executable_path, argv, &worker_process)) {
       return NULL;
@@ -234,7 +235,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const char* model_path) {
   // Wrapper preserving legacy 4-arg ABI for tests; forwards defaults (auto/en/4, no gpu-device)
   return vw_worker_client_launch_and_connect_ex(executable_path, endpoint_name, auth_token, model_path, "auto", "en", 4,
-                                                -1, NULL);
+                                                -1, NULL, false);
 }
 
 void vw_worker_client_disconnect(vw_worker_client_t* client) {
