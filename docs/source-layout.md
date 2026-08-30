@@ -59,7 +59,8 @@ vlc-whisper/
 │   │   ├── vw_worker_config.h                 # Model/VAD path resolution, --vad-model precedence & compatibility discovery
 │   │   ├── vw_sha256.h                        # Streaming SHA-256 for download verification
 │   │   ├── vw_model_catalog.h                 # Committed catalog (7 models, pinned sha256/bytes)
-│   │   └── vw_model_download.h                # Download engine: thread, single-flight, abort, progress
+│   │   ├── vw_model_download.h                # Download engine: thread, single-flight, abort, progress
+│   │   └── vw_translate.h                     # Keyless 3-tier Google Translate fallback engine
 │   ├── src/
 │   │   ├── main.c                             # Worker executable entry point: CLI parsing & signal handling
 │   │   ├── vw_worker.c                        # Worker IPC state machine, look-ahead decoding & message loop
@@ -73,7 +74,8 @@ vlc-whisper/
 │   │   ├── vw_audio_buffer.c                  # PCM sample accumulation & 8s windowing
 │   │   ├── vw_worker_config.c                 # Configuration setup plus post-model-resolution VAD discovery
 │   │   ├── vw_sha256.c                        # Streaming SHA-256 implementation
-│   │   └── vw_model_download.c                # WinHTTP/curl download, ownership lock, diagnostics, .part → verify → atomic rename
+│   │   ├── vw_model_download.c                # WinHTTP/curl download, ownership lock, diagnostics, .part → verify → atomic rename
+│   │   └── vw_translate.c                     # 3-tier keyless Google Translate fallback engine (Web RPC, GTX, Mobile scrape)
 │   └── third_party/                           # Pinned external C/C++ dependencies
 │       ├── vlc-3.0.23/                        # Pinned VLC header SDK headers
 │       └── whisper.cpp/                       # Pinned whisper.cpp C/C++ inference engine
@@ -129,6 +131,12 @@ vlc-whisper/
 │   └── fixtures/                              # Test fixtures & expected outputs
 │       ├── spoken_english_16khz.wav           # Deterministic 16kHz audio sample
 │       └── expected_segments.json             # Reference transcript segments & timestamps
+├── assets/                                    # Project logos, animations, installer graphics & demos
+│   ├── vlc-whisper-logo.svg                   # Vector project logo (512x512)
+│   ├── vlc-whisper.ico                        # Multi-size Windows application icon (16..256px)
+│   ├── installer-header.bmp                   # NSIS Modern UI 2 header banner graphic (150x57)
+│   ├── vlc-whisper-logo-animation.gif         # Animated logo banner
+│   └── vlc-whisper-demo.gif                   # Playback demonstration animation
 ├── samples/                                   # Standalone demo snippets & verification utilities
 │   ├── CMakeLists.txt                         # Dynamically builds snippet executables
 │   ├── audio/                                 # Sample audio test files (output.wav, harvard.wav)
@@ -193,7 +201,10 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_model_catalog.h`   | Committed model catalog (7 models, pinned sha256/bytes, Hugging Face URLs) |
 | `vw_model_download.h`  | Download engine interface: dedicated thread, interprocess ownership lock, single-flight, abort, progress snapshot |
 | `vw_model_download.c`  | WinHTTP/curl download, per-model lock, .part → sha256 verify → atomic rename into per-user dir; abort and worker-death cleanup |
+| `vw_translate.h`       | 3-tier keyless Google Translate fallback engine interface, parser contracts, and constants |
+| `vw_translate.c`       | HTTP client (WinHTTP/curl), URL encode, HTML unescape, Web RPC (MkEWBc), GTX, and Mobile scrape endpoints |
 | `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, local success, abort cleanup, same-destination locking, and retry-then-fail paths |
+| `test_translate.c`     | URL encoding, HTML unescaping, Web RPC JSON parser, GTX array parser, and Mobile scrape parser verification |
 
 The builder exposes `vw_segment_builder_push_hypothesis` (whole-phrase final-subtitles dedup: exact,
 fragment, and expanded superstring hypotheses are dropped; queue grows dynamically; history commits after a

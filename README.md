@@ -19,7 +19,7 @@
   <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
 </p>
 
-**VLC-Whisper** brings private, offline, real-time AI speech recognition and subtitle generation directly into VLC media player. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), it automatically transcribes and displays synchronized subtitles for any audio or video file without sending data to the cloud.
+**VLC-Whisper** brings private, offline, real-time AI speech recognition and subtitle generation directly into VLC media player. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), transcription, VAD, and audio processing stay on your machine. Optional real-time translation is an explicit network feature: when enabled, only finalized subtitle text is sent over HTTPS to Google Translate web endpoints; audio/PCM is never sent.
 
 ---
 
@@ -35,8 +35,9 @@
 
 ## Key Highlights
 
-- **100% Private and Offline**: All audio processing, voice activity detection, and speech recognition run entirely on your local machine. Zero cloud APIs, zero telemetry, and zero data leaves your computer.
+- **Private Local Transcription by Default**: Audio processing, voice activity detection, and Whisper speech recognition run entirely on your local machine with zero telemetry. Network egress happens only for explicit user-initiated model downloads or when you opt in to subtitle translation; translation sends finalized subtitle text, never audio/PCM.
 - **Hardware-Accelerated**: Supports Vulkan GPU acceleration for fast real-time transcription, with automatic CPU fallback on systems without dedicated graphics.
+- **Real-Time Subtitle Translation**: Translate subtitles on-the-fly into your native language using a keyless 3-tier fallback engine (Web RPC, GTX, and Mobile scrape) with zero API keys or subscriptions required. This feature is off by default and sends finalized caption text to Google endpoints only while enabled.
 - **Ahead-of-Time Lookahead**: When playing local media files, the worker decodes upcoming audio ahead of the playback playhead for instant subtitle availability.
 - **Voice Activity Detection**: Integrated Silero VAD prevents phantom captions during silence, instrumental music, or background noise.
 - **In-App Settings Extension**: Configure speech models, language selection, inference threads, and hardware backend directly from VLC via the `View > VLC-Whisper Settings` menu.
@@ -83,8 +84,12 @@ VLC-Whisper includes a built-in settings dialog accessible from the VLC menu bar
    - **Model**: Choose from bundled `tiny (multilingual)` or additional models (`tiny.en`, `base.en`, `base`, `small`, `medium`, `large`).
    - **Language**: Select your target language (`English`, `Romanian`, `Turkish`, `German`, `French`, `Spanish`).
    - **Threads**: CPU inference worker threads (`1` to `16`, default `4`).
-   - **Diagnostic logging**: Off by default; enable only when troubleshooting plugin or worker behavior.
-3. Click **Apply** to save the configuration. The worker restarts seamlessly with the new settings.
+   - **Auto translation (Real-Time Subtitles)**: Checkbox to enable live translation of finalized subtitles via keyless Google Translate. Enabling it sends finalized subtitle text to Google over HTTPS; audio remains local.
+   - **Source (from) / Translation (to)**: Source language (`auto` detect or specific code) and destination translation language.
+   - **Screen placement**: Display mode (`Dual line: source + translation` or `Translation only`).
+   - **Translation test guidance**: The settings dialog performs no HTTP. Use **How to test** for worker-runtime instructions; translation itself is exercised only through the asynchronous worker path during playback.
+   - **Diagnostic logging**: Off by default; enable only when troubleshooting plugin or worker behavior. Logs contain metadata such as IDs, byte counts, latency, paths, and status, but not source or translated subtitle text.
+3. Click **Apply** to save the configuration. The worker updates live without interrupting playback.
 
 ### Downloading Additional Models
 
@@ -103,7 +108,7 @@ The installer includes the lightweight multilingual `ggml-tiny.bin` model out of
 
 Each successful caption session creates a private temporary key/value report. It is updated periodically and finalized when playback stops or the filter closes. If VLC is terminated abruptly, the latest flushed snapshot remains marked as active. Reports contain aggregate timing and counter metrics only; transcripts, PCM, media URLs, and authentication tokens are never written.
 
-Diagnostic logs are disabled by default and can be enabled from the settings checkbox when troubleshooting.
+Diagnostic logs are disabled by default and can be enabled from the settings checkbox when troubleshooting. They do not persist source or translated subtitle bodies.
 
 ---
 
@@ -131,13 +136,15 @@ flowchart TB
         WORKER_IN["Worker IPC Receiver"] --> VAD["Silero VAD<br/>(Voice Activity Detection)"]
         VAD -->|"Speech Boundaries"| ENGINE["whisper.cpp<br/>(Vulkan GPU / CPU)"]
         ENGINE --> BUILDER["Segment Builder & Hallucination Filter"]
-        BUILDER --> WORKER_OUT["Worker IPC Sender"]
-        HTTP["Background Model Downloader<br/>(WinHTTP / curl)"] -.->|"SHA-256 Validated Model"| ENGINE
+        BUILDER -->|"Finalized cues"| TRANS["Bounded Async Translation Queue<br/>(optional, 4 pending)"]
+        TRANS --> WORKER_OUT["Worker IPC Sender"]
+        DOWNLOADER["Background Model Downloader<br/>(WinHTTP / curl)"] -.->|"SHA-256 Validated Model"| ENGINE
+        TRANS -.->|"Finalized text only / HTTPS"| GOOGLE["Google Translate Web Endpoints"]
     end
 ```
 
 - **Plugin Layer (`libvlc_whisper_plugin`)**: An out-of-tree VLC `audio_filter` plugin that captures audio PCM frames in real time without blocking VLC's audio pipeline (zero locks, zero heap allocation in audio callbacks).
-- **Worker Layer (`vlc-whisper-worker`)**: A standalone background process that performs heavy speech recognition and VAD inference off the main VLC process.
+- **Worker Layer (`vlc-whisper-worker`)**: A standalone background process that performs speech recognition and VAD inference. Optional translation runs on a separate bounded worker thread so network latency does not block inference or control handling.
 - **Secure Local IPC**: Authenticated communication over local named pipes (Windows) or Unix domain sockets (Linux) secured by a per-session 32-byte secret token.
 
 ---
@@ -288,7 +295,7 @@ _(Without `VW_VULKAN_SDK`, `windows-x64-release` prints a warning and automatica
 
 ## Testing & Verification
 
-The project includes unit and integration test suites covering protocol serialization, audio ring buffers, VAD chunking, whisper decoding, and worker IPC lifecycle.
+The project includes unit and integration test suites covering protocol serialization, audio ring buffers, VAD chunking, whisper decoding, worker IPC lifecycle, deterministic translation fallback/deadline handling, and asynchronous translation cancellation.
 
 ### Running Tests with CMake Presets (Linux Native)
 

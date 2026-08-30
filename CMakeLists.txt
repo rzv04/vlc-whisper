@@ -11,6 +11,11 @@ set(CMAKE_C_EXTENSIONS OFF)
 # Option to toggle building unit/integration tests
 option(BUILD_TESTING "Build unit and integration tests" ON)
 
+if(NOT WIN32)
+    find_program(VW_CURL_EXECUTABLE NAMES curl REQUIRED)
+    add_compile_definitions(VW_CURL_EXECUTABLE="${VW_CURL_EXECUTABLE}")
+endif()
+
 # Option to enable code coverage instrumentation
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 if(ENABLE_COVERAGE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

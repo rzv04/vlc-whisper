@@ -122,6 +122,22 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_FIELD(p->is_final);
       ENC_FIELD(p->text_bytes);
       ENC_BYTES(p->text_utf8, p->text_bytes);
+      if (p->translated_text_bytes > 0 && !p->translated_text_utf8) return false;
+      if (p->translation_attempted || p->translated_text_bytes > 0) {
+        ENC_FIELD(p->translated_text_bytes);
+        ENC_BYTES(p->translated_text_utf8, p->translated_text_bytes);
+        ENC_FIELD(p->translation_latency_us);
+        ENC_FIELD(p->translation_tier);
+      }
+      break;
+    }
+    case VW_MSG_TRANSLATE_CTRL: {
+      const vw_msg_translate_ctrl_t* p = (const vw_msg_translate_ctrl_t*)payload;
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      ENC_FIELD(p->enabled);
+      ENC_BYTES(p->source_lang, 16);
+      ENC_BYTES(p->target_lang, 16);
+      ENC_FIELD(p->mode);
       break;
     }
     case VW_MSG_STATUS: {
@@ -291,6 +307,36 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       DEC_FIELD(p->is_final);
       DEC_FIELD(p->text_bytes);
       DEC_PTR(p->text_utf8, p->text_bytes);
+      p->translated_text_bytes = 0;
+      p->translated_text_utf8 = NULL;
+      p->translation_attempted = false;
+      p->translation_latency_us = 0;
+      p->translation_tier = 0;
+      if (read_pos < buffer_size) {
+        if (buffer_size - read_pos < sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint8_t)) return false;
+        DEC_FIELD(p->translated_text_bytes);
+        if (p->translated_text_bytes > 0) {
+          DEC_PTR(p->translated_text_utf8, p->translated_text_bytes);
+        } else {
+          p->translated_text_utf8 = NULL;
+        }
+        if (buffer_size - read_pos != sizeof(uint32_t) + sizeof(uint8_t)) return false;
+        DEC_FIELD(p->translation_latency_us);
+        DEC_FIELD(p->translation_tier);
+        p->translation_attempted = true;
+      }
+      break;
+    }
+    case VW_MSG_TRANSLATE_CTRL: {
+      vw_msg_translate_ctrl_t* p = (vw_msg_translate_ctrl_t*)out_payload;
+      if (buffer_size != VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES) return false;
+      DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+      DEC_FIELD(p->enabled);
+      DEC_BYTES(p->source_lang, 16);
+      DEC_BYTES(p->target_lang, 16);
+      DEC_FIELD(p->mode);
+      p->source_lang[15] = '\0';
+      p->target_lang[15] = '\0';
       break;
     }
     case VW_MSG_STATUS: {

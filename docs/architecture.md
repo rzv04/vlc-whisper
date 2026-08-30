@@ -124,6 +124,7 @@ Reject a wrong major version, unknown mandatory type, oversized payload, bad tok
 | `ERROR`                   | both                     | session ID, error code, recoverable flag, redacted message                             |
 | `MODEL_CTRL`              | plugin -> worker         | worker-scoped download/abort request; zero session ID is valid before `START`          |
 | `MODEL_PROGRESS`          | worker -> plugin         | download stage, percent, byte counters, catalog model ID                             |
+| `TRANSLATE_CTRL`          | plugin -> worker         | real-time translation config (enabled, source_lang, target_lang, display mode)        |
 
 ## Data model
 

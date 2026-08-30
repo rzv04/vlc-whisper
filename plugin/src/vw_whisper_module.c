@@ -407,6 +407,10 @@ typedef struct vw_plugin_sys {
   char model_download_id[40];
   int cfg_threads;
   bool cfg_logging;
+  bool cfg_translate_enabled;
+  char cfg_translate_from[16];
+  char cfg_translate_to[16];
+  int cfg_translate_mode;
   bool cfg_snapshot_valid;
   _Atomic bool respawn_in_progress;
   int64_t last_config_poll_us;
@@ -547,6 +551,8 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_SESSION_START_FAIL", "worker rejected respawn session");
     return false;
   }
+  vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
+                                       sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode);
   if (!sys->benchmark.active && !vw_benchmark_begin(&sys->benchmark, vw_plugin_catalog_id_from_path(sys->model_path),
                                                     sys->cfg_backend, vw_platform_get_monotonic_time_us())) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_BENCHMARK", "could not create temporary session report");
@@ -692,6 +698,39 @@ static void* vw_plugin_sender_main(void* arg) {
         sys->cfg_model_download[0] = '\0';
       }
       if (dl) free(dl);
+      bool trans_en =
+          config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-enabled") != 0;
+      char* trans_from = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-from");
+      char* trans_to = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-to");
+      int64_t trans_mode = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-mode");
+      sys->cfg_translate_enabled = trans_en;
+      if (trans_from && trans_from[0]) {
+        snprintf(sys->cfg_translate_from, sizeof(sys->cfg_translate_from), "%s", trans_from);
+      } else {
+        snprintf(sys->cfg_translate_from, sizeof(sys->cfg_translate_from), "auto");
+      }
+      if (trans_from) free(trans_from);
+      if (trans_to && trans_to[0]) {
+        snprintf(sys->cfg_translate_to, sizeof(sys->cfg_translate_to), "%s", trans_to);
+      } else {
+        snprintf(sys->cfg_translate_to, sizeof(sys->cfg_translate_to), "en");
+      }
+      if (trans_to) free(trans_to);
+      sys->cfg_translate_mode = (trans_mode == 0) ? 0 : 1;
+
+      if (sys->client) {
+        if (!vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
+                                                  sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode)) {
+          if ((sys->client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
+            sys->cfg_translate_enabled = false;
+            config_PutInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-enabled", 0);
+            vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_TRANSLATE_UNSUPPORTED",
+                         "worker lacks translation capability; disabling translation setting");
+          } else {
+            atomic_store(&sys->worker_dead, true);
+          }
+        }
+      }
       sys->cfg_logging = logging;
       vw_log_set_enabled(logging);
       sys->last_config_poll_us = cfg_now_us;
@@ -716,12 +755,53 @@ static void* vw_plugin_sender_main(void* arg) {
         char* dl_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-download");
         int64_t thr_new = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
         bool logging_new = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-logging") != 0;
+        bool trans_en_new =
+            config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-enabled") != 0;
+        char* trans_from_new =
+            config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-from");
+        char* trans_to_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-to");
+        int64_t trans_mode_new =
+            config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-mode");
         const char* wp_cmp = wp_new ? wp_new : "";
         const char* mp_cmp = mp_new ? mp_new : "";
         const char* be_cmp = (be_new && be_new[0]) ? be_new : "auto";
         const char* lg_cmp = (lg_new && lg_new[0]) ? lg_new : "en";
         const char* dl_cmp = dl_new ? dl_new : "";
+        const char* trans_from_cmp = (trans_from_new && trans_from_new[0]) ? trans_from_new : "auto";
+        const char* trans_to_cmp = (trans_to_new && trans_to_new[0]) ? trans_to_new : "en";
+        int trans_mode_cmp = (trans_mode_new == 0) ? 0 : 1;
+
         if (thr_new < 1 || thr_new > 16) thr_new = 4;
+
+        bool trans_diff =
+            (trans_en_new != sys->cfg_translate_enabled) || (strcmp(trans_from_cmp, sys->cfg_translate_from) != 0) ||
+            (strcmp(trans_to_cmp, sys->cfg_translate_to) != 0) || (trans_mode_cmp != sys->cfg_translate_mode);
+
+        if (trans_diff) {
+          sys->cfg_translate_enabled = trans_en_new;
+          snprintf(sys->cfg_translate_from, sizeof(sys->cfg_translate_from), "%s", trans_from_cmp);
+          snprintf(sys->cfg_translate_to, sizeof(sys->cfg_translate_to), "%s", trans_to_cmp);
+          sys->cfg_translate_mode = trans_mode_cmp;
+          if (sys->client) {
+            if (!vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
+                                                      sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode)) {
+              if ((sys->client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
+                sys->cfg_translate_enabled = false;
+                config_PutInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-enabled", 0);
+                vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_TRANSLATE_UNSUPPORTED",
+                             "worker lacks translation capability; disabling translation setting");
+              } else {
+                atomic_store(&sys->worker_dead, true);
+              }
+            }
+          }
+          vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_TRANSLATE_CTRL",
+                       "updated translation config: enabled=%d from=%s to=%s mode=%d", (int)sys->cfg_translate_enabled,
+                       sys->cfg_translate_from, sys->cfg_translate_to, sys->cfg_translate_mode);
+        }
+        if (trans_from_new) free(trans_from_new);
+        if (trans_to_new) free(trans_to_new);
+
         bool diff = false;
         if (strcmp(wp_cmp, sys->cfg_worker_path) != 0) diff = true;
         if (strcmp(mp_cmp, sys->cfg_model_path) != 0) diff = true;
@@ -1027,6 +1107,11 @@ static void* vw_plugin_sender_main(void* arg) {
           sys->segments_received++;
           int64_t segment_now_us = vw_platform_get_monotonic_time_us();
           vw_benchmark_record_caption_received(&sys->benchmark, &recv.segment, segment_now_us, is_source_mode);
+          if (recv.segment.translation_attempted) {
+            vw_benchmark_record_translation(&sys->benchmark, recv.segment.translation_tier,
+                                            recv.segment.translation_latency_us,
+                                            recv.segment.translated_text_bytes > 0);
+          }
           vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEGMENT",
                        "segment received: id=%llu text_len=%zu start=%lld end=%lld is_final=%d",
                        (unsigned long long)recv.segment.segment_id,
@@ -1459,29 +1544,37 @@ static void vw_plugin_close(vlc_object_t* obj) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper AI Captions Filter")
-    set_capability("audio filter", 0) set_category(CAT_AUDIO) set_subcategory(SUBCAT_AUDIO_AFILTER)
-        add_shortcut("vlc_whisper",
-                     "whisper") add_loadfile("worker-path", NULL, "Path to vlc-whisper-worker executable (optional)",
-                                             "Explicit location of vlc-whisper-worker[.exe] for installs where it is "
-                                             "not co-located with the plugin; defaults to discovery",
-                                             false)
-            add_loadfile("model-path", NULL, "Path to bundled ggml-tiny.bin or another model (optional)",
-                         "Explicit location of the whisper model; absent user selection discovers bundled tiny first",
-                         false) add_string("whisper-backend", "auto", "Inference backend",
-                                           "auto|gpu|cpu (auto probes Vulkan)",
-                                           false) add_string("whisper-language", "en", "Caption language",
-                                                             "Whisper language code (en|ro|tr|de|fr|es...)", false)
-                add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)", false)
-                    change_integer_range(1, 16) add_bool("whisper-logging", false, "Enable diagnostic logging",
-                                                         "Enable VLC-Whisper and worker diagnostic logging", false)
-                        add_string("whisper-backend-active", "", "Active backend (read-only)",
-                                   "Mirrors resolved backend from worker STATUS (gpu|cpu); informational", false)
-                            add_string("whisper-model-download", "", "Model download control",
-                                       "Catalog id to download or abort; plugin relays as MODEL_CTRL", false)
-                                add_integer("whisper-model-progress", 0, "Download progress percent (read-only mirror)",
-                                            "Mirrors worker MODEL_PROGRESS pct (0..100) for Lua GUI",
-                                            true) change_integer_range(0, 100)
-                                    add_string("whisper-model-status", "", "Model download status (read-only mirror)",
-                                               "Mirrors worker MODEL_PROGRESS stage:model_id for GUI", true)
-                                        set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
+    set_capability("audio filter", 0) set_category(CAT_AUDIO) set_subcategory(SUBCAT_AUDIO_AFILTER) add_shortcut(
+        "vlc_whisper", "whisper") add_loadfile("worker-path", NULL, "Path to vlc-whisper-worker executable (optional)",
+                                               "Explicit location of vlc-whisper-worker[.exe] for installs where it is "
+                                               "not co-located with the plugin; defaults to discovery",
+                                               false)
+        add_loadfile("model-path", NULL, "Path to bundled ggml-tiny.bin or another model (optional)",
+                     "Explicit location of the whisper model; absent user selection discovers bundled tiny first",
+                     false) add_string("whisper-backend", "auto", "Inference backend",
+                                       "auto|gpu|cpu (auto probes Vulkan)",
+                                       false) add_string("whisper-language", "en", "Caption language",
+                                                         "Whisper language code (en|ro|tr|de|fr|es...)", false)
+            add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)", false)
+                change_integer_range(1, 16) add_bool("whisper-logging", false, "Enable diagnostic logging",
+                                                     "Enable VLC-Whisper and worker diagnostic logging", false)
+                    add_string("whisper-backend-active", "", "Active backend (read-only)",
+                               "Mirrors resolved backend from worker STATUS (gpu|cpu); informational",
+                               false) add_string("whisper-model-download", "", "Model download control",
+                                                 "Catalog id to download or abort; plugin relays as MODEL_CTRL", false)
+                        add_integer("whisper-model-progress", 0, "Download progress percent (read-only mirror)",
+                                    "Mirrors worker MODEL_PROGRESS pct (0..100) for Lua GUI",
+                                    true) change_integer_range(0, 100)
+                            add_string("whisper-model-status", "", "Model download status (read-only mirror)",
+                                       "Mirrors worker MODEL_PROGRESS stage:model_id for GUI", true)
+                                add_bool("whisper-translate-enabled", false, "Enable real-time subtitle translation",
+                                         "Opt-in real-time translation of subtitles (keyless Google engine)", false)
+                                    add_string("whisper-translate-from", "auto", "Translation source language",
+                                               "Source language code or 'auto' for automatic detection", false)
+                                        add_string("whisper-translate-to", "en", "Translation target language",
+                                                   "Target language code for translated subtitles", false)
+                                            add_integer("whisper-translate-mode", 1, "Translation display mode",
+                                                        "0=translation only, 1=dual line (source + translation)", false)
+                                                change_integer_range(0, 1)
+                                                    set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
 #pragma GCC diagnostic pop

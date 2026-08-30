@@ -38,6 +38,19 @@ int main(void) {
   vw_benchmark_record_caption_sent(&benchmark, 2200000);
   vw_benchmark_record_caption_filtered(&benchmark, true, false, false);
 
+  vw_benchmark_record_translation(&benchmark, 1, 150000, true);
+  vw_benchmark_record_translation(&benchmark, 2, 200000, true);
+  vw_benchmark_record_translation(&benchmark, 0, 100000, false);  // transport/parser failure before deadline
+  vw_benchmark_record_translation(&benchmark, 0, 800000, false);  // global cue deadline exhausted
+  EXPECT(benchmark.translation_requests_sent == 4);
+  EXPECT(benchmark.translation_success_count == 2);
+  EXPECT(benchmark.translation_tier1_count == 1);
+  EXPECT(benchmark.translation_tier2_count == 1);
+  EXPECT(benchmark.translation_failure_count == 1);
+  EXPECT(benchmark.translation_timeout_count == 1);
+  EXPECT(benchmark.translation_duration_us == 1250000);
+  EXPECT(benchmark.translation_latency_sample_count == 4);
+
   vw_msg_status_t status = {.inference_us = 500000, .dropped_audio_us = 123};
   snprintf(status.resolved_backend, sizeof(status.resolved_backend), "cpu");
   vw_benchmark_update_status(&benchmark, &status);
@@ -52,6 +65,14 @@ int main(void) {
   EXPECT(report_contains(benchmark.report_path, "captions_sent=1"));
   EXPECT(report_contains(benchmark.report_path, "captions_filtered=1"));
   EXPECT(report_contains(benchmark.report_path, "real_time_factor=0.250000"));
+  EXPECT(report_contains(benchmark.report_path, "translation_requests_sent=4"));
+  EXPECT(report_contains(benchmark.report_path, "translation_success_count=2"));
+  EXPECT(report_contains(benchmark.report_path, "translation_tier1_count=1"));
+  EXPECT(report_contains(benchmark.report_path, "translation_tier2_count=1"));
+  EXPECT(report_contains(benchmark.report_path, "translation_failure_count=1"));
+  EXPECT(report_contains(benchmark.report_path, "translation_timeout_count=1"));
+  EXPECT(report_contains(benchmark.report_path, "translation_duration_us=1250000"));
+  EXPECT(report_contains(benchmark.report_path, "translation_latency_samples=4"));
   remove(benchmark.report_path);
   return 0;
 }

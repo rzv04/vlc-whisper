@@ -12,6 +12,30 @@ bool vw_protocol_validate_header(const vw_frame_header_t* header) {
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+
+static bool is_valid_language_code(const char code[16], bool allow_auto) {
+  size_t length = strnlen(code, 16U);
+  if (length == 0 || length >= 16U) return false;
+  if (allow_auto && strcmp(code, "auto") == 0) return true;
+
+  size_t primary_length = 0;
+  while (primary_length < length && code[primary_length] != '-') {
+    char c = code[primary_length];
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return false;
+    primary_length++;
+  }
+  if (primary_length < 2U || primary_length > 3U) return false;
+  if (primary_length == length) return true;
+
+  size_t subtag_length = length - primary_length - 1U;
+  if (subtag_length < 2U || subtag_length > 8U) return false;
+  for (size_t i = primary_length + 1U; i < length; i++) {
+    char c = code[i];
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return false;
+  }
+  return true;
+}
 
 // Validate if a string is a valid UTF-8 sequence. Returns true if valid, false otherwise.
 // Reject overlong sequences, UTF-16 surrogates, and code points above U+10FFFF.
@@ -134,6 +158,33 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
         uint8_t c = (uint8_t)p->text_utf8[i];
         if (c < 0x20 && c != '\n' && c != ' ') return false;
       }
+      if (p->translated_text_bytes > 0) {
+        if (p->translated_text_bytes > VW_MAX_TEXT_BYTES) return false;
+        if (!p->translated_text_utf8) return false;
+        if (is_empty_or_whitespace(p->translated_text_utf8, p->translated_text_bytes)) return false;
+        if (!is_valid_utf8(p->translated_text_utf8, p->translated_text_bytes)) return false;
+        for (size_t i = 0; i < p->translated_text_bytes; i++) {
+          uint8_t c = (uint8_t)p->translated_text_utf8[i];
+          if (c < 0x20 && c != '\n' && c != ' ') return false;
+        }
+      } else {
+        if (p->translated_text_utf8 != NULL) return false;
+      }
+      if (!p->translation_attempted &&
+          (p->translated_text_bytes > 0 || p->translation_latency_us > 0 || p->translation_tier > 0)) {
+        return false;
+      }
+      if (p->translation_tier > 3) return false;
+      if (p->translated_text_bytes > 0 && p->translation_tier == 0) return false;
+      if (p->translated_text_bytes == 0 && p->translation_tier != 0) return false;
+      return true;
+    }
+    case VW_MSG_TRANSLATE_CTRL: {
+      const vw_msg_translate_ctrl_t* p = (const vw_msg_translate_ctrl_t*)payload;
+      if (p->enabled > 1) return false;
+      if (p->mode > 1) return false;
+      if (!is_valid_language_code(p->source_lang, true)) return false;
+      if (!is_valid_language_code(p->target_lang, false)) return false;
       return true;
     }
     case VW_MSG_MODEL_CTRL: {

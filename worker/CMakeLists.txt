@@ -87,6 +87,8 @@ add_executable(vlc-whisper-worker
     src/vw_worker_queue.c
     src/vw_sha256.c
     src/vw_model_download.c
+    src/vw_translate.c
+    src/vw_translate_async.c
     ${VW_SOURCE_DECODER_SRCS}
     ../plugin/src/vw_platform_linux.c
     ../plugin/src/vw_platform_win32.c
