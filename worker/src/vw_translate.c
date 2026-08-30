@@ -374,18 +374,76 @@ static const char* skip_segment_array(const char* p) {
   return NULL;
 }
 
-bool vw_translate_parse_gtx_response(const char* raw, char* out, size_t out_size) {
-  if (!raw || !out || out_size == 0) return false;
-  out[0] = '\0';
-  const char* p = raw;
+static const char* skip_json_value(const char* p) {
   while (*p && isspace((unsigned char)*p)) p++;
-  if (strncmp(p, "[[[", 3) != 0) return false;
-  p += 3;
+  if (*p == '"') {
+    return skip_json_string(p);
+  }
+  if (*p == '[' || *p == '{') {
+    char open = *p;
+    char close = (*p == '[') ? ']' : '}';
+    bool in_str = false;
+    bool esc = false;
+    int depth = 0;
+    for (; p && *p; p++) {
+      if (in_str) {
+        if (esc) {
+          esc = false;
+        } else if (*p == '\\') {
+          esc = true;
+        } else if (*p == '"') {
+          in_str = false;
+        }
+        continue;
+      }
+      if (*p == '"') {
+        in_str = true;
+      } else if (*p == open) {
+        depth++;
+      } else if (*p == close) {
+        depth--;
+        if (depth == 0) return p + 1;
+      }
+    }
+    return NULL;
+  }
+  // primitive (null, true, false, number)
+  while (*p && *p != ',' && *p != ']' && *p != '}' && !isspace((unsigned char)*p)) {
+    p++;
+  }
+  return p;
+}
 
+static const char* get_json_array_element(const char* arr, size_t target_index) {
+  while (*arr && isspace((unsigned char)*arr)) arr++;
+  if (*arr != '[') return NULL;
+  arr++;
+  for (size_t i = 0;; i++) {
+    while (*arr && isspace((unsigned char)*arr)) arr++;
+    if (*arr == ']' || !*arr) return NULL;
+    if (i == target_index) return arr;
+    arr = skip_json_value(arr);
+    if (!arr) return NULL;
+    while (*arr && isspace((unsigned char)*arr)) arr++;
+    if (*arr == ',') {
+      arr++;
+    } else if (*arr == ']') {
+      return NULL;
+    }
+  }
+}
+
+static bool parse_segments_list(const char* p, char* out, size_t out_size) {
+  while (*p && isspace((unsigned char)*p)) p++;
+  if (*p != '[') return false;
+  p++;
   size_t out_idx = 0;
   for (;;) {
     while (*p && isspace((unsigned char)*p)) p++;
-    if (*p != '"') return out_idx > 0;
+    if (*p != '[') break;
+    p++;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p != '"') return false;
     const char* str_start = p + 1;
     const char* str_end = json_string_end(str_start);
     if (!str_end) return false;
@@ -401,17 +459,33 @@ bool vw_translate_parse_gtx_response(const char* raw, char* out, size_t out_size
     if (!after) return false;
     p = after;
     while (*p && isspace((unsigned char)*p)) p++;
-    if (*p != ',') break;
-    p++;
-    while (*p && isspace((unsigned char)*p)) p++;
-    if (*p != '[') break;
-    p++;
+    if (*p == ',') {
+      p++;
+      continue;
+    }
+    if (*p == ']') {
+      p++;
+      break;
+    }
+    break;
   }
   return out_idx > 0;
 }
 
+bool vw_translate_parse_gtx_response(const char* raw, char* out, size_t out_size) {
+  if (!raw || !out || out_size == 0) return false;
+  out[0] = '\0';
+  const char* p = raw;
+  while (*p && isspace((unsigned char)*p)) p++;
+  if (*p != '[') return false;
+  p++;
+  while (*p && isspace((unsigned char)*p)) p++;
+  return parse_segments_list(p, out, out_size);
+}
+
 bool vw_translate_parse_rpc_response(const char* raw, char* out, size_t out_size) {
   if (!raw || !out || out_size == 0) return false;
+  out[0] = '\0';
   const char* marker = strstr(raw, "\"wrb.fr\"");
   if (!marker) return false;
   const char* p = strchr(marker, ',');
@@ -438,10 +512,31 @@ bool vw_translate_parse_rpc_response(const char* raw, char* out, size_t out_size
   bool decoded = json_unescape_string(payload_start, payload_len, unescaped, payload_len + 1, NULL);
   bool ok = false;
   if (decoded) {
-    ok = vw_translate_parse_gtx_response(unescaped, out, out_size);
+    // 1. Canonical MkEWBc shape: result[1][0][0][5] contains the segment array
+    const char* elem1 = get_json_array_element(unescaped, 1);
+    if (elem1) {
+      const char* elem1_0 = get_json_array_element(elem1, 0);
+      if (elem1_0) {
+        const char* elem1_0_0 = get_json_array_element(elem1_0, 0);
+        if (elem1_0_0) {
+          const char* elem1_0_0_5 = get_json_array_element(elem1_0_0, 5);
+          if (elem1_0_0_5) {
+            ok = parse_segments_list(elem1_0_0_5, out, out_size);
+          }
+        }
+      }
+    }
+    // 2. Pattern fallback: find "null,null,null,null,null,["
     if (!ok) {
-      const char* seg = strstr(unescaped, "[[[");
-      if (seg) ok = vw_translate_parse_gtx_response(seg, out, out_size);
+      const char* nulls = strstr(unescaped, "null,null,null,null,null,");
+      if (nulls) {
+        const char* segs = strchr(nulls, '[');
+        if (segs) ok = parse_segments_list(segs, out, out_size);
+      }
+    }
+    // 3. Fallback for GTX-style or direct segment array
+    if (!ok) {
+      ok = vw_translate_parse_gtx_response(unescaped, out, out_size);
     }
   }
   free(unescaped);
@@ -460,8 +555,8 @@ static bool build_rpc_body(const char* text, const char* src_lang, const char* d
   }
 
   char inner[VW_TRANSLATE_RPC_JSON_BYTES];
-  int inner_len = snprintf(inner, sizeof(inner), "[[\"%s\",\"%s\",\"%s\",true],[null]]", escaped_text,
-                           escaped_src, escaped_dst);
+  int inner_len =
+      snprintf(inner, sizeof(inner), "[[\"%s\",\"%s\",\"%s\",true],[null]]", escaped_text, escaped_src, escaped_dst);
   if (inner_len < 0 || (size_t)inner_len >= sizeof(inner)) return false;
 
   char escaped_inner[VW_TRANSLATE_RPC_JSON_BYTES * 2U];
@@ -730,8 +825,8 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
 
   if (remaining_timeout_ms(deadline_us) > 0) {
     char gtx_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written = snprintf(gtx_path, sizeof(gtx_path), "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t&q=%s", sl,
-                           tl, encoded_text);
+    int written = snprintf(gtx_path, sizeof(gtx_path), "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t&q=%s", sl, tl,
+                           encoded_text);
     if (written >= 0 && (size_t)written < sizeof(gtx_path) &&
         http_request("translate.googleapis.com", gtx_path, NULL, NULL, response, sizeof(response), deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_gtx_response(response, out_text, out_size) &&

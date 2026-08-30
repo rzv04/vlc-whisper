@@ -84,9 +84,29 @@ static void test_html_unescape(void) {
 
 static void test_parse_rpc_response(void) {
   char buf[256];
+  // 1. Canonical MkEWBc response (result[1][0][0][5])
+  const char* canonical_rpc =
+      ")]}'\n400\n[[\"wrb.fr\",\"MkEWBc\",\"[[null,null,null,[[[0,[[[null,11]],[true]]]],11],null,null,[\\\"Hello "
+      "world\\\",\\\"en\\\",\\\"ro\\\",true]],[[[null,null,null,null,null,[[\\\"Salut "
+      "Lume\\\",null,null,null,null,null,\\\"Hello "
+      "world\\\",1]],null,null,null,[]]],\\\"ro\\\",1,\\\"en\\\",[\\\"Hello "
+      "world\\\",\\\"en\\\",\\\"ro\\\",true]],\\\"en\\\",null,null,null,null,[[[0]]]]\",null,null,null,\"generic\"]]\n";
+  bool ok = vw_translate_parse_rpc_response(canonical_rpc, buf, sizeof(buf));
+  assert(ok);
+  assert(strcmp(buf, "Salut Lume") == 0);
+
+  // 2. Multiline/multi-segment MkEWBc response
+  const char* multi_rpc =
+      ")]}'\n400\n[[\"wrb.fr\",\"MkEWBc\",\"[[null],[[[null,null,null,null,null,[[\\\"Linia unu\\\",null],[\\\" "
+      "Linia doi\\\",null]]]]]]\",null,null,null,\"generic\"]]\n";
+  ok = vw_translate_parse_rpc_response(multi_rpc, buf, sizeof(buf));
+  assert(ok);
+  assert(strcmp(buf, "Linia unu Linia doi") == 0);
+
+  // 3. Simple fallback
   const char* rpc_resp =
       ")]}'\n\n[[\"wrb.fr\",\"MkEWBc\",\"[[[\\\"Salut lume\\\",null,null,null,1]]\\n]\",null,null,null,\"generic\"]]\n";
-  bool ok = vw_translate_parse_rpc_response(rpc_resp, buf, sizeof(buf));
+  ok = vw_translate_parse_rpc_response(rpc_resp, buf, sizeof(buf));
   assert(ok);
   assert(strcmp(buf, "Salut lume") == 0);
 
@@ -164,8 +184,8 @@ typedef struct hook_state {
   uint32_t timeouts[4];
 } hook_state_t;
 
-static bool test_http_hook(const char* host, const char* path, const char* body, const char* content_type, char* out_buf,
-                           size_t buf_size, uint32_t timeout_ms, void* user_data) {
+static bool test_http_hook(const char* host, const char* path, const char* body, const char* content_type,
+                           char* out_buf, size_t buf_size, uint32_t timeout_ms, void* user_data) {
   (void)body;
   (void)content_type;
   hook_state_t* state = (hook_state_t*)user_data;

@@ -73,6 +73,50 @@ static vw_caption_segment_t make_segment(uint64_t id, char* text) {
   return seg;
 }
 
+static void test_saturation_fifo_ordering(void) {
+  vw_translate_set_test_http_hook(async_http_hook, NULL);
+  vw_translate_async_t* async = vw_translate_async_create();
+  assert(async != NULL);
+
+  g_hook_delay_ms = 80;
+
+  char texts[6][32];
+  for (int i = 0; i < 6; i++) {
+    snprintf(texts[i], sizeof(texts[i]), "Phrase %d", i + 1);
+    vw_caption_segment_t seg = make_segment(i + 1, texts[i]);
+    seg.start_pts_us = (int64_t)(i + 1) * 1000000LL;
+    seg.end_pts_us = (int64_t)(i + 2) * 1000000LL;
+    assert(vw_translate_async_submit(async, &seg, "en", "ro"));
+  }
+
+  // Drain all 6 results and assert strict chronological monotonicity
+  uint64_t expected_id = 1;
+  int popped_count = 0;
+  for (int retry = 0; retry < 400 && popped_count < 6; retry++) {
+    vw_translate_async_result_t res;
+    if (vw_translate_async_try_pop(async, &res)) {
+      assert(res.segment.segment_id == expected_id);
+      assert(res.segment.start_pts_us == (int64_t)expected_id * 1000000LL);
+      if (expected_id <= 4) {
+        assert(res.success);
+        assert(strcmp(res.segment.translated_text_utf8, "Salut lume") == 0);
+      } else {
+        assert(!res.success);
+        assert(res.segment.translated_text_utf8 == NULL);
+      }
+      expected_id++;
+      popped_count++;
+    } else {
+      sleep_ms(10);
+    }
+  }
+  assert(popped_count == 6);
+  assert(expected_id == 7);
+
+  vw_translate_async_destroy(async);
+  vw_translate_set_test_http_hook(NULL, NULL);
+}
+
 int main(void) {
   vw_translate_set_test_http_hook(async_http_hook, NULL);
   vw_translate_async_t* async = vw_translate_async_create();
@@ -117,6 +161,9 @@ int main(void) {
 
   vw_translate_async_destroy(async);
   vw_translate_set_test_http_hook(NULL, NULL);
+
+  test_saturation_fifo_ordering();
+
   printf("test_translate_async PASSED.\n");
   return 0;
 }

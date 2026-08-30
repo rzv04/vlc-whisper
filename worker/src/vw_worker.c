@@ -1163,8 +1163,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
     }
 
-    // Finalized captions are either emitted immediately (translation disabled/saturated/unavailable) or copied into
-    // the four-job translation queue. Network latency never blocks this worker main loop or inference processing.
+    // Finalized captions are either emitted immediately (when translation is disabled) or submitted to the
+    // asynchronous translation pipeline. When active network budget is saturated, the translator degrades cues
+    // to source text while preserving exact chronological cue order.
     if (builder) {
       vw_caption_segment_t seg;
       while (vw_segment_builder_pop(builder, &seg)) {
@@ -1174,27 +1175,39 @@ int vw_worker_run(const vw_worker_config_t* config) {
         seg.translation_tier = VW_TRANSLATE_TIER_NONE;
         seg.translation_latency_us = 0;
 
-        bool queued_for_translation = false;
         if (translate_enabled && translator && seg.text_utf8 && seg.text_utf8[0]) {
-          queued_for_translation = vw_translate_async_submit(translator, &seg, translate_src_lang, translate_dst_lang);
-        }
-        if (!translate_enabled || !queued_for_translation) {
-          if (translate_enabled) {
-            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_TRANSLATE",
-                         "translation queue unavailable/saturated for segment=%llu; emitting source immediately",
-                         (unsigned long long)seg.segment_id);
-          }
+          vw_translate_async_submit(translator, &seg, translate_src_lang, translate_dst_lang);
+          vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_TRANSLATE", "queued segment=%llu source_bytes=%u",
+                       (unsigned long long)seg.segment_id, (unsigned int)seg.text_bytes);
+        } else {
           if (vw_worker_send_caption_segment(handle, &seg, &sequence)) {
             vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEGMENT",
                          "emitted segment id=%llu start=%lld end=%lld is_final=%d text_len=%zu trans_len=0",
                          (unsigned long long)seg.segment_id, (long long)seg.start_pts_us, (long long)seg.end_pts_us,
                          seg.is_final, seg.text_utf8 ? strlen(seg.text_utf8) : 0);
           }
-        } else {
-          vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_TRANSLATE", "queued segment=%llu source_bytes=%u",
-                       (unsigned long long)seg.segment_id, (unsigned int)seg.text_bytes);
         }
         if (seg.text_utf8) free(seg.text_utf8);
+      }
+    }
+
+    if (translator) {
+      vw_translate_async_result_t translated;
+      while (vw_translate_async_try_pop(translator, &translated)) {
+        if (!session_active ||
+            memcmp(translated.segment.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES) != 0) {
+          continue;
+        }
+        if (vw_worker_send_caption_segment(handle, &translated.segment, &sequence)) {
+          vw_log_event(translated.success ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_TRANSLATE",
+                       "translation complete segment=%llu success=%d tier=%u latency=%uus source_bytes=%u "
+                       "translated_bytes=%u",
+                       (unsigned long long)translated.segment.segment_id, (int)translated.success,
+                       (unsigned int)translated.segment.translation_tier,
+                       (unsigned int)translated.segment.translation_latency_us,
+                       (unsigned int)translated.segment.text_bytes,
+                       (unsigned int)translated.segment.translated_text_bytes);
+        }
       }
     }
   }

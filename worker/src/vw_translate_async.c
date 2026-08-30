@@ -18,6 +18,7 @@ typedef struct vw_translate_job {
   char source_text[VW_MAX_TEXT_BYTES + 1U];
   char source_lang[16];
   char target_lang[16];
+  bool skip_translation;
 } vw_translate_job_t;
 
 struct vw_translate_async {
@@ -79,18 +80,23 @@ static void* vw_translate_async_thread_main(void* opaque) {
     result.segment.translation_latency_us = 0;
     result.attempted = true;
 
-    uint8_t tier = VW_TRANSLATE_TIER_NONE;
-    uint32_t latency_us = 0;
-    result.success = vw_translate_text(result.source_text, job.source_lang, job.target_lang, result.translated_text,
-                                       sizeof(result.translated_text), &tier, &latency_us);
-    result.segment.translation_latency_us = latency_us;
-    result.segment.translation_tier = result.success ? tier : VW_TRANSLATE_TIER_NONE;
-    vw_translate_async_bind_result_text(&result);
+    if (job.skip_translation) {
+      result.success = false;
+      vw_translate_async_bind_result_text(&result);
+    } else {
+      uint8_t tier = VW_TRANSLATE_TIER_NONE;
+      uint32_t latency_us = 0;
+      result.success = vw_translate_text(result.source_text, job.source_lang, job.target_lang, result.translated_text,
+                                         sizeof(result.translated_text), &tier, &latency_us);
+      result.segment.translation_latency_us = latency_us;
+      result.segment.translation_tier = result.success ? tier : VW_TRANSLATE_TIER_NONE;
+      vw_translate_async_bind_result_text(&result);
+    }
 
     pthread_mutex_lock(&async->mutex);
     if (!async->stopping && result.epoch == async->epoch) {
       if (async->result_count == VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
-        // This should be unreachable with one translator and <=4 pending jobs. Preserve newest playback state if a
+        // This should be unreachable with bounded capacity. Preserve newest playback state if a
         // stalled consumer nevertheless fills the completion ring.
         async->result_tail = (async->result_tail + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
         async->result_count--;
@@ -165,14 +171,45 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
   if (text_len == 0 || text_len > VW_MAX_TEXT_BYTES) return false;
 
   pthread_mutex_lock(&async->mutex);
-  if (async->stopping || async->job_count >= VW_TRANSLATE_ASYNC_QUEUE_CAPACITY) {
+  if (async->stopping) {
     pthread_mutex_unlock(&async->mutex);
     return false;
   }
+
+  // When the active network budget is saturated, degrade this cue to source text (skip network translation)
+  // while preserving exact chronological cue order in the FIFO stream.
+  bool skip = (async->job_count >= VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
+
+  if (async->job_count >= VW_TRANSLATE_ASYNC_QUEUE_CAPACITY) {
+    // Hard queue limit reached: evict the oldest pending un-processed job to results as a skipped/degraded completion
+    vw_translate_job_t* oldest = &async->jobs[async->job_tail];
+    async->job_tail = (async->job_tail + 1U) % VW_TRANSLATE_ASYNC_QUEUE_CAPACITY;
+    async->job_count--;
+
+    vw_translate_async_result_t evicted;
+    memset(&evicted, 0, sizeof(evicted));
+    evicted.epoch = oldest->epoch;
+    evicted.segment = oldest->segment;
+    memcpy(evicted.source_text, oldest->source_text, sizeof(evicted.source_text));
+    evicted.segment.text_utf8 = evicted.source_text;
+    evicted.attempted = true;
+    evicted.success = false;
+    vw_translate_async_bind_result_text(&evicted);
+
+    if (async->result_count == VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
+      async->result_tail = (async->result_tail + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+      async->result_count--;
+    }
+    async->results[async->result_head] = evicted;
+    async->result_head = (async->result_head + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+    async->result_count++;
+  }
+
   vw_translate_job_t* job = &async->jobs[async->job_head];
   memset(job, 0, sizeof(*job));
   job->epoch = async->epoch;
   job->segment = *segment;
+  job->skip_translation = skip;
   memcpy(job->source_text, segment->text_utf8, text_len);
   job->source_text[text_len] = '\0';
   job->segment.text_utf8 = job->source_text;

@@ -9,7 +9,8 @@
 
 #include "vw_protocol_types.h"
 
-#define VW_TRANSLATE_ASYNC_QUEUE_CAPACITY 4U
+#define VW_TRANSLATE_ASYNC_ACTIVE_BUDGET 4U
+#define VW_TRANSLATE_ASYNC_QUEUE_CAPACITY 32U
 
 typedef struct vw_translate_async vw_translate_async_t;
 
@@ -22,26 +23,28 @@ typedef struct vw_translate_async_result {
   bool success;
 } vw_translate_async_result_t;
 
-// Creates one background translator with a maximum of four pending jobs. Network work happens only on that thread.
+// Creates one background translator instance with dedicated worker thread. Network activity occurs exclusively on
+// this background thread without blocking the worker loop.
 vw_translate_async_t* vw_translate_async_create(void);
 
-// Stops the translation thread, waits for any bounded in-flight request, and releases all synchronization resources.
+// Stops background translation thread, drains any in-flight request, and releases all synchronization mutexes and
+// conditional variables.
 void vw_translate_async_destroy(vw_translate_async_t* async);
 
-// Advances the internal playback/config epoch and immediately drops all queued/completed jobs from older epochs. The
-// IPC reader calls this as soon as a seek/session/config invalidation frame arrives, so an in-flight pre-seek request
-// cannot become observable even before the worker main loop processes that control frame.
+// Advances internal playback epoch and drops all queued and in-flight translation jobs. Called immediately upon seek,
+// session reset, or config change.
 void vw_translate_async_invalidate(vw_translate_async_t* async);
 
-// Copies an immutable finalized caption into the bounded queue and snapshots the current internal epoch. Returns false
-// when translation is unavailable or the four-job pending queue is saturated; callers should emit source immediately.
+// Enqueues a finalized caption segment into FIFO translation pipeline. When active network budget is saturated,
+// degrades to untranslated source while preserving exact chronological cue order.
 bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment,
                                const char* source_lang, const char* target_lang);
 
-// Returns true when at least one translated/fallback completion can be popped without blocking.
+// Checks if at least one translated or degraded fallback caption completion is available in the completion ring.
 bool vw_translate_async_has_result(vw_translate_async_t* async);
 
-// Pops one completion without blocking. Text pointers in out->segment are rebound to out-owned buffers.
+// Pops the next ordered caption completion without blocking. Rebinds internal string pointers to caller-owned result
+// buffers.
 bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_result_t* out);
 
 #endif  // VW_TRANSLATE_ASYNC_H_
