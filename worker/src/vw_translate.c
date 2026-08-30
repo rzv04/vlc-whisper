@@ -600,7 +600,7 @@ static bool win32_http_request(const char* host, const char* path, const char* b
                                char* out_buf, size_t buf_size, int64_t deadline_us) {
   if (!host || !path || !out_buf || buf_size < 2 || remaining_timeout_ms(deadline_us) == 0) return false;
   bool ok = false;
-  HINTERNET session = WinHttpOpen(L"VLC-Whisper/0.3.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
+  HINTERNET session = WinHttpOpen(L"VLC-Whisper/0.1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0);
   HINTERNET connect = NULL;
   HINTERNET request = NULL;

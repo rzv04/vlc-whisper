@@ -17,9 +17,9 @@
   <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
 </p>
 
-> **Private, offline, real-time AI subtitle generation directly inside VLC, with optional live translation.**
+> **Private, offline, real-time AI speech recognition and subtitle generation directly inside VLC media player.**
 
-Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), VLC-Whisper transcribes and translates speech in real time as you watch local media, over-the-network VoD and even IPTV livestreams. Audio processing and speech recognition run 100% locally on your device. Translation sends finalized subtitle text, not audio, to Google Translate endpoints.
+Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), VLC-Whisper transcribes speech in real time as you watch videos or listen to podcasts. Audio processing and speech recognition run 100% locally on your device with zero cloud dependencies and zero telemetry.
 
 ---
 
@@ -39,47 +39,45 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 
 ### Option 1: Standalone Installer (Recommended)
 
-1. **Download**: Grab `vlc-whisper-<version>-win64-setup.exe` from [Latest Releases](https://github.com/rzv04/vlc-whisper/releases).
-2. **Install**: Run the setup wizard. It automatically locates your 64-bit VLC installation, installs the audio filter plugin, bundles the multilingual `tiny` speech model, and regenerates VLC's plugin cache. Should your VLC folder not be automatically detected, manually select the destination folder in the wizard (should look something like `C:\Program Files\VideoLAN\VLC` ).
-3. **Launch & Watch**: Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video — subtitles will appear on screen automatically!
-4. Alternatively, open VLC, go to `Tools -> Preferences (Ctrl+P) -> Show settings -> All -> Audio -> Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator).
+1. **Download**: Grab `vlc-whisper-0.1.0-win64-setup.exe` from [Latest Releases](https://github.com/rzv04/vlc-whisper/releases).
+2. **Install**: Run the setup wizard. It automatically locates your 64-bit VLC installation, installs the audio filter plugin, bundles the multilingual `tiny` speech model, and regenerates VLC's plugin cache.
+3. **Launch & Watch**: Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut (or start VLC with `--audio-filter=vlc_whisper`). Play any video — subtitles will appear on screen automatically!
 
 ### Option 2: Portable Archive (.zip)
 
-1. Download `vlc-whisper-<version>-win64.zip` from [Releases](https://github.com/rzv04/vlc-whisper/releases).
+1. Download `vlc-whisper-0.1.0-win64.zip` from [Releases](https://github.com/rzv04/vlc-whisper/releases).
 2. Extract the archive directly into your VLC installation directory (e.g. `C:\Program Files\VideoLAN\VLC`).
 3. Open a Command Prompt in your VLC directory and refresh the plugin cache:
    ```cmd
    vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
    ```
-4. Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video — subtitles will appear on screen automatically!
-5. Alternatively, open VLC, go to `Tools -> Preferences (Ctrl+P) -> Show settings -> All -> Audio -> Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator).
+4. Launch VLC with `--audio-filter=vlc_whisper`.
 
 ---
 
-## Platform & Compatibility List
+## Platform & Compatibility Matrix
 
-| Component / Feature          | Support Status                               | Notes                                                                                                                                     |
-| :--------------------------- | :------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Windows 10 / 11 (64-bit)** | **Supported**                                | Complete installer wizard, Vulkan GPU acceleration, and CPU fallback.                                                                     |
-| **Linux (x86_64)**           | **Experimental / Dev Preview**               | Compiles and runs from source. Official native packages planned for M5.                                                                   |
-| **macOS**                    | **Unsupported**                              | Not currently planned for initial releases.                                                                                               |
-| **VLC Media Player**         | **VLC 3.0.x (64-bit)**                       | Standard desktop 64-bit VLC release. 32-bit builds are unsupported.                                                                       |
-| **Hardware Backends**        | **Vulkan GPU & Multi-Core CPU**              | Automatic GPU detection with seamless CPU fallback.                                                                                       |
-| **Validated Languages**      | **English, Romanian**                        | Fully tested end-to-end. Other languages supported by the bundled Whisper models may work but have not yet been validated by VLC-Whisper. |
-| **Subtitle Translation**     | **Opt-in (Keyless Google Translate Engine)** | 3-tier fallback (Web RPC, GTX, Mobile scrape). Off by default.                                                                            |
+| Component / Feature | Support Status | Notes |
+| :--- | :--- | :--- |
+| **Windows 10 / 11 (64-bit)** | **Supported** | Complete installer wizard, Vulkan GPU acceleration, and CPU fallback. |
+| **Linux (x86_64)** | **Experimental / Dev Preview** | Compiles and runs from source. Official native packages planned for M5. |
+| **macOS** | **Unsupported** | Not currently planned for initial releases. |
+| **VLC Media Player** | **VLC 3.0.x (64-bit)** | Standard desktop 64-bit VLC release. 32-bit builds are unsupported. |
+| **Hardware Backends** | **Vulkan GPU & Multi-Core CPU** | Automatic GPU detection with seamless CPU fallback. |
+| **Validated Languages** | **English, Romanian** | Fully tested end-to-end. Whisper's 90+ other languages work via models. |
+| **Subtitle Translation** | **Opt-in (Keyless Google Engine)** | 3-tier fallback (Web RPC, GTX, Mobile scrape). Off by default. |
 
 ---
 
 ## Key Features
 
-- 🔒 **100% Offline & Private by Default**: All audio decoding, voice activity detection, and speech recognition occur locally in memory. Zero audio or transcript data ever leaves your computer, no telemetry involved (aside from opt-in, local logging for debug purposes; enable/disable in settings).
+- 🔒 **100% Offline & Private by Default**: All audio decoding, voice activity detection, and speech recognition occur locally in memory. Zero audio or transcript data ever leaves your computer.
 - ⚡ **Hardware Acceleration**: Automatic Vulkan GPU acceleration for near-instant speech decoding, with transparent multi-threaded CPU fallback.
-- 🌐 **Real-Time Subtitle Translation**: Translate subtitles live into your native language with single-line or dual-line display modes. Uses a resilient 3-tier fallback engine with zero API keys or subscriptions required (_opt-in only_).
+- 🌐 **Real-Time Subtitle Translation**: Translate subtitles on-the-fly into your native language with single-line or dual-line display modes. Uses a resilient 3-tier fallback engine with zero API keys or subscriptions required (*opt-in only*).
 - 🎙️ **Silero Voice Activity Detection**: Filters out background noise, silence, and instrumental music to eliminate phantom subtitles and hallucinations.
-- ⏩ **Seamless Playback Controls**: Full timeline synchronization — seeking, pausing, and resuming seamlessly refresh captions without audio glitching.
+- ⏩ **Seamless Playback Controls**: Full timeline synchronization — seeking, scrubbing, pausing, and resuming seamlessly refresh captions without audio glitching.
 - 🎛️ **In-VLC Settings Menu**: Adjust models, languages, CPU thread count, and hardware backend directly inside VLC via **View > VLC-Whisper Settings**.
-- 📦 **On-Demand Model Downloader**: Ships with the fast multilingual `tiny` model. Download higher-accuracy models (`base`, `small`, `medium`, `large`) on demand directly within VLC.
+- 📦 **On-Demand Model Downloader**: Ships with the fast multilingual `tiny` model. Download higher-accuracy models (`base`, `small`, `medium`, `large-v3`) on demand directly within VLC.
 
 ---
 
@@ -87,14 +85,30 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 
 Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Settings**) from the VLC menu bar:
 
-![settings](./assets/vlc-whisper-settings.png)
+```
+┌──────────────────────────────────────────────────────────┐
+│ VLC-Whisper Settings                                     │
+├──────────────────────────────────────────────────────────┤
+│ Engine (Backend):  [ auto (GPU if available)       ▼ ]   │
+│ Speech Model:      [ tiny (multilingual)           ▼ ]   │
+│ Audio Language:    [ English                       ▼ ]   │
+│ CPU Threads:       [ 4                             ▼ ]   │
+│                                                          │
+│ [x] Enable Real-Time Translation                         │
+│ Source Language:   [ auto                          ▼ ]   │
+│ Target Language:   [ Romanian (ro)                 ▼ ]   │
+│ Placement Mode:    [ Dual line: source + trans     ▼ ]   │
+│                                                          │
+│ [ Apply Settings ]        [ Download Selected Model ]    │
+└──────────────────────────────────────────────────────────┘
+```
 
-- **Engine (Backend)**: Choose the transcription backend. Auto is recommended and will use GPU acceleration when available.
-- **Speech Model**: Switch between bundled `tiny` and downloaded models (`tiny.en`, `base`, `small`, `medium`, `large`). The `en` models are restricted to only transcribe English language with slightly better accuracy.
+- **Engine (Backend)**: `auto` (auto-detects Vulkan GPU), `gpu` (force Vulkan), or `cpu` (multi-threaded CPU).
+- **Speech Model**: Switch between bundled `tiny` and downloaded models (`tiny.en`, `base`, `small`, `medium`, `large-v3`).
 - **Audio Language**: Select the primary spoken language in your media (`English`, `Romanian`, `Spanish`, `French`, `German`, `Turkish`, etc.).
-- **CPU Threads**: Number of CPU worker threads. The default of 4 is recommended for most systems.
-- **Real-Time Translation**: Check the box to enable live translation of finalized subtitles. Choose **Dual line** (shows original speech and translation stacked) or **Translation only** (default).
-- **Downloading Models**: Select any model in the dropdown and click **Download Selected Model**. The worker downloads and validates the model in the background over HTTPS without pausing playback.
+- **CPU Threads**: Set CPU worker threads (`1` to `16`, default: `4`).
+- **Real-Time Translation**: Check the box to enable live translation of finalized subtitles. Choose **Dual line** (shows original speech and translation stacked) or **Translation only**.
+- **Downloading Models**: Select any model in the dropdown and click **Download Selected Model**. The worker downloads and validates the model in the background over HTTPS without freezing playback.
 
 ---
 
@@ -106,7 +120,6 @@ Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Sett
 1. Verify that VLC was launched with the audio filter active. Check that you used the **"VLC (with AI Whisper Captions)"** shortcut, or check **Tools > Preferences > Show settings: All > Audio > Filters** and ensure **vlc_whisper** is checked.
 2. Confirm the plugin cache is updated by running `vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"`.
 3. Check **View > VLC-Whisper Settings** to ensure a valid model is selected.
-4. If all else fails, report a bug using the [issue tracker](https://github.com/rzv04/vlc-whisper/issues), using the specified template. **Ensure you provide logs!**
 </details>
 
 <details>
@@ -128,8 +141,7 @@ Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Sett
 <details>
 <summary><b>How do I uninstall VLC-Whisper?</b></summary>
 
-Run `uninstall-vlc-whisper.exe` from your VLC installation directory, or use Windows **Settings > Apps > Installed apps > VLC-Whisper AI Subtitle Plugin > Uninstall**. Alternatively, go to **Control Panel > Programs > Uninstall a program** and uninstall **VLC-Whisper AI Subtitle Plugin**. The uninstaller removes all plugin binaries, worker executables, shortcuts, per-user model caches and registry keys.
-
+Run `uninstall-vlc-whisper.exe` from your VLC installation directory, or use Windows **Settings > Apps > Installed apps > VLC-Whisper > Uninstall**. The uninstaller removes all plugin binaries, worker executables, shortcuts, and per-user model caches.
 </details>
 
 ---
@@ -169,7 +181,9 @@ flowchart TB
     end
 ```
 
-Please refer to the documentation at `docs/` to have an extensive view of the current architecture, dependencies, and decisions made.
+- **Plugin Layer (`libvlc_whisper_plugin`)**: Out-of-tree VLC `audio_filter` plugin capturing PCM frames in real time without blocking VLC's audio pipeline (zero locks, zero heap allocations in audio callbacks).
+- **Worker Layer (`vlc-whisper-worker`)**: Standalone AI process hosting Whisper inference, Silero VAD, and asynchronous HTTP translation.
+- **Secure Local IPC**: Authenticated communication over local named pipes (Windows) or Unix domain sockets (Linux) secured by a per-session 32-byte secret token.
 
 ---
 
@@ -178,7 +192,6 @@ Please refer to the documentation at `docs/` to have an extensive view of the cu
 ### Prerequisites
 
 #### Ubuntu / Debian
-
 ```bash
 # Core build system and compilers
 sudo apt-get update && sudo apt-get install -y \
@@ -193,7 +206,6 @@ sudo apt-get install -y libvulkan-dev glslc
 ```
 
 #### Fedora / RHEL
-
 ```bash
 sudo dnf install -y cmake ninja-build gcc gcc-c++ clang-tools-extra valgrind \
   mingw64-gcc mingw64-gcc-c++ vulkan-loader-devel glslc nsis
@@ -214,21 +226,20 @@ cd vlc-whisper
 
 ### CMake Presets Reference
 
-| Preset Name               | Target OS     | Backend                        | Output Binary                | Purpose                      |
-| :------------------------ | :------------ | :----------------------------- | :--------------------------- | :--------------------------- |
-| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker`         | Linux development & tests    |
-| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                       | `vlc-whisper-worker-cpu`     | CPU-only testing             |
-| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                | `vlc-whisper-worker-cpu`     | Test code coverage           |
-| `windows-x64-release`     | Windows x64   | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe`     | Production Windows installer |
-| `windows-x64-release-cpu` | Windows x64   | CPU-only                       | `vlc-whisper-worker-cpu.exe` | Standalone CPU release       |
-| `windows-x64-debug`       | Windows x64   | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe`     | Windows debug symbols        |
+| Preset Name | Target OS | Backend | Output Binary | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| `linux-x64-debug` | Linux (Debug) | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker` | Linux development & tests |
+| `linux-x64-debug-cpu` | Linux (Debug) | CPU-only | `vlc-whisper-worker-cpu` | CPU-only testing |
+| `linux-x64-coverage` | Linux (Debug) | CPU-only + gcov | `vlc-whisper-worker-cpu` | Test code coverage |
+| `windows-x64-release` | Windows x64 | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe` | Production Windows installer |
+| `windows-x64-release-cpu` | Windows x64 | CPU-only | `vlc-whisper-worker-cpu.exe`| Standalone CPU release |
+| `windows-x64-debug` | Windows x64 | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe` | Windows debug symbols |
 
 ---
 
 ### Compilation Commands
 
 #### 1. Linux Native Build & Test
-
 ```bash
 cmake --preset linux-x64-debug
 cmake --build --preset linux-x64-debug -j4
@@ -236,14 +247,12 @@ ctest --preset linux-x64-debug --output-on-failure
 ```
 
 #### 2. Windows Cross-Compilation (CPU-only, MinGW)
-
 ```bash
 cmake --preset windows-x64-release-cpu
 cmake --build --preset windows-x64-release-cpu -j4
 ```
 
 #### 3. Building the Windows Installer (.exe & .zip)
-
 ```bash
 # Build CPU fallback binary
 cmake --preset windows-x64-release-cpu && cmake --build --preset windows-x64-release-cpu -j4
@@ -262,13 +271,11 @@ cpack --config build/windows-x64-release/CPackConfig.cmake
 ### Testing & Quality Assurance
 
 #### Running Full Test Suite
-
 ```bash
 ctest --preset linux-x64-debug --output-on-failure
 ```
 
 #### Valgrind Memory Leak Verification
-
 ```bash
 ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure \
   --extra-memcheck-options=--leak-check=full \
@@ -276,7 +283,6 @@ ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure \
 ```
 
 #### Code Coverage
-
 ```bash
 cmake --preset linux-x64-coverage && cmake --build --preset linux-x64-coverage
 ctest --preset linux-x64-coverage
@@ -290,7 +296,6 @@ gcovr -r . --html-details build/coverage.html --exclude 'worker/third_party/' --
 VLC-Whisper is open-source software licensed under the [MIT License](LICENSE).
 
 Third-party dependencies and assets:
-
 - **whisper.cpp & ggml**: MIT License
 - **OpenAI Whisper Models**: MIT License
 - **Silero VAD Model**: MIT License

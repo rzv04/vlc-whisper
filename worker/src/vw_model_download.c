@@ -337,7 +337,7 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
   MultiByteToWideChar(CP_UTF8, 0, host, -1, wHost, 256);
   MultiByteToWideChar(CP_UTF8, 0, path, -1, wPath, 2048);
 
-  HINTERNET hSession = WinHttpOpen(L"vlc-whisper/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
+  HINTERNET hSession = WinHttpOpen(L"vlc-whisper/0.1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                    WINHTTP_NO_PROXY_BYPASS, 0);
   if (!hSession) {
     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "WinHttpOpen failed (%lu)", (unsigned long)GetLastError());

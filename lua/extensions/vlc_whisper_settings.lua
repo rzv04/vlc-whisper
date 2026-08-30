@@ -586,7 +586,7 @@ end
 function descriptor()
   return {
     title = "VLC-Whisper Settings",
-    version = "0.3.0",
+    version = "0.1.0",
     author = "vlc-whisper",
     url = "https://github.com/rzv04/vlc-whisper",
     shortdesc = "VLC-Whisper Settings",
