@@ -256,6 +256,7 @@ typedef struct vw_caption_segment {  // worker to plugin
   uint16_t text_bytes;
   char* translated_text_utf8;
   uint16_t translated_text_bytes;
+  bool translation_attempted;
   uint32_t translation_latency_us;
   uint8_t translation_tier;
 } vw_caption_segment_t;

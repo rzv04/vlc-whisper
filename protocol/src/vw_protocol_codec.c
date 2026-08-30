@@ -122,7 +122,8 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
       ENC_FIELD(p->is_final);
       ENC_FIELD(p->text_bytes);
       ENC_BYTES(p->text_utf8, p->text_bytes);
-      if (p->translated_text_bytes > 0 && p->translated_text_utf8) {
+      if (p->translated_text_bytes > 0 && !p->translated_text_utf8) return false;
+      if (p->translation_attempted || p->translated_text_bytes > 0) {
         ENC_FIELD(p->translated_text_bytes);
         ENC_BYTES(p->translated_text_utf8, p->translated_text_bytes);
         ENC_FIELD(p->translation_latency_us);
@@ -308,17 +309,21 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
       DEC_PTR(p->text_utf8, p->text_bytes);
       p->translated_text_bytes = 0;
       p->translated_text_utf8 = NULL;
+      p->translation_attempted = false;
       p->translation_latency_us = 0;
       p->translation_tier = 0;
-      if (read_pos + sizeof(uint16_t) <= buffer_size) {
+      if (read_pos < buffer_size) {
+        if (buffer_size - read_pos < sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint8_t)) return false;
         DEC_FIELD(p->translated_text_bytes);
         if (p->translated_text_bytes > 0) {
           DEC_PTR(p->translated_text_utf8, p->translated_text_bytes);
-          if (read_pos + sizeof(uint32_t) + sizeof(uint8_t) <= buffer_size) {
-            DEC_FIELD(p->translation_latency_us);
-            DEC_FIELD(p->translation_tier);
-          }
+        } else {
+          p->translated_text_utf8 = NULL;
         }
+        if (buffer_size - read_pos != sizeof(uint32_t) + sizeof(uint8_t)) return false;
+        DEC_FIELD(p->translation_latency_us);
+        DEC_FIELD(p->translation_tier);
+        p->translation_attempted = true;
       }
       break;
     }

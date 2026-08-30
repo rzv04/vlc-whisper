@@ -399,6 +399,7 @@ int main(void) {
         .text_utf8 = (char*)"Hello world",
         .translated_text_bytes = 10,
         .translated_text_utf8 = (char*)"Salut lume",
+        .translation_attempted = true,
         .translation_latency_us = 250000,
         .translation_tier = 1,
     };
@@ -413,7 +414,27 @@ int main(void) {
     EXPECT(strncmp(dec_tseg.translated_text_utf8, "Salut lume", 10) == 0);
     EXPECT(dec_tseg.translation_latency_us == 250000);
     EXPECT(dec_tseg.translation_tier == 1);
+    EXPECT(dec_tseg.translation_attempted);
     EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &dec_tseg));
+
+    // Failed attempts still carry elapsed latency so benchmark timeout/failure classification remains accurate.
+    tseg.translated_text_bytes = 0;
+    tseg.translated_text_utf8 = NULL;
+    tseg.translation_latency_us = 800000;
+    tseg.translation_tier = 0;
+    EXPECT(vw_protocol_encode_payload(VW_MSG_CAPTION_SEGMENT, &tseg, buffer, sizeof(buffer), &written));
+    memset(&dec_tseg, 0, sizeof(dec_tseg));
+    EXPECT(vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, buffer, written, &dec_tseg));
+    EXPECT(dec_tseg.translation_attempted);
+    EXPECT(dec_tseg.translated_text_bytes == 0);
+    EXPECT(dec_tseg.translation_latency_us == 800000);
+    EXPECT(dec_tseg.translation_tier == 0);
+    EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &dec_tseg));
+
+    // Once the optional translation length appears, latency and tier are mandatory and no trailing bytes are valid.
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, buffer, written - 1U, &dec_tseg));
+    buffer[written] = 0;
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, buffer, written + 1U, &dec_tseg));
   }
 
   printf("test_protocol_codec PASSED\n");

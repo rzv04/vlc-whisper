@@ -414,17 +414,22 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   // Buffer incoming segment as pending so its display duration can be clipped by any successor cue
   presenter->has_pending = true;
   presenter->pending_segment = *segment;
-  strncpy(presenter->pending_text, segment->text_utf8, sizeof(presenter->pending_text) - 1);
-  presenter->pending_text[sizeof(presenter->pending_text) - 1] = '\0';
+  size_t raw_len = segment->text_bytes ? segment->text_bytes : strlen(segment->text_utf8);
+  size_t max_src = raw_len < VW_MAX_TEXT_BYTES ? raw_len : VW_MAX_TEXT_BYTES;
+  size_t text_bytes = vw_utf8_safe_len(segment->text_utf8, max_src);
+  memcpy(presenter->pending_text, segment->text_utf8, text_bytes);
+  presenter->pending_text[text_bytes] = '\0';
   presenter->pending_segment.text_utf8 = presenter->pending_text;
-  presenter->pending_segment.text_bytes = (uint16_t)strlen(presenter->pending_text);
+  presenter->pending_segment.text_bytes = (uint16_t)text_bytes;
 
   if (segment->translated_text_utf8 && segment->translated_text_bytes > 0) {
-    strncpy(presenter->pending_translated_text, segment->translated_text_utf8,
-            sizeof(presenter->pending_translated_text) - 1);
-    presenter->pending_translated_text[sizeof(presenter->pending_translated_text) - 1] = '\0';
+    size_t trans_raw = segment->translated_text_bytes;
+    size_t max_trans = trans_raw < VW_MAX_TEXT_BYTES ? trans_raw : VW_MAX_TEXT_BYTES;
+    size_t translated_bytes = vw_utf8_safe_len(segment->translated_text_utf8, max_trans);
+    memcpy(presenter->pending_translated_text, segment->translated_text_utf8, translated_bytes);
+    presenter->pending_translated_text[translated_bytes] = '\0';
     presenter->pending_segment.translated_text_utf8 = presenter->pending_translated_text;
-    presenter->pending_segment.translated_text_bytes = (uint16_t)strlen(presenter->pending_translated_text);
+    presenter->pending_segment.translated_text_bytes = (uint16_t)translated_bytes;
   } else {
     presenter->pending_translated_text[0] = '\0';
     presenter->pending_segment.translated_text_utf8 = NULL;

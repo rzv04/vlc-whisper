@@ -87,13 +87,13 @@ void vw_worker_client_disconnect(vw_worker_client_t* client);
 // A worker-to-plugin frame decoded by vw_worker_client_receive_frame. Exactly one field is valid
 // depending on `type`; segment.text_utf8 always points into text_buf (owned storage).
 typedef struct vw_worker_recv {
-  vw_message_type_t type;                  // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR | MODEL_PROGRESS
-  vw_caption_segment_t segment;            // valid when type == VW_MSG_CAPTION_SEGMENT; text_utf8 points into text_buf
-  vw_msg_status_t status;                  // valid when type == VW_MSG_STATUS
-  vw_msg_error_t error;                    // valid when type == VW_MSG_ERROR
-  vw_msg_model_progress_t progress;        // valid when type == VW_MSG_MODEL_PROGRESS
-  char text_buf[VW_MAX_TEXT_BYTES];        // storage that owns segment.text_utf8 (NUL-terminated)
-  char trans_text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.translated_text_utf8 (NUL-terminated)
+  vw_message_type_t type;                 // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR | MODEL_PROGRESS
+  vw_caption_segment_t segment;           // valid when type == VW_MSG_CAPTION_SEGMENT; text_utf8 points into text_buf
+  vw_msg_status_t status;                 // valid when type == VW_MSG_STATUS
+  vw_msg_error_t error;                   // valid when type == VW_MSG_ERROR
+  vw_msg_model_progress_t progress;       // valid when type == VW_MSG_MODEL_PROGRESS
+  char text_buf[VW_MAX_TEXT_BYTES + 1U];  // storage that owns segment.text_utf8 (NUL-terminated)
+  char trans_text_buf[VW_MAX_TEXT_BYTES + 1U];  // storage that owns segment.translated_text_utf8 (NUL-terminated)
 } vw_worker_recv_t;
 
 // Reads one worker-to-plugin frame. Returns VW_IPC_RECV_OK (1) = frame decoded into out,

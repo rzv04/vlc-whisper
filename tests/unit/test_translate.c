@@ -253,6 +253,19 @@ static void test_tier_constants(void) {
   assert(VW_TRANSLATE_TIMEOUT_MS == 800);
 }
 
+static void test_language_code_sanitization(void) {
+  hook_state_t state = {.mode = HOOK_FALLBACK_TO_GTX};
+  vw_translate_set_test_http_hook(test_http_hook, &state);
+  char out[256];
+  uint8_t tier = 0;
+  uint32_t latency_us = 0;
+  // Inject malicious query characters into language codes
+  bool ok = vw_translate_text("Hello world", "en&injected=1", "ro?param=2", out, sizeof(out), &tier, &latency_us);
+  vw_translate_set_test_http_hook(NULL, NULL);
+  assert(ok);
+  assert(strcmp(out, "Salut lume") == 0);
+}
+
 int main(void) {
   test_url_encode();
   test_html_unescape();
@@ -263,6 +276,7 @@ int main(void) {
   test_real_fallback_path_with_hook();
   test_global_deadline();
   test_tier_constants();
+  test_language_code_sanitization();
   printf("All translate unit tests PASSED.\n");
   return 0;
 }

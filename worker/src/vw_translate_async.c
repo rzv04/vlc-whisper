@@ -14,12 +14,18 @@
 
 typedef struct vw_translate_job {
   uint64_t epoch;
+  uint64_t ordinal;
   vw_caption_segment_t segment;
   char source_text[VW_MAX_TEXT_BYTES + 1U];
   char source_lang[16];
   char target_lang[16];
   bool skip_translation;
 } vw_translate_job_t;
+
+typedef struct vw_translate_async_completion {
+  uint64_t ordinal;
+  vw_translate_async_result_t result;
+} vw_translate_async_completion_t;
 
 struct vw_translate_async {
   pthread_t thread;
@@ -28,21 +34,65 @@ struct vw_translate_async {
   bool thread_started;
   bool stopping;
   uint64_t epoch;
+  uint64_t next_submit_ordinal;
+  uint64_t next_result_ordinal;
 
   vw_translate_job_t jobs[VW_TRANSLATE_ASYNC_QUEUE_CAPACITY];
   size_t job_head;
   size_t job_tail;
   size_t job_count;
+  size_t inflight_count;
+  size_t active_translation_count;
 
-  vw_translate_async_result_t results[VW_TRANSLATE_ASYNC_RESULT_CAPACITY];
+  vw_translate_async_completion_t results[VW_TRANSLATE_ASYNC_RESULT_CAPACITY];
   size_t result_head;
   size_t result_tail;
   size_t result_count;
 };
 
+static uint64_t vw_translate_async_next_ordinal(uint64_t ordinal) { return ordinal == UINT64_MAX ? 1U : ordinal + 1U; }
+
+static void vw_translate_async_push_result_locked(vw_translate_async_t* async, uint64_t ordinal,
+                                                  const vw_translate_async_result_t* result) {
+  // Submission bounds jobs, in-flight work, and unconsumed completions to RESULT_CAPACITY. A completion replaces
+  // one in-flight job, so this ring never needs to discard an earlier cue.
+  if (async->result_count >= VW_TRANSLATE_ASYNC_RESULT_CAPACITY) return;
+  async->results[async->result_head].ordinal = ordinal;
+  async->results[async->result_head].result = *result;
+  async->result_head = (async->result_head + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+  async->result_count++;
+}
+
+static bool vw_translate_async_find_next_result_locked(const vw_translate_async_t* async, size_t* index_out) {
+  size_t index = async->result_tail;
+  for (size_t offset = 0; offset < async->result_count; offset++) {
+    if (async->results[index].ordinal == async->next_result_ordinal) {
+      *index_out = index;
+      return true;
+    }
+    index = (index + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+  }
+  return false;
+}
+
+static void vw_translate_async_remove_result_locked(vw_translate_async_t* async, size_t completion_index) {
+  size_t move_index = completion_index;
+  size_t next_index = (move_index + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+  while (next_index != async->result_head) {
+    async->results[move_index] = async->results[next_index];
+    move_index = next_index;
+    next_index = (next_index + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+  }
+  async->result_head =
+      (async->result_head + VW_TRANSLATE_ASYNC_RESULT_CAPACITY - 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
+  async->result_count--;
+  async->next_result_ordinal = vw_translate_async_next_ordinal(async->next_result_ordinal);
+}
+
 static void vw_translate_async_bind_result_text(vw_translate_async_result_t* result) {
   if (!result) return;
   result->segment.text_utf8 = result->source_text;
+  result->segment.translation_attempted = result->attempted;
   if (result->success && result->translated_text[0]) {
     result->segment.translated_text_utf8 = result->translated_text;
     result->segment.translated_text_bytes = (uint16_t)strlen(result->translated_text);
@@ -66,6 +116,7 @@ static void* vw_translate_async_thread_main(void* opaque) {
     job = async->jobs[async->job_tail];
     async->job_tail = (async->job_tail + 1U) % VW_TRANSLATE_ASYNC_QUEUE_CAPACITY;
     async->job_count--;
+    async->inflight_count++;
     pthread_mutex_unlock(&async->mutex);
 
     vw_translate_async_result_t result;
@@ -78,7 +129,7 @@ static void* vw_translate_async_thread_main(void* opaque) {
     result.segment.translated_text_bytes = 0;
     result.segment.translation_tier = VW_TRANSLATE_TIER_NONE;
     result.segment.translation_latency_us = 0;
-    result.attempted = true;
+    result.attempted = !job.skip_translation;
 
     if (job.skip_translation) {
       result.success = false;
@@ -94,17 +145,13 @@ static void* vw_translate_async_thread_main(void* opaque) {
     }
 
     pthread_mutex_lock(&async->mutex);
-    if (!async->stopping && result.epoch == async->epoch) {
-      if (async->result_count == VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
-        // This should be unreachable with bounded capacity. Preserve newest playback state if a
-        // stalled consumer nevertheless fills the completion ring.
-        async->result_tail = (async->result_tail + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
-        async->result_count--;
-      }
-      async->results[async->result_head] = result;
-      async->result_head = (async->result_head + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
-      async->result_count++;
+    if (!job.skip_translation && job.epoch == async->epoch && async->active_translation_count > 0) {
+      async->active_translation_count--;
     }
+    if (!async->stopping && result.epoch == async->epoch) {
+      vw_translate_async_push_result_locked(async, job.ordinal, &result);
+    }
+    async->inflight_count--;
     pthread_mutex_unlock(&async->mutex);
   }
   return NULL;
@@ -114,6 +161,8 @@ vw_translate_async_t* vw_translate_async_create(void) {
   vw_translate_async_t* async = (vw_translate_async_t*)calloc(1, sizeof(*async));
   if (!async) return NULL;
   async->epoch = 1;
+  async->next_submit_ordinal = 1;
+  async->next_result_ordinal = 1;
   if (pthread_mutex_init(&async->mutex, NULL) != 0) {
     free(async);
     return NULL;
@@ -140,6 +189,7 @@ void vw_translate_async_destroy(vw_translate_async_t* async) {
   async->job_head = 0;
   async->job_tail = 0;
   async->job_count = 0;
+  async->active_translation_count = 0;
   async->result_head = 0;
   async->result_tail = 0;
   async->result_count = 0;
@@ -155,12 +205,15 @@ void vw_translate_async_invalidate(vw_translate_async_t* async) {
   if (!async) return;
   pthread_mutex_lock(&async->mutex);
   async->epoch = async->epoch == UINT64_MAX ? 1U : async->epoch + 1U;
+  async->next_submit_ordinal = 1;
+  async->next_result_ordinal = 1;
   async->job_head = 0;
   async->job_tail = 0;
   async->job_count = 0;
   async->result_head = 0;
   async->result_tail = 0;
   async->result_count = 0;
+  async->active_translation_count = 0;
   pthread_mutex_unlock(&async->mutex);
 }
 
@@ -176,15 +229,26 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
     return false;
   }
 
+  // Bound every accepted cue, including completed cues not yet consumed and the one network request currently
+  // in flight. Rejection drops only the newest input cue; it never exposes a newer caption ahead of older work.
+  if (async->job_count + async->inflight_count + async->result_count >= VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
+    pthread_mutex_unlock(&async->mutex);
+    return false;
+  }
+
   // When the active network budget is saturated, degrade this cue to source text (skip network translation)
   // while preserving exact chronological cue order in the FIFO stream.
-  bool skip = (async->job_count >= VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
+  bool skip = (async->active_translation_count >= VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
 
   if (async->job_count >= VW_TRANSLATE_ASYNC_QUEUE_CAPACITY) {
-    // Hard queue limit reached: evict the oldest pending un-processed job to results as a skipped/degraded completion
+    // Hard queue limit reached: complete the oldest pending unprocessed job as source text. Ordinal-aware popping
+    // withholds it until any older in-flight cue has completed.
     vw_translate_job_t* oldest = &async->jobs[async->job_tail];
     async->job_tail = (async->job_tail + 1U) % VW_TRANSLATE_ASYNC_QUEUE_CAPACITY;
     async->job_count--;
+    if (!oldest->skip_translation && async->active_translation_count > 0) {
+      async->active_translation_count--;
+    }
 
     vw_translate_async_result_t evicted;
     memset(&evicted, 0, sizeof(evicted));
@@ -196,20 +260,17 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
     evicted.success = false;
     vw_translate_async_bind_result_text(&evicted);
 
-    if (async->result_count == VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
-      async->result_tail = (async->result_tail + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
-      async->result_count--;
-    }
-    async->results[async->result_head] = evicted;
-    async->result_head = (async->result_head + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
-    async->result_count++;
+    vw_translate_async_push_result_locked(async, oldest->ordinal, &evicted);
   }
 
   vw_translate_job_t* job = &async->jobs[async->job_head];
   memset(job, 0, sizeof(*job));
   job->epoch = async->epoch;
+  job->ordinal = async->next_submit_ordinal;
+  async->next_submit_ordinal = vw_translate_async_next_ordinal(async->next_submit_ordinal);
   job->segment = *segment;
   job->skip_translation = skip;
+  if (!skip) async->active_translation_count++;
   memcpy(job->source_text, segment->text_utf8, text_len);
   job->source_text[text_len] = '\0';
   job->segment.text_utf8 = job->source_text;
@@ -228,7 +289,8 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
 bool vw_translate_async_has_result(vw_translate_async_t* async) {
   if (!async) return false;
   pthread_mutex_lock(&async->mutex);
-  bool has_result = async->result_count > 0;
+  size_t index = 0;
+  bool has_result = vw_translate_async_find_next_result_locked(async, &index);
   pthread_mutex_unlock(&async->mutex);
   return has_result;
 }
@@ -240,10 +302,33 @@ bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_
     pthread_mutex_unlock(&async->mutex);
     return false;
   }
-  *out = async->results[async->result_tail];
-  async->result_tail = (async->result_tail + 1U) % VW_TRANSLATE_ASYNC_RESULT_CAPACITY;
-  async->result_count--;
+  size_t completion_index = 0;
+  if (!vw_translate_async_find_next_result_locked(async, &completion_index)) {
+    pthread_mutex_unlock(&async->mutex);
+    return false;
+  }
+
+  *out = async->results[completion_index].result;
+  vw_translate_async_remove_result_locked(async, completion_index);
   pthread_mutex_unlock(&async->mutex);
   vw_translate_async_bind_result_text(out);
+  return true;
+}
+
+bool vw_translate_async_try_deliver(vw_translate_async_t* async, vw_translate_async_delivery_fn deliver,
+                                    void* user_data) {
+  if (!async || !deliver) return false;
+  pthread_mutex_lock(&async->mutex);
+  size_t completion_index = 0;
+  if (!vw_translate_async_find_next_result_locked(async, &completion_index)) {
+    pthread_mutex_unlock(&async->mutex);
+    return false;
+  }
+
+  vw_translate_async_result_t result = async->results[completion_index].result;
+  vw_translate_async_bind_result_text(&result);
+  deliver(&result, user_data);
+  vw_translate_async_remove_result_locked(async, completion_index);
+  pthread_mutex_unlock(&async->mutex);
   return true;
 }

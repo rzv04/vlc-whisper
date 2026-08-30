@@ -23,6 +23,8 @@ typedef struct vw_translate_async_result {
   bool success;
 } vw_translate_async_result_t;
 
+typedef void (*vw_translate_async_delivery_fn)(const vw_translate_async_result_t* result, void* user_data);
+
 // Creates one background translator instance with dedicated worker thread. Network activity occurs exclusively on
 // this background thread without blocking the worker loop.
 vw_translate_async_t* vw_translate_async_create(void);
@@ -35,16 +37,22 @@ void vw_translate_async_destroy(vw_translate_async_t* async);
 // session reset, or config change.
 void vw_translate_async_invalidate(vw_translate_async_t* async);
 
-// Enqueues a finalized caption segment into FIFO translation pipeline. When active network budget is saturated,
-// degrades to untranslated source while preserving exact chronological cue order.
+// Enqueues a finalized caption segment into FIFO translation pipeline. Saturated work degrades to source text; a full
+// bounded pipeline rejects only the newest cue, preserving the chronological order of accepted cues.
 bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_segment_t* segment,
                                const char* source_lang, const char* target_lang);
 
-// Checks if at least one translated or degraded fallback caption completion is available in the completion ring.
+// Checks whether the next chronological translated or degraded completion is available without exposing a later cue
+// while an earlier translation is still in flight.
 bool vw_translate_async_has_result(vw_translate_async_t* async);
 
 // Pops the next ordered caption completion without blocking. Rebinds internal string pointers to caller-owned result
 // buffers.
 bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_result_t* out);
+
+// Delivers the next ordered completion while serializing against epoch invalidation, preventing stale cue emission
+// during concurrent seek or translation-configuration controls.
+bool vw_translate_async_try_deliver(vw_translate_async_t* async, vw_translate_async_delivery_fn deliver,
+                                    void* user_data);
 
 #endif  // VW_TRANSLATE_ASYNC_H_

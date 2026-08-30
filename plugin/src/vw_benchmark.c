@@ -202,7 +202,7 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
   if (!benchmark || !benchmark->active) return;
   benchmark->translation_requests_sent++;
   benchmark->translation_duration_us += latency_us;
-  if (benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
+  if (latency_us > 0 && benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
     benchmark->translation_latency_samples[benchmark->translation_latency_sample_count++] = (int64_t)latency_us;
   }
   if (success) {

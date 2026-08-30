@@ -650,9 +650,6 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
           // Copy segment text into owned storage so the caller's zero-heap path never aliases
           // the freed wire payload.
           uint16_t n = seg->text_bytes;
-          if (n >= VW_MAX_TEXT_BYTES) {
-            n = VW_MAX_TEXT_BYTES - 1;
-          }
           memcpy(out->text_buf, seg->text_utf8, n);
           out->text_buf[n] = '\0';
           seg->text_utf8 = out->text_buf;
@@ -660,9 +657,6 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
 
           if (seg->translated_text_utf8 && seg->translated_text_bytes > 0) {
             uint16_t tn = seg->translated_text_bytes;
-            if (tn >= VW_MAX_TEXT_BYTES) {
-              tn = VW_MAX_TEXT_BYTES - 1;
-            }
             memcpy(out->trans_text_buf, seg->translated_text_utf8, tn);
             out->trans_text_buf[tn] = '\0';
             seg->translated_text_utf8 = out->trans_text_buf;

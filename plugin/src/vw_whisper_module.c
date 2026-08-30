@@ -719,8 +719,17 @@ static void* vw_plugin_sender_main(void* arg) {
       sys->cfg_translate_mode = (trans_mode == 0) ? 0 : 1;
 
       if (sys->client) {
-        vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
-                                             sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode);
+        if (!vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
+                                                  sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode)) {
+          if ((sys->client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
+            sys->cfg_translate_enabled = false;
+            config_PutInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-enabled", 0);
+            vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_TRANSLATE_UNSUPPORTED",
+                         "worker lacks translation capability; disabling translation setting");
+          } else {
+            atomic_store(&sys->worker_dead, true);
+          }
+        }
       }
       sys->cfg_logging = logging;
       vw_log_set_enabled(logging);
@@ -774,8 +783,17 @@ static void* vw_plugin_sender_main(void* arg) {
           snprintf(sys->cfg_translate_to, sizeof(sys->cfg_translate_to), "%s", trans_to_cmp);
           sys->cfg_translate_mode = trans_mode_cmp;
           if (sys->client) {
-            vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
-                                                 sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode);
+            if (!vw_worker_client_send_translate_ctrl(sys->client, sys->cfg_translate_enabled, sys->cfg_translate_from,
+                                                      sys->cfg_translate_to, (uint8_t)sys->cfg_translate_mode)) {
+              if ((sys->client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
+                sys->cfg_translate_enabled = false;
+                config_PutInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-translate-enabled", 0);
+                vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_TRANSLATE_UNSUPPORTED",
+                             "worker lacks translation capability; disabling translation setting");
+              } else {
+                atomic_store(&sys->worker_dead, true);
+              }
+            }
           }
           vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_TRANSLATE_CTRL",
                        "updated translation config: enabled=%d from=%s to=%s mode=%d", (int)sys->cfg_translate_enabled,
@@ -1089,7 +1107,7 @@ static void* vw_plugin_sender_main(void* arg) {
           sys->segments_received++;
           int64_t segment_now_us = vw_platform_get_monotonic_time_us();
           vw_benchmark_record_caption_received(&sys->benchmark, &recv.segment, segment_now_us, is_source_mode);
-          if (recv.segment.translated_text_bytes > 0 || sys->cfg_translate_enabled) {
+          if (recv.segment.translation_attempted) {
             vw_benchmark_record_translation(&sys->benchmark, recv.segment.translation_tier,
                                             recv.segment.translation_latency_us,
                                             recv.segment.translated_text_bytes > 0);

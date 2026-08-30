@@ -278,13 +278,17 @@ static void* vw_fake_server_frames_thread(void* arg) {
   vw_ipc_send(server, hdr_buf, 20);
   vw_ipc_send(server, payload, pause_len);
 
-  // Frame 2: CAPTION_SEGMENT with text "hello world"
+  // Frame 2: maximum-size CAPTION_SEGMENT ending in a multibyte code point.
+  char max_text[VW_MAX_TEXT_BYTES + 1U];
+  memset(max_text, 'a', VW_MAX_TEXT_BYTES - 3U);
+  memcpy(max_text + VW_MAX_TEXT_BYTES - 3U, "\xE2\x82\xAC", 3U);
+  max_text[VW_MAX_TEXT_BYTES] = '\0';
   vw_caption_segment_t seg = {.segment_id = 7,
                               .start_pts_us = 1000000,
                               .end_pts_us = 2000000,
                               .is_final = true,
-                              .text_utf8 = "hello world",
-                              .text_bytes = 11};
+                              .text_utf8 = max_text,
+                              .text_bytes = VW_MAX_TEXT_BYTES};
   memset(seg.session_id.bytes, 0xAB, VW_SESSION_ID_BYTES);
   size_t seg_len = 0;
   uint8_t seg_buf[VW_CAPTION_SEGMENT_FIXED_BYTES + VW_MAX_TEXT_BYTES];
@@ -482,8 +486,9 @@ int main(void) {
   EXPECT(recv.segment.start_pts_us == 1000000);
   EXPECT(recv.segment.end_pts_us == 2000000);
   EXPECT(recv.segment.is_final);
-  EXPECT(recv.segment.text_bytes == 11);
-  EXPECT(strcmp(recv.segment.text_utf8, "hello world") == 0);
+  EXPECT(recv.segment.text_bytes == VW_MAX_TEXT_BYTES);
+  EXPECT(strlen(recv.segment.text_utf8) == VW_MAX_TEXT_BYTES);
+  EXPECT(memcmp(recv.segment.text_utf8 + VW_MAX_TEXT_BYTES - 3U, "\xE2\x82\xAC", 3U) == 0);
   EXPECT(recv.segment.text_utf8 == recv.text_buf);  // owned storage, not the wire buffer
 
   // Then STATUS.

@@ -24,6 +24,7 @@
 #else
 #include <fcntl.h>
 #include <spawn.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -675,9 +676,9 @@ static bool set_cloexec(int fd) {
   return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
-static bool posix_http_request(const char* full_url, const char* body, const char* content_type, char* out_buf,
-                               size_t buf_size, int64_t deadline_us) {
-  if (!full_url || !out_buf || buf_size < 2) return false;
+static bool posix_http_request(const char* base_url, const char* post_body, const char* query_text,
+                               const char* content_type, char* out_buf, size_t buf_size, int64_t deadline_us) {
+  if (!base_url || !out_buf || buf_size < 2) return false;
   uint32_t timeout_ms = remaining_timeout_ms(deadline_us);
   if (timeout_ms == 0) return false;
 
@@ -689,13 +690,33 @@ static bool posix_http_request(const char* full_url, const char* body, const cha
     return false;
   }
 
+  const char* input_payload = post_body ? post_body : query_text;
+  int pipe_in[2] = {-1, -1};
+  if (input_payload) {
+    if (pipe(pipe_in) != 0) {
+      close(pipe_out[0]);
+      close(pipe_out[1]);
+      return false;
+    }
+    if (!set_cloexec(pipe_in[0]) || !set_cloexec(pipe_in[1])) {
+      close(pipe_in[0]);
+      close(pipe_in[1]);
+      close(pipe_out[0]);
+      close(pipe_out[1]);
+      return false;
+    }
+  }
+
   char timeout_sec_str[16];
   snprintf(timeout_sec_str, sizeof(timeout_sec_str), "%.3f", (double)timeout_ms / 1000.0);
-  const char* argv[18];
+  const char* argv[24];
   int argc = 0;
-  argv[argc++] = "curl";
+  argv[argc++] = VW_CURL_EXECUTABLE;
+  argv[argc++] = "--disable";
   argv[argc++] = "-f";
   argv[argc++] = "-sS";
+  argv[argc++] = "--proto";
+  argv[argc++] = "=https";
   argv[argc++] = "-m";
   argv[argc++] = timeout_sec_str;
   argv[argc++] = "-A";
@@ -706,36 +727,77 @@ static bool posix_http_request(const char* full_url, const char* body, const cha
     if (written < 0 || (size_t)written >= sizeof(ct_header)) {
       close(pipe_out[0]);
       close(pipe_out[1]);
+      if (input_payload) {
+        close(pipe_in[0]);
+        close(pipe_in[1]);
+      }
       return false;
     }
     argv[argc++] = "-H";
     argv[argc++] = ct_header;
   }
-  if (body) {
+  if (post_body) {
     argv[argc++] = "-X";
     argv[argc++] = "POST";
-    argv[argc++] = "--data";
-    argv[argc++] = body;
+    argv[argc++] = "--data-binary";
+    argv[argc++] = "@-";
+  } else if (query_text) {
+    argv[argc++] = "--get";
+    argv[argc++] = "--data-urlencode";
+    argv[argc++] = "q@-";
   }
-  argv[argc++] = full_url;
+
+  argv[argc++] = base_url;
   argv[argc] = NULL;
 
   posix_spawn_file_actions_t actions;
   if (posix_spawn_file_actions_init(&actions) != 0) {
     close(pipe_out[0]);
     close(pipe_out[1]);
+    if (input_payload) {
+      close(pipe_in[0]);
+      close(pipe_in[1]);
+    }
     return false;
   }
   posix_spawn_file_actions_addclose(&actions, pipe_out[0]);
   posix_spawn_file_actions_adddup2(&actions, pipe_out[1], STDOUT_FILENO);
   posix_spawn_file_actions_addclose(&actions, pipe_out[1]);
+  if (input_payload) {
+    posix_spawn_file_actions_addclose(&actions, pipe_in[1]);
+    posix_spawn_file_actions_adddup2(&actions, pipe_in[0], STDIN_FILENO);
+    posix_spawn_file_actions_addclose(&actions, pipe_in[0]);
+  }
   pid_t pid = 0;
-  int spawn_status = posix_spawnp(&pid, "curl", &actions, NULL, (char* const*)argv, environ);
+  int spawn_status = posix_spawn(&pid, VW_CURL_EXECUTABLE, &actions, NULL, (char* const*)argv, environ);
   posix_spawn_file_actions_destroy(&actions);
   close(pipe_out[1]);
+  if (input_payload) close(pipe_in[0]);
   if (spawn_status != 0) {
     close(pipe_out[0]);
+    if (input_payload) close(pipe_in[1]);
     return false;
+  }
+
+  if (input_payload) {
+    size_t payload_len = strlen(input_payload);
+    size_t written = 0;
+    while (written < payload_len) {
+      ssize_t n = write(pipe_in[1], input_payload + written, payload_len - written);
+      if (n > 0) {
+        written += (size_t)n;
+      } else if (n < 0 && errno == EINTR) {
+        continue;
+      } else {
+        break;
+      }
+    }
+    close(pipe_in[1]);
+    if (written != payload_len) {
+      close(pipe_out[0]);
+      waitpid(pid, NULL, 0);
+      return false;
+    }
   }
 
   bool overflow = false;
@@ -771,8 +833,8 @@ static bool posix_http_request(const char* full_url, const char* body, const cha
 }
 #endif
 
-static bool http_request(const char* host, const char* path, const char* body, const char* content_type, char* out_buf,
-                         size_t buf_size, int64_t deadline_us) {
+static bool http_request(const char* host, const char* path, const char* body, const char* query_text,
+                         const char* content_type, char* out_buf, size_t buf_size, int64_t deadline_us) {
   uint32_t timeout_ms = remaining_timeout_ms(deadline_us);
   if (timeout_ms == 0) return false;
 #ifdef VW_TRANSLATE_TESTING
@@ -781,13 +843,36 @@ static bool http_request(const char* host, const char* path, const char* body, c
   }
 #endif
 #ifdef _WIN32
+  if (query_text) {
+    char win_path[VW_TRANSLATE_MAX_URL_BYTES];
+    char encoded_text[VW_TRANSLATE_MAX_TEXT_BYTES * 3U + 1U];
+    if (!vw_url_encode(query_text, encoded_text, sizeof(encoded_text))) return false;
+    const char* sep = strchr(path, '?') ? "&" : "?";
+    int win_written = snprintf(win_path, sizeof(win_path), "%s%sq=%s", path, sep, encoded_text);
+    if (win_written < 0 || (size_t)win_written >= sizeof(win_path)) return false;
+    return win32_http_request(host, win_path, body, content_type, out_buf, buf_size, deadline_us);
+  }
   return win32_http_request(host, path, body, content_type, out_buf, buf_size, deadline_us);
 #else
   char full_url[VW_TRANSLATE_MAX_URL_BYTES];
   int written = snprintf(full_url, sizeof(full_url), "https://%s%s", host, path);
   if (written < 0 || (size_t)written >= sizeof(full_url)) return false;
-  return posix_http_request(full_url, body, content_type, out_buf, buf_size, deadline_us);
+  return posix_http_request(full_url, body, query_text, content_type, out_buf, buf_size, deadline_us);
 #endif
+}
+
+static bool is_valid_lang_tag(const char* lang, bool allow_auto) {
+  if (!lang || !lang[0]) return false;
+  if (allow_auto && strcmp(lang, "auto") == 0) return true;
+  size_t len = strlen(lang);
+  if (len < 2 || len > 15) return false;
+  for (size_t i = 0; i < len; i++) {
+    char c = lang[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool vw_translate_text(const char* text, const char* src_lang, const char* dst_lang, char* out_text, size_t out_size,
@@ -799,13 +884,16 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
   if (text[0] == '\0') return true;
   if (strlen(text) > VW_TRANSLATE_MAX_TEXT_BYTES) return false;
 
-  const char* sl = (src_lang && src_lang[0]) ? src_lang : "auto";
-  const char* tl = (dst_lang && dst_lang[0]) ? dst_lang : "en";
+  const char* sl = (src_lang && is_valid_lang_tag(src_lang, true)) ? src_lang : "auto";
+  const char* tl = (dst_lang && is_valid_lang_tag(dst_lang, false)) ? dst_lang : "en";
   int64_t started_us = get_monotonic_us();
   int64_t deadline_us = started_us + (int64_t)VW_TRANSLATE_TIMEOUT_MS * 1000LL;
 
-  char encoded_text[VW_TRANSLATE_MAX_TEXT_BYTES * 3U + 1U];
-  if (!vw_url_encode(text, encoded_text, sizeof(encoded_text))) goto failed;
+  char enc_sl[32];
+  char enc_tl[32];
+  if (!vw_url_encode(sl, enc_sl, sizeof(enc_sl)) || !vw_url_encode(tl, enc_tl, sizeof(enc_tl))) {
+    goto failed;
+  }
   char response[VW_TRANSLATE_MAX_RESPONSE_BYTES];
 
   char rpc_body[VW_TRANSLATE_RPC_BODY_BYTES];
@@ -813,8 +901,8 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
     const char* rpc_path =
         "/_/TranslateWebserverUi/data/batchexecute?rpcids=MkEWBc&bl=boq_translate-webserver_20221005.09_p0&soc-app=1&"
         "soc-platform=1&soc-device=1&rt=c";
-    if (http_request("translate.google.com", rpc_path, rpc_body, "application/x-www-form-urlencoded;charset=UTF-8",
-                     response, sizeof(response), deadline_us) &&
+    if (http_request("translate.google.com", rpc_path, rpc_body, NULL,
+                     "application/x-www-form-urlencoded;charset=UTF-8", response, sizeof(response), deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_rpc_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_WEB_RPC;
@@ -825,10 +913,10 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
 
   if (remaining_timeout_ms(deadline_us) > 0) {
     char gtx_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written = snprintf(gtx_path, sizeof(gtx_path), "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t&q=%s", sl, tl,
-                           encoded_text);
+    int written =
+        snprintf(gtx_path, sizeof(gtx_path), "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t", enc_sl, enc_tl);
     if (written >= 0 && (size_t)written < sizeof(gtx_path) &&
-        http_request("translate.googleapis.com", gtx_path, NULL, NULL, response, sizeof(response), deadline_us) &&
+        http_request("translate.googleapis.com", gtx_path, NULL, text, NULL, response, sizeof(response), deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_gtx_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_GTX;
@@ -839,9 +927,9 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
 
   if (remaining_timeout_ms(deadline_us) > 0) {
     char mobile_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written = snprintf(mobile_path, sizeof(mobile_path), "/m?sl=%s&tl=%s&q=%s", sl, tl, encoded_text);
+    int written = snprintf(mobile_path, sizeof(mobile_path), "/m?sl=%s&tl=%s", enc_sl, enc_tl);
     if (written >= 0 && (size_t)written < sizeof(mobile_path) &&
-        http_request("translate.google.com", mobile_path, NULL, NULL, response, sizeof(response), deadline_us) &&
+        http_request("translate.google.com", mobile_path, NULL, text, NULL, response, sizeof(response), deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_mobile_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
