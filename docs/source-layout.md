@@ -131,6 +131,12 @@ vlc-whisper/
 │   └── fixtures/                              # Test fixtures & expected outputs
 │       ├── spoken_english_16khz.wav           # Deterministic 16kHz audio sample
 │       └── expected_segments.json             # Reference transcript segments & timestamps
+├── assets/                                    # Project logos, animations, installer graphics & demos
+│   ├── vlc-whisper-logo.svg                   # Vector project logo (512x512)
+│   ├── vlc-whisper.ico                        # Multi-size Windows application icon (16..256px)
+│   ├── installer-header.bmp                   # NSIS Modern UI 2 header banner graphic (150x57)
+│   ├── vlc-whisper-logo-animation.gif         # Animated logo banner
+│   └── vlc-whisper-demo.gif                   # Playback demonstration animation
 ├── samples/                                   # Standalone demo snippets & verification utilities
 │   ├── CMakeLists.txt                         # Dynamically builds snippet executables
 │   ├── audio/                                 # Sample audio test files (output.wav, harvard.wav)
