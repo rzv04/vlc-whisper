@@ -128,7 +128,13 @@ int64_t vw_platform_get_monotonic_time_us(void) {
   if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
     return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
   }
-  return (int64_t)time(NULL) * 1000000LL;
+#ifdef CLOCK_MONOTONIC_RAW
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) == 0) {
+    return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
+  }
+#endif
+  // Never fall back to civil time (time(NULL)) for monotonic timing; return error sentinel.
+  return -1;
 }
 
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {

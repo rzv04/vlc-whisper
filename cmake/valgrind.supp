@@ -1,0 +1,53 @@
+# vlc-whisper Valgrind suppressions (VW-034)
+# Narrowly scoped to third-party Vulkan loader and LLVM initialization definite leaks
+# that are outside project ownership. Each suppression is named with vw_ prefix.
+
+{
+   vw_vulkan_loader_scope_resize
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   fun:malloc
+   fun:resize_scopes
+   fun:dl_open_worker_begin
+   fun:_dl_catch_exception
+   fun:dl_open_worker
+   fun:_dl_catch_exception
+   fun:_dl_open
+   fun:dlopen_doit
+   fun:_dl_catch_exception
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   fun:dlopen_implementation
+   fun:dlopen@@GLIBC_2.34
+   obj:*/libvulkan.so*
+}
+{
+   vw_vulkan_loader_definite_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:vkCreateInstance
+   ...
+   obj:*/libvulkan.so*
+}
+{
+   vw_vulkan_loader_definite_leak2
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:vkEnumeratePhysicalDevices
+   obj:*/libvulkan.so*
+}
+{
+   vw_llvm_init_definite_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:_ZN4llvm*
+   obj:*/libLLVM*
+}
+{
+   vw_llvm_init_definite_leak2
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:__llvm*
+   obj:*/libLLVM*
+}

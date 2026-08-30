@@ -270,13 +270,13 @@ int main(void) {
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_mid) == 0);
     EXPECT(cfg.n_threads == 16);
   }
-  // --- success: --language auto accepted (19c), length still enforced ---
+  // --- failure: --language auto is rejected; concrete Whisper language required (VW-020) ---
   {
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));
     char* argv_auto[] = {"vlc-whisper-worker", "--language", "auto", NULL};
-    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 0);
-    EXPECT_EQ_STR(cfg.language, "auto");
+    EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_auto) == 2);
+    EXPECT_EQ_STR(cfg.language, "en");
   }
   // --- failure: --language empty, too long, dangling ---
   {
@@ -323,7 +323,10 @@ int main(void) {
     char cwd_vad[VW_PATH_MAX_BYTES];
     char executable_dir[VW_PATH_MAX_BYTES];
     char install_models_dir[VW_PATH_MAX_BYTES];
+    char install_model[VW_PATH_MAX_BYTES];
     char install_vad[VW_PATH_MAX_BYTES];
+    bool install_model_owned = false;
+    bool install_vad_owned = false;
     char root_name[64];
     EXPECT(VW_TEST_GETCWD(original_cwd, sizeof(original_cwd)) != NULL);
     snprintf(root_name, sizeof(root_name), "vw_test_vad_%ld", (long)VW_TEST_PID());
@@ -339,6 +342,7 @@ int main(void) {
     EXPECT(vw_test_join_path(cwd_vad, sizeof(cwd_vad), cwd_models_dir, "ggml-silero-vad.bin"));
     EXPECT(vw_test_get_executable_dir(executable_dir, sizeof(executable_dir)));
     EXPECT(vw_test_join_path(install_models_dir, sizeof(install_models_dir), executable_dir, "models"));
+    EXPECT(vw_test_join_path(install_model, sizeof(install_model), install_models_dir, "ggml-vw-test.bin"));
     EXPECT(vw_test_join_path(install_vad, sizeof(install_vad), install_models_dir, "ggml-silero-vad.bin"));
 
     EXPECT(VW_TEST_MKDIR(root_dir) == 0);
@@ -364,7 +368,14 @@ int main(void) {
     int install_mkdir_result = VW_TEST_MKDIR(install_models_dir);
     bool install_models_created = install_mkdir_result == 0;
     if (!install_models_created) EXPECT(errno == EEXIST);
-    bool install_vad_owned = false;
+    if (!vw_test_file_exists(install_model)) {
+      FILE* install_model_file = fopen(install_model, "wb");
+      EXPECT(install_model_file != NULL);
+      if (install_model_file) {
+        fclose(install_model_file);
+        install_model_owned = true;
+      }
+    }
     if (!vw_test_file_exists(install_vad)) {
       FILE* install_vad_file = fopen(install_vad, "wb");
       EXPECT(install_vad_file != NULL);
@@ -405,8 +416,9 @@ int main(void) {
 
     // With no model directory, the worker executable's adjacent models directory wins over CWD candidates.
     cfg.model_dir[0] = '\0';
-    EXPECT(vw_worker_config_resolve_vad_model_path(&cfg, sibling_model, resolved_vad, sizeof(resolved_vad)));
-    EXPECT_EQ_STR(resolved_vad, install_vad);
+    snprintf(cfg.model_path, sizeof(cfg.model_path), "%s", "models/ggml-vw-test.bin");
+    EXPECT(vw_worker_config_resolve_model_path(&cfg, resolved, sizeof(resolved)));
+    EXPECT_EQ_STR(resolved, install_model);
 
     // Remove the test install candidate to verify the legacy CWD-relative compatibility fallback.
     if (install_vad_owned) {
@@ -423,6 +435,7 @@ int main(void) {
     EXPECT(remove(sibling_model) == 0);
     EXPECT(VW_TEST_RMDIR(cwd_models_dir) == 0);
     EXPECT(VW_TEST_RMDIR(unrelated_dir) == 0);
+    if (install_model_owned) EXPECT(remove(install_model) == 0);
     EXPECT(VW_TEST_RMDIR(model_dir) == 0);
     EXPECT(VW_TEST_RMDIR(sibling_dir) == 0);
     EXPECT(VW_TEST_RMDIR(root_dir) == 0);

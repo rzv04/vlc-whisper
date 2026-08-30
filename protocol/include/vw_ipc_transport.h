@@ -23,7 +23,7 @@ vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name);
 bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size);
 
 // vw_ipc_receive() return codes.
-#define VW_IPC_RECV_OK (1)        // complete frame/message received (whole-frame APIs: receive_all, receive_frame)
+#define VW_IPC_RECV_OK (1)        // positive byte count; complete-frame helpers map success to this value
 #define VW_IPC_RECV_TIMEOUT (-1)  // 3s read timeout — connection open, retry/keep waiting
 #define VW_IPC_RECV_FATAL (-2)    // fatal I/O error or peer closed (EOF / broken pipe) — abort
 

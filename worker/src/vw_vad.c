@@ -1,6 +1,7 @@
 #include "vw_vad.h"
 
-#include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 struct whisper_vad_context* vw_vad_init_default(const char* path_model) {
   if (path_model == NULL || path_model[0] == '\0') {
@@ -8,6 +9,10 @@ struct whisper_vad_context* vw_vad_init_default(const char* path_model) {
   }
 
   struct whisper_vad_context_params vad_params = whisper_vad_default_context_params();
+  const char* force_cpu = getenv("VW_FORCE_CPU");
+  if (force_cpu && strcmp(force_cpu, "1") == 0) {
+    vad_params.use_gpu = false;
+  }
   struct whisper_vad_context* vctx = whisper_vad_init_from_file_with_params(path_model, vad_params);
   if (vctx != NULL) {
     whisper_vad_reset_state(vctx);

@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "whisper.h"
+
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
@@ -18,7 +20,6 @@
 #endif
 
 #include "vw_log.h"
-
 static bool vw_worker_config_file_exists(const char* path) {
   if (!path || !path[0]) return false;
   FILE* file = fopen(path, "rb");
@@ -364,6 +365,14 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "bad --language: expected 1..%zu char code, got '%s'\n", sizeof(config->language) - 1, lang);
         return 2;
       }
+      if (strcmp(lang, "auto") == 0) {
+        fprintf(stderr, "bad --language: 'auto' is not a concrete transcription language\n");
+        return 2;
+      }
+      if (whisper_lang_id(lang) < 0) {
+        fprintf(stderr, "bad --language: unknown Whisper language '%s' (use whisper_lang_id list)\n", lang);
+        return 2;
+      }
       snprintf(config->language, sizeof(config->language), "%s", lang);
     } else if (strcmp(argv[i], "--n-threads") == 0) {
       if (i + 1 >= argc) {
@@ -395,19 +404,30 @@ bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char*
     snprintf(out, out_size, "%s", config->model_path);
     return true;
   }
-  if (vw_worker_config_is_absolute_path(config->model_path) || !config->model_dir[0]) return false;
+  if (vw_worker_config_is_absolute_path(config->model_path)) return false;
 
   const char* filename = vw_worker_config_basename(config->model_path);
   if (!filename || !filename[0]) return false;
-  size_t dir_len = strlen(config->model_dir);
-  size_t file_len = strlen(filename);
-  bool needs_separator = dir_len > 0 && config->model_dir[dir_len - 1] != '/' && config->model_dir[dir_len - 1] != '\\';
-  size_t required = dir_len + (needs_separator ? 1 : 0) + file_len + 1;
-  if (required > out_size) return false;
-#ifdef _WIN32
-  snprintf(out, out_size, "%s%s%s", config->model_dir, needs_separator ? "\\" : "", filename);
-#else
-  snprintf(out, out_size, "%s%s%s", config->model_dir, needs_separator ? "/" : "", filename);
-#endif
-  return vw_worker_config_file_exists(out);
+
+  // Prefer the per-user directory because downloaded models are intentionally user-owned.
+  if (config->model_dir[0]) {
+    char candidate[VW_PATH_MAX_BYTES];
+    if (vw_worker_config_join_path(candidate, sizeof(candidate), config->model_dir, filename) &&
+        vw_worker_config_file_exists(candidate)) {
+      if (strlen(candidate) >= out_size) return false;
+      snprintf(out, out_size, "%s", candidate);
+      return true;
+    }
+  }
+
+  // Bundled models live beside the worker installation, not necessarily beneath the launcher's CWD.
+  char executable_dir[VW_PATH_MAX_BYTES];
+  char install_model_dir[VW_PATH_MAX_BYTES];
+  if (vw_worker_config_get_executable_dir(executable_dir, sizeof(executable_dir)) &&
+      vw_worker_config_join_path(install_model_dir, sizeof(install_model_dir), executable_dir, "models") &&
+      vw_worker_config_join_path(out, out_size, install_model_dir, filename) && vw_worker_config_file_exists(out)) {
+    return true;
+  }
+
+  return false;
 }

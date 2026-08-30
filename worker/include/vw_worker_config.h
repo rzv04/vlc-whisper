@@ -31,8 +31,8 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 // success or 2 on error; model paths are resolved during worker initialization.
 int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** argv);
 
-// Resolves relative model paths against --model-dir while preserving absolute and existing paths during worker
-// initialization without changing user configuration or selection.
+// Resolves relative model paths first against the per-user model directory and then the worker's adjacent install
+// models directory, while preserving absolute and existing paths during worker initialization.
 bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char* out, size_t out_size);
 
 // Resolves an explicit VAD path or discovers Silero beside the effective model, model directory, install models, then

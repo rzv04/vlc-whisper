@@ -49,6 +49,8 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   // CPU while still returning a valid context). Re-derive that decision so STATUS can report the
   // backend actually used instead of the one requested. Must run AFTER whisper init: backend
   // registration happens during library init, so a pre-init probe would see no devices.
+  // Additionally verify the device can actually be initialized (not just enumerated), so a
+  // present but unloadable Vulkan driver correctly reports CPU fallback.
   bool gpu_active = false;
   if (cparams.use_gpu) {
     int remaining = cparams.gpu_device;
@@ -57,7 +59,15 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
       enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
       if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
         if (remaining == 0) {
-          gpu_active = true;
+          // Verify backend can actually be initialized; enumeration alone can be stale
+          // (e.g., Vulkan present but loader/driver missing at runtime).
+          ggml_backend_t be = ggml_backend_dev_init(dev, NULL);
+          if (be) {
+            ggml_backend_free(be);
+            gpu_active = true;
+          } else {
+            gpu_active = false;
+          }
           break;
         }
         remaining--;
@@ -68,7 +78,6 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
                cparams.use_gpu ? (gpu_active ? "inference backend: gpu"
                                              : "inference backend: gpu REQUESTED but no usable device; running cpu")
                                : "inference backend: cpu");
-
   vw_whisper_engine_t* eng = (vw_whisper_engine_t*)calloc(1, sizeof(vw_whisper_engine_t));
   if (!eng) {
     whisper_free(ctx);
@@ -108,6 +117,7 @@ bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* lan
   if (!engine || !language || language[0] == '\0') return false;
   if (strcmp(language, "auto") == 0) return false;
   if (strlen(language) >= sizeof(engine->language)) return false;
+  if (whisper_lang_id(language) < 0) return false;
   snprintf(engine->language, sizeof(engine->language), "%s", language);
   return true;
 }
