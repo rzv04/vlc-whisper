@@ -214,7 +214,10 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
-  client->worker_capabilities = ack.capability_flags;
+  if (ack_ok) {
+    client->worker_capabilities = ack.capability_flags;
+    client->worker_protocol_minor = ack.selected_minor;
+  }
   free(ack_payload);
   if (!ack_ok) goto fail;
 
@@ -489,6 +492,11 @@ bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action
 bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabled, const char* source_lang,
                                           const char* target_lang, uint8_t mode) {
   if (!client || !client->pipe_handle) return false;
+  if ((client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
+    // Same-major older workers remain usable when translation is disabled. Enabling an unsupported optional feature
+    // fails locally without sending an unknown message that would desynchronize/terminate the older worker.
+    return !enabled;
+  }
   vw_msg_translate_ctrl_t ctrl;
   memset(&ctrl, 0, sizeof(ctrl));
   memcpy(ctrl.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES);

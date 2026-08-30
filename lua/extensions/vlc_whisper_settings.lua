@@ -1,9 +1,7 @@
 -- vlc_whisper_settings.lua -- VLC-Whisper Settings GUI (Lua extension).
 -- VLC 3.0.23 Lua 5.1 runtime. Validates with `luac -p` (Lua 5.1).
--- Wired version: reads/writes plugin config namespace (whisper-backend,
--- model-path, whisper-language, whisper-threads) via cfg_get/set.
--- No translation code, network, timers, polling, or waits. Download progress is rendered by the C plugin/worker
--- path; see docs/plans/model_download_no_wait_plan.md for the command-only Lua architecture.
+-- Reads/writes plugin config only. Network access for model downloads and subtitle translation is worker-confined;
+-- no Lua callback performs HTTP, polling, sleeps, or other blocking translation work.
 
 local dlg = nil
 local w_engine = nil
@@ -15,7 +13,6 @@ local w_trans_enabled = nil
 local w_trans_from = nil
 local w_trans_to = nil
 local w_trans_mode = nil
-local w_trans_test_input = nil
 local w_trans_test_btn = nil
 local w_trans_test_result = nil
 local w_status = nil
@@ -98,7 +95,6 @@ for _id = 1, #model_path_map do
 end
 
 -- Language dropdown: concrete codes ONLY -- no "auto" entry in this dialog.
--- Automatic language selection is a later UI step even though bundled tiny is multilingual.
 local language_map = {
   [1] = "en",
   [2] = "ro",
@@ -116,7 +112,6 @@ local language_labels = {
   [6] = "Spanish (es)",
 }
 
--- Reverse lookups for preselection.
 local engine_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
 local language_to_id = { ["en"] = 1, ["ro"] = 2, ["tr"] = 3, ["de"] = 4, ["fr"] = 5, ["es"] = 6 }
 
@@ -197,7 +192,6 @@ local trans_mode_labels = {
   [1] = "Show source + translation (dual line)",
   [2] = "Show translation only",
 }
-local trans_mode_to_id = { [1] = 1, [0] = 2 }
 
 local default_model_id = 2
 local default_model_path = model_path_map[default_model_id] or "models/ggml-tiny.bin"
@@ -292,10 +286,7 @@ end
 
 local function resolve_model_id_from_path(path)
   if path == nil or path == "" then return default_model_id end
-  -- Direct hit (relative path as stored).
   if model_path_to_id[path] ~= nil then return model_path_to_id[path] end
-  -- Suffix match: handles absolute or bare filename forms (e.g. installed
-  -- location "C:\\...\\models\\ggml-tiny.bin" or just filename).
   for _id = 1, #model_path_map do
     local _rel = model_path_map[_id]
     local fname = _rel:match("([^/\\]+)$")
@@ -303,7 +294,6 @@ local function resolve_model_id_from_path(path)
       return _id
     end
   end
-  -- Fallback: try label substring (e.g. "tiny" in a custom path).
   for _id = 1, #model_map do
     local _label = model_map[_id]
     if _label and path:find(_label, 1, true) then
@@ -340,60 +330,24 @@ local function refresh_model_status(model_id)
   return availability
 end
 
-local function lua_url_encode(str)
-  if str == nil then return "" end
-  str = tostring(str)
-  str = str:gsub("\n", "\r\n")
-  str = str:gsub("([^%w %-%_%.%~])", function(c)
-    return string.format("%%%02X", string.byte(c))
-  end)
-  str = str:gsub(" ", "+")
-  return str
-end
-
+-- The original Step 21b Test button performed a synchronous GTX request from this Lua callback. VLC extensions run
+-- cooperatively on the UI path, so network I/O here could freeze the settings/UI and bypassed the worker-only privacy
+-- boundary. Until a dedicated asynchronous worker test-result IPC is added, this button is intentionally a safe
+-- runtime-test guide: it performs no HTTP and never logs user subtitle/test text.
 local function on_test_translate()
-  local phrase = w_trans_test_input and w_trans_test_input:get_text() or "Hello world"
   local from_id = w_trans_from and w_trans_from:get_value() or 1
   local to_id = w_trans_to and w_trans_to:get_value() or 1
   local from_code = trans_from_map[from_id] or "auto"
   local to_code = trans_to_map[to_id] or "en"
 
-  if phrase == nil or phrase == "" then phrase = "Hello world" end
   if w_trans_test_result ~= nil then
-    pcall(function() w_trans_test_result:set_text("Testing translation...") end)
-  end
-
-  local encoded = lua_url_encode(phrase)
-  local url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" .. from_code .. "&tl=" .. to_code .. "&dt=t&q=" .. encoded
-
-  local ok, stream = pcall(function()
-    if vlc and vlc.stream then return vlc.stream(url) end
-    return nil
-  end)
-
-  if ok and stream then
-    local data = ""
     pcall(function()
-      local chunk = stream:read(4096)
-      while chunk and #chunk > 0 do
-        data = data .. chunk
-        chunk = stream:read(4096)
-      end
+      w_trans_test_result:set_text(
+        "Worker-only test: enable Auto translation, Apply, then play media (" .. from_code .. " -> " .. to_code .. ")."
+      )
     end)
-    local trans = data:match('^%[%[%["(.-)"')
-    if trans and #trans > 0 then
-      trans = trans:gsub('\\"', '"'):gsub('\\n', ' ')
-      if w_trans_test_result ~= nil then
-        pcall(function() w_trans_test_result:set_text("Result: " .. trans) end)
-      end
-      log_info("[VLC-Whisper] test translation success: " .. trans)
-      return
-    end
   end
-
-  if w_trans_test_result ~= nil then
-    pcall(function() w_trans_test_result:set_text("Result: [Ready] (" .. from_code .. " -> " .. to_code .. ")") end)
-  end
+  log_info("[VLC-Whisper] worker-only translation test guidance shown (" .. from_code .. " -> " .. to_code .. ")")
 end
 
 local function on_apply()
@@ -420,12 +374,10 @@ local function on_apply()
   if model_is_english_only(mod_id) then lang_id = 1 end
   pcall(function() refresh_language_dropdown(mod_id, lang_id) end)
 
-  -- Reflect clamped value back into the text input when possible.
   if w_threads ~= nil then
     pcall(function() w_threads:set_text(tostring(threads)) end)
   end
 
-  -- Write via cfg_set (Lua bridge to config_PutPsz / config_PutInt).
   pcall(function() cfg_set("whisper-backend", engine) end)
   pcall(function() cfg_set("model-path", model_path) end)
   pcall(function() cfg_set("whisper-language", language) end)
@@ -448,8 +400,6 @@ local function on_apply()
     vlc.msg.info("[VLC-Whisper] applied whisper-translate-mode=" .. tostring(trans_mode))
   end
 
-  -- Refresh detected-backend status label if present (reflects last STATUS
-  -- drain; meaningful after first session STARTED).
   if w_status ~= nil then
     local active = nil
     pcall(function() active = cfg_get("whisper-backend-active") end)
@@ -471,7 +421,6 @@ local function on_abort_download()
 end
 
 local function on_download()
-  -- Determine selected model id: w_model:get_value() if dialog open, else resolve from cfg.
   local sel_id = nil
   pcall(function()
     if w_model ~= nil then sel_id = w_model:get_value() end
@@ -481,7 +430,6 @@ local function on_download()
     pcall(function() cur_path = cfg_get("model-path") end)
     sel_id = resolve_model_id_from_path(cur_path)
   end
-  -- Map to catalog id (plugin expects these exact strings).
   local catalog_id = catalog_id_map[sel_id] or "tiny"
   local selected_language = 1
   if model_is_english_only(sel_id) then
@@ -498,7 +446,6 @@ local function on_download()
     log_info("[VLC-Whisper] model already present; download remains available for refresh: " .. tostring(catalog_id))
   end
 
-  -- Check if playback is active / worker is connected.
   local is_playing = false
   pcall(function()
     if vlc and vlc.input and vlc.input.is_playing then
@@ -508,8 +455,6 @@ local function on_download()
     end
   end)
 
-  -- Trigger download via whisper-model-download control variable without
-  -- changing active model-path yet (worker must stay alive on existing model).
   local control_written = cfg_set("whisper-model-download", catalog_id)
   local control_visible = nil
   pcall(function()
@@ -518,8 +463,6 @@ local function on_download()
   end)
   cfg_set("whisper-model-status", "downloading")
   cfg_set("whisper-model-progress", 0)
-  -- Some VLC 3.0 builds expose config.set without a useful config.get readback.
-  -- Treat nil as unverifiable, but reject an explicit mismatched value.
   if not control_written or control_visible == false then
     log_error("[VLC-Whisper] download control was not retained by VLC config: " .. tostring(catalog_id))
     if w_status ~= nil then
@@ -538,7 +481,6 @@ end
 local function build_dialog()
   dlg = vlc.dialog("VLC-Whisper Settings")
 
-  -- Read current config values (nil-safe defaults).
   local cur_backend = nil
   local cur_model_path = nil
   local cur_language = nil
@@ -581,12 +523,10 @@ local function build_dialog()
   local sel_language = language_to_id[cur_language] or 1
   if model_is_english_only(sel_model) then sel_language = 1 end
 
-  -- Row 1: Engine
   dlg:add_label("Engine:", 1, 1, 1, 1)
   w_engine = dlg:add_dropdown(2, 1, 3, 1)
   populate_dropdown(w_engine, engine_labels, sel_engine)
 
-  -- Row 2: Model (labels map to models/<name>.bin relative paths)
   dlg:add_label("Model:", 1, 2, 1, 1)
   w_model = dlg:add_dropdown(2, 2, 3, 1)
   local model_labels = {}
@@ -602,58 +542,45 @@ local function build_dialog()
   end
   populate_dropdown(w_model, model_labels, sel_model)
 
-  -- Row 3: Language (concrete codes)
   dlg:add_label("Language:", 1, 3, 1, 1)
   w_language = dlg:add_dropdown(2, 3, 3, 1)
   refresh_language_dropdown(sel_model, sel_language)
 
-  -- Row 4: CPU threads -- text input (VLC Lua has no spinbox widget).
   dlg:add_label("Threads (CPU engine):", 1, 4, 1, 1)
   w_threads = dlg:add_text_input(cur_threads, 2, 4, 3, 1)
 
-  -- Row 5: Diagnostic logging, off by default.
   w_logging = dlg:add_check_box("Enable diagnostic logging", cur_logging, 1, 5, 4, 1)
 
-  -- Row 6: Translation Settings Checkbox
   w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 6, 4, 1)
 
-  -- Row 7: Source (from) dropdown
   dlg:add_label("Source (from):", 1, 7, 1, 1)
   w_trans_from = dlg:add_dropdown(2, 7, 3, 1)
   populate_dropdown(w_trans_from, trans_from_labels, sel_trans_from)
 
-  -- Row 8: Translation (to) dropdown
   dlg:add_label("Translation (to):", 1, 8, 1, 1)
   w_trans_to = dlg:add_dropdown(2, 8, 3, 1)
   populate_dropdown(w_trans_to, trans_to_labels, sel_trans_to)
 
-  -- Row 9: Screen Placement / Mode dropdown
   dlg:add_label("Screen placement:", 1, 9, 1, 1)
   w_trans_mode = dlg:add_dropdown(2, 9, 3, 1)
   populate_dropdown(w_trans_mode, trans_mode_labels, sel_trans_mode)
 
-  -- Row 10: Test phrase input & Test button
-  dlg:add_label("Test phrase:", 1, 10, 1, 1)
-  w_trans_test_input = dlg:add_text_input("Hello world", 2, 10, 2, 1)
-  w_trans_test_btn = dlg:add_button("Test", on_test_translate, 4, 10, 1, 1)
+  dlg:add_label("Translation test:", 1, 10, 1, 1)
+  w_trans_test_btn = dlg:add_button("How to test", on_test_translate, 2, 10, 3, 1)
 
-  -- Row 11: Test status result label
-  w_trans_test_result = dlg:add_label("Result: (click Test to verify translation)", 1, 11, 4, 1)
+  w_trans_test_result =
+    dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 11, 4, 1)
 
-  -- Row 12: Action Buttons (Apply & Download Selected Model)
   dlg:add_button("Apply", on_apply, 1, 12, 2, 1)
   w_download = dlg:add_button("Download Selected Model", on_download, 3, 12, 2, 1)
   refresh_model_status(sel_model)
 
-  -- Row 13: Detected backend / download status
   w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 13, 4, 1)
 
-  -- Row 14: Model availability
   w_model_status = dlg:add_label("Model availability: checking...", 1, 14, 4, 1)
   refresh_model_status(sel_model)
 
-  -- Row 15: Hint
-  dlg:add_label(".en models force English; translation requires network access.", 1, 15, 4, 1)
+  dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 15, 4, 1)
 end
 
 function descriptor()
@@ -686,7 +613,6 @@ function activate()
   w_trans_from = nil
   w_trans_to = nil
   w_trans_mode = nil
-  w_trans_test_input = nil
   w_trans_test_btn = nil
   w_trans_test_result = nil
   w_status = nil
@@ -713,7 +639,6 @@ function deactivate()
   w_trans_from = nil
   w_trans_to = nil
   w_trans_mode = nil
-  w_trans_test_input = nil
   w_trans_test_btn = nil
   w_trans_test_result = nil
   w_status = nil
@@ -747,7 +672,6 @@ function trigger_menu(id)
   end
 end
 
--- Extension lifecycle callbacks (silences VLC lua warnings during media playback)
 function meta_changed()
 end
 

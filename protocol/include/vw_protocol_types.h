@@ -44,11 +44,13 @@
 #define VW_PATH_MAX_BYTES 4096U
 #endif
 
-// Capability flags (bitfield)
+// Capability flags (bitfield). Optional minor-version features MUST be gated by a capability before a newer peer sends
+// their message types to an older same-major peer.
 #define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)
 #define VW_CAPABILITY_PARTIAL_SEGMENTS (1U << 1)
 #define VW_CAPABILITY_SEEK_RESET (1U << 2)
 #define VW_CAPABILITY_SOURCE_MODE (1U << 3)
+#define VW_CAPABILITY_TRANSLATION (1U << 4)
 
 // Source kind enum
 typedef enum vw_source_kind { VW_SOURCE_LIVE_AUDIO = 0, VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
@@ -86,7 +88,7 @@ typedef enum vw_message_type {
   VW_MSG_POSITION = 13,        // plugin sends media playback position and pacing updates
   VW_MSG_MODEL_CTRL = 14,      // plugin requests model download or abort by catalog id
   VW_MSG_MODEL_PROGRESS = 15,  // worker reports model download progress and stage
-  VW_MSG_TRANSLATE_CTRL = 16   // plugin configures real-time subtitle translation parameters
+  VW_MSG_TRANSLATE_CTRL = 16   // plugin configures real-time subtitle translation parameters (capability-gated)
 } vw_message_type_t;
 
 typedef struct vw_frame_header {
