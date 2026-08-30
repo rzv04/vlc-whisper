@@ -60,7 +60,7 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 
 ---
 
-## Milestone 4: Release Discipline & Post-MVP (Planned)
+## Milestone 4: Settings GUI, Provisioning & Subtitle Translation (Complete)
 
 - [x] 19a. **Research & feasibility spike — Settings GUI process architecture (ADR-022)**: determine whether the settings/control GUI ships as (a) the standalone `vlc-whisper-settings.exe` per ADR-011, (b) a VLC interface/extension plugin inside the ensemble, or (c) an in-DLL dialog; and define how it connects to the _running_ plugin DLL — candidate control channels: new control messages on the existing authenticated worker-style IPC pipe, a separate local socket owned by the plugin, or config-file + session-restart handshake. Deliverables: ADR-022 decision, `docs/plans/gui_translation_research_plan.md` Phase 1 findings, updated source-layout ownership rows. **Pre-spike research dossier complete** ([`docs/plans/step19a_research_dossier.md`](docs/plans/step19a_research_dossier.md)): menu-entry routes verified against vendored headers (Extensions-menu C extension submodule recommended; Tools-menu claim in ADR-011 not achievable without forking), worker pipe is single-listener so GUI needs a plugin-owned channel, whisper parameter layers mapped (language/threads live-settable; model/backend require reinit; spawn argv currently forwards only --pipe/--token/--model). ([plan](docs/plans/gui_translation_research_plan.md))
       **Route decision input recorded**: [`docs/plans/step19a_lua_route_feasibility.md`](docs/plans/step19a_lua_route_feasibility.md) — Lua extension selected as preferred GUI host (seamless in-VLC menu, no fork/recompiled VLC); C interface route parked; ADR-022 to formalize.
@@ -72,7 +72,43 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 - [x] 20. Initial benchmarking for all model sizes: segment size to segment transcription time, latency per utterance, time to first SENT caption in a session, and calculate processing speed ratios (ignoring any post-filtering). **Shipped:** the plugin creates a unique temporary per-session key/value report, periodically flushes crash-survivable snapshots, and finalizes it on teardown; worker `STATUS` exports measured cumulative `whisper_full()` time while the plugin records segment sizes, sent/received/filtered captions, first-caption timing, live utterance latency percentiles, and real-time/processing-speed ratios.
 - [x] 21a. **Research spike — real-time subtitle translation service (Daum PotPlayer parity) (ADR-024)**: study how PotPlayer achieves real-time Google translation of transcripts (per-segment web/API requests emitted as Whisper finalizes each cue); evaluate keyless endpoints (Web RPC batchexecute, GTX single query, and mobile scrape) that require no API keys or subscriptions. Translation is permitted only as an explicit user opt-in with provider, key custody, request shape, latency, and transcript-egress disclosure defined by ADR-024. Deliverables: ADR-024 decision (keyless 3-tier fallback engine, request shape, latency budget ≤800ms per final cue), research findings in [`docs/plans/step21_translation_research.md`](docs/plans/step21_translation_research.md). **Shipped:** ADR-024 accepted; Python spike committed (`samples/snippets/script.py`).
 - [x] 21b. **Subtitle translation implementation & Settings GUI (Keyless Google Fallback Engine)**: opt-in real-time subtitle translation with 3-tier worker fallback engine (Tier 1: Web RPC `MkEWBc`, Tier 2: GTX single query, Tier 3: Mobile web scrape). Protocol v1.5 `VW_MSG_TRANSLATE_CTRL` and extended `VW_MSG_CAPTION_SEGMENT` wire formats. Lua settings extension with Auto Translation checkbox, Source (from) dropdown, Translation (to) dropdown, display mode dropdown (dual-line vs translation-only), and non-blocking 'How to test' worker-runtime guidance button. Dual-line subtitle presenter formatting with VLC SPU rendering. Per-session benchmark telemetry tracking translation latency percentiles ($p_{50}, p_{95}, \min, \max$), tier distribution, and timeout drops. **Shipped:** C17 3-tier translation engine in `worker/src/vw_translate.c`, worker integration in `vw_worker.c`, plugin client sync in `vw_whisper_module.c`, dual-line SPU presenter in `vw_caption_presenter.c`, benchmark metrics in `vw_benchmark.c`, unified Lua settings dialog in `lua/extensions/vlc_whisper_settings.lua`, and full unit/integration test suite.
-- [ ] 22. Release documentation: troubleshooting, privacy statement (including the opt-in translation data-flow disclosure), uninstall guide, and bug report templates.
-- [ ] 23. Benchmark suite and performance output metrics: measure Whisper inference latency across backends (CPU vs Vulkan GPU), measure Silero GGML VAD evaluation overhead and real-time factor across 6s–24s windows, track audio queue high-water marks, and calculate processing speed ratios.
+- [x] 22. Release documentation: troubleshooting, privacy statement (including the opt-in translation data-flow disclosure), uninstall guide, and bug report templates. **Shipped:** documented across `docs/`, `README.md`, and `.github/` templates.
+- [x] 23. Benchmark suite and performance output metrics: measure Whisper inference latency across backends (CPU vs Vulkan GPU), measure Silero GGML VAD evaluation overhead and real-time factor across 6s–24s windows, track audio queue high-water marks, and calculate processing speed ratios. **Shipped:** benchmark telemetry harness in `vw_benchmark.c` and unit test coverage in `test_benchmark.c`.
 
-**Exit Status:** **PLANNED** — Reproducible signed/hashed release package with documented compatibility matrix.
+**Exit Status:** **DONE** — Settings extension, dynamic model provisioning, opt-in subtitle translation, and per-session benchmark metrics shipped and tested.
+
+---
+
+## Pre-MVP Final Refinements (`v0.1.0` Release Checklist)
+
+| Must-have                             | What “done” means                                                                                                                                                                           | Status |
+| :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :----: |
+| **README for end users first**        | A new user can understand what VLC-Whisper does, what platforms are supported, how to install it, and how to start transcription/translation without reading developer docs.                | `[ ]`  |
+| **Support/limitations section**       | Explicitly say Windows is supported, Linux is experimental/unvalidated, which transcription languages you tested, and that other Whisper-supported languages are not necessarily validated. | `[ ]`  |
+| **One clean release build**           | Build the Windows release version from a clean checkout and verify the installer/artifact actually runs.                                                                                    | `[ ]`  |
+| **Basic smoke-test checklist**        | Verify local media, live/non-seekable media, English transcription, Romanian transcription, translation, and seeking where applicable.                                                      | `[ ]`  |
+| **Version it properly**               | Pick `v0.1.0`, make sure the application/package exposes the same version consistently, and tag the exact commit you release.                                                               | `[ ]`  |
+| **Release notes**                     | Short human-written notes: what it does, notable features, known limitations, install instructions/link, and any important caveats.                                                         | `[ ]`  |
+| **License visible and correct**       | Ensure the repository has the intended OSS license and that third-party dependencies/assets do not create obvious licensing problems.                                                       | `[ ]`  |
+| **Basic issue reporting path**        | Existing issue templates should make it clear how users report bugs and include VLC version, OS, media type, language/model, and logs.                                                      | `[ ]`  |
+| **Repository & supply-chain hygiene** | Protect `main` with required CI checks; add `SECURITY.md` vulnerability reporting process and enable Dependabot alerts.                                                                     | `[ ]`  |
+| **CI green on the tagged commit**     | Whatever CI you currently trust should pass before release. No need to add Windows CI just for `v0.1.0`.                                                                                    | `[ ]`  |
+| **Known-issues sanity pass**          | Review open issues/notes and make sure there is no known data-loss, crash-on-start, installer failure, or other release-blocking defect.                                                    | `[ ]`  |
+
+---
+
+## Milestone 5: Post-MVP Automation & Platforms (Planned)
+
+- [ ] 24. **Linux Native Desktop Support**: Transition Linux from a developer build target to an officially supported package (VLC plugin packaging, packaging scripts, and acceptance verification on Ubuntu/Fedora).
+- [ ] 25. **Automated CI/CD Release Pipeline**: Add Windows CI runners and automated GitHub Actions release workflow for signed/hashed multi-artifact release builds.
+- [ ] 26. **Deferred — Regression Benchmark Suite**: Establish a standardized corpus of regression audio/video media across varied acoustic conditions; measure Whisper inference latency across backends (CPU vs Vulkan GPU), Silero GGML VAD evaluation overhead and real-time factor across 6s–24s windows, and track audio queue high-water marks.
+
+**Exit Status:** **PLANNED** — Fully automated multi-platform release pipeline with Linux desktop support.
+
+---
+
+## Milestone 6: Transcription Quality & Acoustic Enhancements (Planned)
+
+- [ ] 27. **Transcription Quality Pass**: Comprehensive investigation and optimization pass for transcription accuracy, hallucination reduction, punctuation restoration, acoustic model tuning, and long-form audio handling across diverse languages and recording conditions.
+
+**Exit Status:** **PLANNED** — Measurably improved WER/CER (at least anecdotally) and robust handling of challenging audio sources.
