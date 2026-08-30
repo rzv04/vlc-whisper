@@ -6,11 +6,36 @@
 
 #include "ggml-backend.h"
 #include "vw_log.h"
+#include "vw_platform.h"
 #include "whisper.h"
+
+static void vw_whisper_log_callback(enum ggml_log_level level, const char* text, void* user_data) {
+  (void)user_data;
+  vw_log_level_t mapped;
+  switch (level) {
+    case GGML_LOG_LEVEL_ERROR:
+      mapped = VW_LOG_LEVEL_ERROR;
+      break;
+    case GGML_LOG_LEVEL_WARN:
+      mapped = VW_LOG_LEVEL_WARN;
+      break;
+    case GGML_LOG_LEVEL_INFO:
+    case GGML_LOG_LEVEL_CONT:
+      mapped = VW_LOG_LEVEL_INFO;
+      break;
+    case GGML_LOG_LEVEL_DEBUG:
+      mapped = VW_LOG_LEVEL_DEBUG;
+      break;
+    default:
+      return;
+  }
+  vw_log_event(mapped, "WHISPER", "%s", text ? text : "");
+}
 
 vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device) {
   if (!model_path || model_path[0] == '\0') return NULL;
 
+  whisper_log_set(vw_whisper_log_callback, NULL);
   struct whisper_context_params cparams = whisper_context_default_params();
   cparams.use_gpu = (backend != VW_WORKER_BACKEND_CPU);
   // Clamps negative gpu_device to 0 (CLI rejects <0, this guards direct API callers).
@@ -134,7 +159,17 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.print_progress = false;
   wparams.print_realtime = false;
   wparams.print_timestamps = false;
-  if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
+  int64_t inference_started_us = vw_platform_get_monotonic_time_us();
+  int inference_result = whisper_full(engine->ctx, wparams, pcm32, (int)sample_count);
+  int64_t inference_elapsed_us = vw_platform_get_monotonic_time_us() - inference_started_us;
+  if (inference_elapsed_us < 0) inference_elapsed_us = 0;
+  engine->last_inference_us = (uint64_t)inference_elapsed_us;
+  if (UINT64_MAX - engine->total_inference_us < (uint64_t)inference_elapsed_us) {
+    engine->total_inference_us = UINT64_MAX;
+  } else {
+    engine->total_inference_us += (uint64_t)inference_elapsed_us;
+  }
+  if (inference_result != 0) {
     return false;
   }
 
@@ -176,6 +211,10 @@ int vw_whisper_engine_get_segment_count(const vw_whisper_engine_t* engine) {
     return 0;
   }
   return whisper_full_n_segments(engine->ctx);
+}
+
+uint64_t vw_whisper_engine_get_total_inference_us(const vw_whisper_engine_t* engine) {
+  return engine ? engine->total_inference_us : 0;
 }
 
 bool vw_whisper_engine_get_segment(const vw_whisper_engine_t* engine, int index, vw_whisper_segment_t* out_seg) {

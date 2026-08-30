@@ -20,6 +20,7 @@ typedef struct vw_worker_client {
   bool session_active;
   bool worker_source_active;
   uint32_t worker_capabilities;
+  uint16_t worker_protocol_minor;
 } vw_worker_client_t;
 
 // Returns true if the worker confirmed that look-ahead source file decoding mode is active for the current session via
@@ -32,13 +33,13 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                         const char* model_path);
 
-// Extended launch forwarding backend, language, thread, gpu-device and model-directory flags to worker argv; NULL or
-// empty values are defaulted or omitted automatically including model_dir as --model-dir when provided and non-empty.
+// Extended launch forwards backend, language, threads, logging, gpu-device, and model-directory flags to worker argv;
+// NULL or empty values are defaulted or omitted automatically, including model_dir when absent.
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
                                                            const char* language, int n_threads, int gpu_device,
-                                                           const char* model_dir);
+                                                           const char* model_dir, bool logging_enabled);
 
 // Starts a new captioning session by transmitting a START frame with media origin and optional source URL over
 // IPC, waiting for confirmation from worker.
@@ -56,6 +57,12 @@ bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chun
 // Sends a worker-scoped MODEL_CTRL request over authenticated IPC, allowing download or abort with a zero session ID
 // before caption START succeeds.
 bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action, const char* model_id);
+
+// Sends a TRANSLATE_CTRL configuration update only when the negotiated worker advertises translation support. A
+// translation-disabled update is a successful no-op for older same-major workers; enabling returns false without
+// damaging the transport when the capability is absent.
+bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabled, const char* source_lang,
+                                          const char* target_lang, uint8_t mode);
 
 // Sends a STOP control frame over IPC to request the worker to stop processing the current caption session.
 // The 'reason' argument can include in the future, SEEK_DISCONTINUITY.
@@ -80,12 +87,13 @@ void vw_worker_client_disconnect(vw_worker_client_t* client);
 // A worker-to-plugin frame decoded by vw_worker_client_receive_frame. Exactly one field is valid
 // depending on `type`; segment.text_utf8 always points into text_buf (owned storage).
 typedef struct vw_worker_recv {
-  vw_message_type_t type;            // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR | MODEL_PROGRESS
-  vw_caption_segment_t segment;      // valid when type == VW_MSG_CAPTION_SEGMENT; text_utf8 points into text_buf
-  vw_msg_status_t status;            // valid when type == VW_MSG_STATUS
-  vw_msg_error_t error;              // valid when type == VW_MSG_ERROR
-  vw_msg_model_progress_t progress;  // valid when type == VW_MSG_MODEL_PROGRESS
-  char text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.text_utf8 (NUL-terminated)
+  vw_message_type_t type;                  // VW_MSG_CAPTION_SEGMENT | VW_MSG_STATUS | VW_MSG_ERROR | MODEL_PROGRESS
+  vw_caption_segment_t segment;            // valid when type == VW_MSG_CAPTION_SEGMENT; text_utf8 points into text_buf
+  vw_msg_status_t status;                  // valid when type == VW_MSG_STATUS
+  vw_msg_error_t error;                    // valid when type == VW_MSG_ERROR
+  vw_msg_model_progress_t progress;        // valid when type == VW_MSG_MODEL_PROGRESS
+  char text_buf[VW_MAX_TEXT_BYTES];        // storage that owns segment.text_utf8 (NUL-terminated)
+  char trans_text_buf[VW_MAX_TEXT_BYTES];  // storage that owns segment.translated_text_utf8 (NUL-terminated)
 } vw_worker_recv_t;
 
 // Reads one worker-to-plugin frame. Returns VW_IPC_RECV_OK (1) = frame decoded into out,

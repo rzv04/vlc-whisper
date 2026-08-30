@@ -1,8 +1,23 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "vw_worker_config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <windows.h>
+#define VW_WORKER_CONFIG_GETCWD _getcwd
+#else
+#include <unistd.h>
+#define VW_WORKER_CONFIG_GETCWD getcwd
+#endif
+
+#include "vw_log.h"
 
 static bool vw_worker_config_file_exists(const char* path) {
   if (!path || !path[0]) return false;
@@ -28,6 +43,73 @@ static const char* vw_worker_config_basename(const char* path) {
     if (*cursor == '/' || *cursor == '\\') base = cursor + 1;
   }
   return base;
+}
+
+static void vw_worker_config_log_probe(const char* source, const char* candidate, bool exists) {
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD_RESOLVE", "probe source=%s candidate='%s' result=%s", source,
+               candidate ? candidate : "", exists ? "hit" : "miss");
+}
+
+static void vw_worker_config_log_cwd(void) {
+  char cwd[VW_PATH_MAX_BYTES];
+  if (VW_WORKER_CONFIG_GETCWD(cwd, sizeof(cwd)) != NULL) {
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD_RESOLVE", "worker cwd='%s'", cwd);
+  } else {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_VAD_RESOLVE", "worker cwd unavailable");
+  }
+}
+
+// Finds the worker executable directory without depending on the launcher's current working directory.
+static bool vw_worker_config_get_executable_dir(char* out, size_t out_size) {
+  if (!out || out_size == 0) return false;
+
+  char executable_path[VW_PATH_MAX_BYTES];
+  size_t path_length;
+#ifdef _WIN32
+  DWORD windows_path_length = GetModuleFileNameA(NULL, executable_path, (DWORD)sizeof(executable_path));
+  if (windows_path_length == 0 || windows_path_length >= sizeof(executable_path)) return false;
+  path_length = (size_t)windows_path_length;
+#elif defined(__linux__)
+  ssize_t linux_path_length = readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1);
+  if (linux_path_length <= 0 || (size_t)linux_path_length >= sizeof(executable_path)) return false;
+  path_length = (size_t)linux_path_length;
+#else
+  return false;
+#endif
+  executable_path[path_length] = '\0';
+
+  const char* last_slash = strrchr(executable_path, '/');
+  const char* last_bslash = strrchr(executable_path, '\\');
+  const char* slash = NULL;
+  if (last_slash && last_bslash) {
+    slash = (last_slash > last_bslash) ? last_slash : last_bslash;
+  } else if (last_slash) {
+    slash = last_slash;
+  } else {
+    slash = last_bslash;
+  }
+  if (!slash) return false;
+
+  size_t dir_length = (size_t)(slash - executable_path);
+  if (dir_length == 0) dir_length = 1;  // Preserve the filesystem root (e.g. /worker).
+  if (dir_length >= out_size) return false;
+  memcpy(out, executable_path, dir_length);
+  out[dir_length] = '\0';
+  return true;
+}
+
+static bool vw_worker_config_join_path(char* out, size_t out_size, const char* directory, const char* name) {
+  if (!out || out_size == 0 || !directory || !directory[0] || !name || !name[0]) return false;
+  size_t directory_length = strlen(directory);
+  bool needs_separator = directory[directory_length - 1] != '/' && directory[directory_length - 1] != '\\';
+  size_t required = directory_length + (needs_separator ? 1 : 0) + strlen(name) + 1;
+  if (required > out_size) return false;
+#ifdef _WIN32
+  snprintf(out, out_size, "%s%s%s", directory, needs_separator ? "\\" : "", name);
+#else
+  snprintf(out, out_size, "%s%s%s", directory, needs_separator ? "/" : "", name);
+#endif
+  return true;
 }
 
 // Parse a 64-char hex string into a 32-byte token. Returns true on success.
@@ -57,16 +139,15 @@ static bool vw_token_from_hex(const char* hex, uint8_t out[VW_AUTH_TOKEN_BYTES])
   return true;
 }
 
-// Probes for ggml-silero-vad.bin next to model_path or in standard search directories
-static void vw_worker_config_autodiscover_vad(vw_worker_config_t* config) {
-  if (config->vad_model_path[0] != '\0') {
-    return;  // Explicitly set via --vad-model CLI flag
+static bool vw_worker_config_vad_beside(const char* path, char* out, size_t out_size) {
+  static const char k_vad_filename[] = "ggml-silero-vad.bin";
+  if (!path || !out || out_size == 0) {
+    vw_worker_config_log_probe("effective-model-sibling", NULL, false);
+    return false;
   }
 
-  // 1. Check in the same directory as config->model_path
-  char dir_cand[VW_PATH_MAX_BYTES];
-  const char* last_slash = strrchr(config->model_path, '/');
-  const char* last_bslash = strrchr(config->model_path, '\\');
+  const char* last_slash = strrchr(path, '/');
+  const char* last_bslash = strrchr(path, '\\');
   const char* slash = NULL;
   if (last_slash && last_bslash) {
     slash = (last_slash > last_bslash) ? last_slash : last_bslash;
@@ -75,34 +156,102 @@ static void vw_worker_config_autodiscover_vad(vw_worker_config_t* config) {
   } else {
     slash = last_bslash;
   }
-  if (slash != NULL) {
-    size_t dir_len = (size_t)(slash - config->model_path) + 1;
-    if (dir_len + strlen("ggml-silero-vad.bin") < sizeof(dir_cand)) {
-      memcpy(dir_cand, config->model_path, dir_len);
-      dir_cand[dir_len] = '\0';
-      strcat(dir_cand, "ggml-silero-vad.bin");
-      FILE* f = fopen(dir_cand, "rb");
-      if (f != NULL) {
-        fclose(f);
-        strncpy(config->vad_model_path, dir_cand, sizeof(config->vad_model_path) - 1);
-        config->vad_model_path[sizeof(config->vad_model_path) - 1] = '\0';
-        return;
-      }
-    }
+  if (!slash) {
+    vw_worker_config_log_probe("effective-model-sibling", NULL, false);
+    return false;
   }
 
-  // 2. Standard candidate paths relative to CWD / binary
+  size_t dir_len = (size_t)(slash - path) + 1;
+  if (dir_len + sizeof(k_vad_filename) > out_size) {
+    vw_worker_config_log_probe("effective-model-sibling", NULL, false);
+    return false;
+  }
+  memcpy(out, path, dir_len);
+  memcpy(out + dir_len, k_vad_filename, sizeof(k_vad_filename));
+  bool exists = vw_worker_config_file_exists(out);
+  vw_worker_config_log_probe("effective-model-sibling", out, exists);
+  return exists;
+}
+
+static bool vw_worker_config_vad_in_dir(const char* source, const char* dir, char* out, size_t out_size) {
+  if (!dir || !dir[0]) {
+    vw_worker_config_log_probe(source, NULL, false);
+    return false;
+  }
+  size_t dir_len = strlen(dir);
+  bool needs_separator = dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\';
+  size_t required = dir_len + (needs_separator ? 1 : 0) + strlen("ggml-silero-vad.bin") + 1;
+  if (required > out_size) {
+    vw_worker_config_log_probe(source, NULL, false);
+    return false;
+  }
+#ifdef _WIN32
+  snprintf(out, out_size, "%s%s%s", dir, needs_separator ? "\\" : "", "ggml-silero-vad.bin");
+#else
+  snprintf(out, out_size, "%s%s%s", dir, needs_separator ? "/" : "", "ggml-silero-vad.bin");
+#endif
+  bool exists = vw_worker_config_file_exists(out);
+  vw_worker_config_log_probe(source, out, exists);
+  return exists;
+}
+
+static bool vw_worker_config_vad_in_install_dir(char* out, size_t out_size) {
+  char executable_dir[VW_PATH_MAX_BYTES];
+  if (!vw_worker_config_get_executable_dir(executable_dir, sizeof(executable_dir))) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_VAD_RESOLVE", "worker executable path unavailable");
+    return false;
+  }
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD_RESOLVE", "worker executable directory='%s'", executable_dir);
+
+  char install_model_dir[VW_PATH_MAX_BYTES];
+  if (!vw_worker_config_join_path(install_model_dir, sizeof(install_model_dir), executable_dir, "models")) {
+    vw_worker_config_log_probe("worker-install-model-dir", NULL, false);
+    return false;
+  }
+  return vw_worker_config_vad_in_dir("worker-install-model-dir", install_model_dir, out, out_size);
+}
+
+bool vw_worker_config_resolve_vad_model_path(const vw_worker_config_t* config, const char* effective_model_path,
+                                             char* out, size_t out_size) {
+  if (!config || !out || out_size == 0) return false;
+
+  vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD_RESOLVE", "begin effective_model='%s' model_dir='%s' explicit='%s'",
+               effective_model_path ? effective_model_path : "", config->model_dir, config->vad_model_path);
+  vw_worker_config_log_cwd();
+
+  // 1. Explicit --vad-model always wins, even if the worker later reports it invalid.
+  if (config->vad_model_path[0] != '\0') {
+    if (strlen(config->vad_model_path) >= out_size) return false;
+    snprintf(out, out_size, "%s", config->vad_model_path);
+    vw_worker_config_log_probe("explicit", out, vw_worker_config_file_exists(out));
+    return true;
+  }
+
+  // 2. Prefer the VAD sibling of the fully resolved Whisper model.
+  if (vw_worker_config_vad_beside(effective_model_path, out, out_size)) return true;
+
+  // 3. Probe --model-dir directly when the effective model has no VAD sibling.
+  if (vw_worker_config_vad_in_dir("model-dir", config->model_dir, out, out_size)) return true;
+
+  // 4. Probe the installed VLC models directory independently of the launcher's working directory.
+  if (vw_worker_config_vad_in_install_dir(out, out_size)) return true;
+
+  // 5. Retain standard candidate paths relative to CWD for compatibility.
   static const char* const k_vad_candidates[] = {
       "models/ggml-silero-vad.bin",       "ggml-silero-vad.bin",           "../../../models/ggml-silero-vad.bin",
       "../../models/ggml-silero-vad.bin", "../models/ggml-silero-vad.bin", NULL};
   for (int i = 0; k_vad_candidates[i] != NULL; i++) {
-    FILE* f = fopen(k_vad_candidates[i], "rb");
-    if (f != NULL) {
-      fclose(f);
-      strncpy(config->vad_model_path, k_vad_candidates[i], sizeof(config->vad_model_path) - 1);
-      return;
+    bool exists = vw_worker_config_file_exists(k_vad_candidates[i]);
+    vw_worker_config_log_probe("working-directory", k_vad_candidates[i], exists);
+    if (exists) {
+      if (strlen(k_vad_candidates[i]) >= out_size) return false;
+      snprintf(out, out_size, "%s", k_vad_candidates[i]);
+      return true;
     }
   }
+
+  vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_VAD_RESOLVE", "no VAD candidate found; RMS fallback will be used");
+  return false;
 }
 
 bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
@@ -174,6 +323,9 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         return 2;
       }
       snprintf(config->log_file, sizeof(config->log_file), "%s", argv[++i]);
+      config->logging_enabled = true;
+    } else if (strcmp(argv[i], "--enable-logging") == 0) {
+      config->logging_enabled = true;
     } else if (strcmp(argv[i], "--backend") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --backend\n");
@@ -232,9 +384,6 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
       return 2;
     }
   }
-
-  // Auto-discover VAD model if not explicitly specified via CLI
-  vw_worker_config_autodiscover_vad(config);
 
   return 0;
 }

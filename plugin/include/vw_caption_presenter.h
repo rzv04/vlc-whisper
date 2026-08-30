@@ -23,7 +23,8 @@ typedef struct vw_caption_presenter {
   bool model_progress_channel_registered;  // True when the model-progress channel belongs to the current vout.
   bool has_pending;                        // True if a pending caption cue is buffered for lookahead pacing.
   vw_caption_segment_t pending_segment;    // Buffered segment awaiting successor boundary for overlap clipping.
-  char pending_text[VW_PRESENTER_MAX_TEXT_BYTES];  // Static buffer storing pending segment text.
+  char pending_text[VW_PRESENTER_MAX_TEXT_BYTES];             // Static buffer storing pending segment text.
+  char pending_translated_text[VW_PRESENTER_MAX_TEXT_BYTES];  // Static buffer storing pending translated text.
 } vw_caption_presenter_t;
 
 // Renders fallback caption text via OSD on the active vout surface when SPU is unavailable,

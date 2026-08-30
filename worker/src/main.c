@@ -6,9 +6,9 @@
 #include "vw_worker.h"
 #include "vw_worker_config.h"
 
-// Default-on lifecycle log file: written to the platform temp directory, truncated every run so a
-// single file holds the last worker session. Override with --log-file <path>. Content is the same
-// privacy-safe vw_log_event stream (no PCM/transcript/token); pipe names and paths are kept.
+// Optional lifecycle log file: written to the platform temp directory, truncated every run so a single
+// file holds the last worker session. Override with --log-file <path>. Content is the same privacy-safe
+// vw_log_event stream (no PCM/transcript/token); pipe names and paths are kept.
 static const char* vw_worker_default_log_dir(void) {
 #ifdef _WIN32
   const char* dir = getenv("TEMP");
@@ -32,6 +32,7 @@ static const char* vw_worker_default_log_dir(void) {
 // Opens the log file in append-free truncate mode ("w": last run wins). A NULL config path selects
 // the platform temp dir; failure to open falls back to stderr-only logging (never fatal).
 static void vw_worker_setup_log_file(const vw_worker_config_t* config) {
+  if (!config->logging_enabled) return;
   char path[1024];
   if (config->log_file[0]) {
     snprintf(path, sizeof(path), "%s", config->log_file);
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
     return parse_rc;
   }
 
+  vw_log_set_enabled(config.logging_enabled);
   vw_worker_setup_log_file(&config);
   return vw_worker_run(&config);
 }

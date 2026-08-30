@@ -288,11 +288,27 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     return false;
   }
 
+  char combined_text[VW_PRESENTER_MAX_TEXT_BYTES * 2 + 8];
+  const char* text_to_render = segment->text_utf8;
+
+  if (segment->translated_text_utf8 && segment->translated_text_bytes > 0 && segment->translated_text_utf8[0] != '\0') {
+    int mode = 1;  // default: dual-line (source on top, translated on bottom)
+    if (presenter->p_filter_ctx) {
+      mode = var_InheritInteger((vlc_object_t*)presenter->p_filter_ctx, "whisper-translate-mode");
+    }
+    if (mode == 0) {
+      text_to_render = segment->translated_text_utf8;
+    } else {
+      snprintf(combined_text, sizeof(combined_text), "%s\n%s", segment->text_utf8, segment->translated_text_utf8);
+      text_to_render = combined_text;
+    }
+  }
+
   float rate = vw_caption_presenter_get_rate(presenter);
 
   if (!presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy
-    return vw_caption_presenter_display(NULL, segment->text_utf8, duration_us);
+    return vw_caption_presenter_display(NULL, text_to_render, duration_us);
   }
 
   filter_t* p_filter = (filter_t*)presenter->p_filter_ctx;
@@ -341,21 +357,21 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     }
     start_tick = vw_saturating_add_i64(now_tick, lead_us);
     stop_tick = vw_saturating_add_i64(start_tick, dur_wallclock_us);
-    rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, segment->text_utf8,
-                                               SUBPICTURE_ALIGN_BOTTOM, 20, start_tick, stop_tick, !media_timeline);
+    rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, text_to_render, SUBPICTURE_ALIGN_BOTTOM,
+                                               20, start_tick, stop_tick, !media_timeline);
   }
 
   // Graceful fallback to OSD if SPU rendering failed or was unregistered
   if (!rendered) {
-    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)dur_wallclock_us, segment->text_utf8);
+    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)dur_wallclock_us, text_to_render);
     rendered = true;
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_OSD_RENDER",
                  "Rendered caption via OSD fallback (text_len=%zu duration=%lldus)",
-                 segment->text_utf8 ? strlen(segment->text_utf8) : 0, (long long)dur_wallclock_us);
+                 text_to_render ? strlen(text_to_render) : 0, (long long)dur_wallclock_us);
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_RENDER",
                  "Rendered caption on SPU ch=%d vout=%p (text_len=%zu start=%lldus stop=%lldus)",
-                 presenter->spu_channel_id, (void*)vout, segment->text_utf8 ? strlen(segment->text_utf8) : 0,
+                 presenter->spu_channel_id, (void*)vout, text_to_render ? strlen(text_to_render) : 0,
                  (long long)start_tick, (long long)stop_tick);
   }
 
@@ -402,6 +418,18 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   presenter->pending_text[sizeof(presenter->pending_text) - 1] = '\0';
   presenter->pending_segment.text_utf8 = presenter->pending_text;
   presenter->pending_segment.text_bytes = (uint16_t)strlen(presenter->pending_text);
+
+  if (segment->translated_text_utf8 && segment->translated_text_bytes > 0) {
+    strncpy(presenter->pending_translated_text, segment->translated_text_utf8,
+            sizeof(presenter->pending_translated_text) - 1);
+    presenter->pending_translated_text[sizeof(presenter->pending_translated_text) - 1] = '\0';
+    presenter->pending_segment.translated_text_utf8 = presenter->pending_translated_text;
+    presenter->pending_segment.translated_text_bytes = (uint16_t)strlen(presenter->pending_translated_text);
+  } else {
+    presenter->pending_translated_text[0] = '\0';
+    presenter->pending_segment.translated_text_utf8 = NULL;
+    presenter->pending_segment.translated_text_bytes = 0;
+  }
 
   return true;
 }

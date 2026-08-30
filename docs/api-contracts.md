@@ -2,9 +2,9 @@
 
 ## Scope
 
-This project has **no HTTP endpoints, cloud API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`.
+This project has **no supported HTTP API, cloud transcription API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`. Optional subtitle translation is an opt-in worker feature that uses undocumented Google Translate web endpoints; those endpoints are not a VLC-Whisper API contract.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=4` (Protocol v1.4); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=5` (Protocol v1.5); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version. New optional message types are capability-gated so a newer same-major plugin never sends an unknown message to an older worker.
 
 ## Transport Timeouts & Guarantees
 
@@ -52,7 +52,7 @@ Plugin to worker. Payload: `u16 min_major`, `u16 max_major`, `u8 token[32]`, `u1
 
 ### HELLO_ACK
 
-Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO` (`1U << 0`); optional flags include `PARTIAL_SEGMENTS` (`1U << 1`), `SEEK_RESET` (`1U << 2`), and `SOURCE_MODE` (`VW_CAPABILITY_SOURCE_MODE = 1U << 3`).
+Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO` (`1U << 0`); optional flags include `PARTIAL_SEGMENTS` (`1U << 1`), `SEEK_RESET` (`1U << 2`), `SOURCE_MODE` (`VW_CAPABILITY_SOURCE_MODE = 1U << 3`), and `TRANSLATION` (`VW_CAPABILITY_TRANSLATION = 1U << 4`). A plugin MUST NOT send `TRANSLATE_CTRL` unless the worker advertises `TRANSLATION`. For an older same-major worker without the flag, a disabled translation setting is a local no-op; attempting to enable translation fails locally without damaging the transport.
 
 ### START
 
@@ -60,18 +60,19 @@ Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample
 
 ### POSITION (v1.1)
 
-Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown.
+Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown. Arrival of an explicit `SEEK` invalidates all queued/in-flight translation work from the previous playback epoch before that old work can become visible.
 
 ### AUDIO
 
 Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal `duration_us * 16000 / 1_000_000 * 2`, subject only to explicitly documented whole-sample rounding: the receiver accepts ±1 byte of the computed value (half a sample at 16 kHz S16LE = 1 byte), since producers may round the duration up or down for odd-length partial blocks. The worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
 
-### SEGMENT
+### SEGMENT (v1.5)
 
-Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `bool is_final`, `u16 text_bytes`, UTF-8 text. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
+Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i64 end_pts_us`, `bool is_final`, `u16 text_bytes`, UTF-8 text, optional `u16 translated_text_bytes`, optional UTF-8 translated text, optional `u32 translation_latency_us`, optional `u8 translation_tier`. Valid segments have `end_pts_us > start_pts_us`, text no longer than 1,024 bytes, and no control characters other than spaces/newlines allowed by the renderer.
 
 - **Phrase-by-Phrase Timing (`ADR-017`)**: Segment timing is derived from internal Whisper sub-segment boundaries ($t_0, t_1$ in centiseconds scaled by `10000LL` to microsecond PTS), rather than coarse 8-second window spans.
 - **`is_final` Invariant**: `is_final == true` denotes an immutable, committed subtitle cue to be rendered on screen via SPU (`vout_PutSubpicture`). Uncommitted/in-flight hypotheses are held until their window onset is finalized or drained.
+- **Real-Time Translation Fields (v1.5)**: When translation is enabled and available, finalized cues are copied to a dedicated bounded translation thread (maximum four pending jobs). The main worker inference/control loop never performs network I/O. The three fallback tiers share one absolute **800 ms total cue deadline**; the budget is not reset per tier. On success, `translated_text_utf8` carries the translated text, `translation_latency_us` carries total translation elapsed time in microseconds, and `translation_tier` reports the resolving tier (`1 = Web RPC`, `2 = GTX`, `3 = Mobile scrape`). On failure/deadline/queue unavailability, the source caption is emitted without translated text. Seek/session/config invalidation drops results from an older translation epoch.
 - **Silence Screen Blanking**: Non-contiguous phrases (e.g. 0.6s pause between speakers) generate distinct non-overlapping subpictures, naturally blanking the screen during conversational pauses.
 
 Example semantic value, shown as JSON only for readability:
@@ -83,21 +84,31 @@ Example semantic value, shown as JSON only for readability:
   "start_pts_us": 12000000,
   "end_pts_us": 14100000,
   "final": true,
-  "text": "Example caption."
+  "text": "Hello world.",
+  "translated_text": "Salut lume.",
+  "translation_latency_us": 145000,
+  "translation_tier": 1
 }
 ```
 
+### TRANSLATE_CTRL (v1.5)
+
+Plugin to worker. Payload 50 bytes: session ID (`16 bytes`), `u8 enabled` (0=disabled, 1=enabled), `char source_lang[16]` (NUL-padded language code or `"auto"`), `char target_lang[16]` (NUL-padded destination language code e.g. `"ro"` / `"en"`), `u8 mode` (0=translation only, 1=dual line).
+
+- Semantics: dynamically synchronizes translation preferences to the active worker mid-stream without requiring worker process restart or playback disruption. It is optional-minor-version functionality and is sent only when `HELLO_ACK.capability_flags` includes `VW_CAPABILITY_TRANSLATION`.
+- Privacy/realtime: this control carries configuration only. Subtitle text egress occurs only inside the worker's asynchronous translator after the user enables translation. The VLC Lua extension performs no translation HTTP requests.
+
 ### STARTED (v1.2)
 
-Worker to plugin. Payload: `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if source file look-ahead mode initialized successfully; `VW_SOURCE_ACTIVE_INACTIVE = 0` if live streaming mode). Confirms session initialization and effective settings after `START`.
+Worker to plugin. Payload: `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if source file lookahead mode initialized successfully; `VW_SOURCE_ACTIVE_INACTIVE = 0` if live streaming mode). Confirms session initialization and effective settings after `START`.
 
 ### CONTROL MESSAGES (`PAUSE`, `RESUME`, `STOP`)
 
 Plugin to worker. Payload: session ID, `u16 reason`.
 
-- `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); the session timeline/epoch is preserved. Reason codes: `USER_PAUSE=1`.
+- `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); asynchronous translation work from the pre-pause epoch is invalidated. Reason codes: `USER_PAUSE=1`.
 - `RESUME`: Resumes active transcription processing after pause. Reason codes: `USER_RESUME=1`.
-- `STOP`: Terminates active captioning session, clears buffers, and resets VAD state. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
+- `STOP`: Terminates active captioning session, clears buffers, resets VAD state, and invalidates pending translation work. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
 
 ### SHUTDOWN
 
@@ -108,7 +119,7 @@ Plugin to worker. Payload: Empty (header only). Instructs worker to close transp
 Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`, `char resolved_backend[16]` — 60 bytes on the wire in v1.3.
 
 - `resolved_backend`: NUL-padded `"gpu"` or `"cpu"` — the backend **actually used for inference**, not the requested one. A Vulkan-enabled worker in `auto`/`gpu` mode without a usable GPU/IGPU device transparently falls back to CPU at runtime (whisper.cpp behavior) and MUST report `"cpu"`. The plugin mirrors this value into the read-only `whisper-backend-active` config var, which the settings GUI displays.
-- Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted periodically for performance monitoring.
+- Emission: one `STATUS` is sent immediately after every `STARTED` reply carrying the resolved backend for the fresh session; further `STATUS` frames are emitted after inference work. `inference_us` is cumulative wall time spent inside `whisper_full()` for the worker lifetime, excluding VAD, segment filtering, and IPC presentation.
 - Compatibility: v1.2 (44-byte) STATUS payloads remain decodable — a v1.3 decoder zero-fills the missing tail, yielding an empty `resolved_backend`; a v1.3 encoder always writes the full 60-byte payload. Same major version, so no capability flag is required (both peers ship together).
 
 ### MODEL_CTRL (v1.4)
@@ -128,11 +139,15 @@ Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADI
 
 - Emission: at least 1 Hz while a download is active and on every stage transition (`IDLE` → `DOWNLOADING` → `VERIFYING` → `DONE`/`FAILED`, `ABORTING` → `IDLE`). The initial `IDLE` snapshot is informational, not a terminal result: the plugin must retain the matching pending command until `DONE`, `FAILED`, `ABORTING`, worker shutdown, or transport death. Terminal `FAILED` frames may report `bytes_total = 0` when failure occurs before catalog or destination inspection. Plugin mirrors fields into the read-only config vars `whisper-model-progress` (pct) and `whisper-model-status` (`"<stage>:<model_id>"`) and renders progress through a dedicated C presenter SPU channel. Lua only submits commands; it does not poll, sleep, or refresh the dialog in a loop, so playback pause does not pause downloading.
 
-### Model storage
+### Model storage and worker network policy
 
-Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Each destination is protected by an OS-level interprocess lock for the transfer lifetime; worker startup never deletes another worker's partial file. Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. At worker startup, an existing configured path wins; when a relative configured path is absent, its filename is also tried under `--model-dir`, allowing a downloaded catalog model to load after a worker restart. Network policy: see ADR-023 — egress is worker-only, explicit, pinned-URL, and hash-verified.
+Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Each destination is protected by an OS-level interprocess lock for the transfer lifetime; worker startup never deletes another worker's partial file. Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. At worker startup, an existing configured path wins; when a relative configured path is absent, its filename is also tried under `--model-dir`, allowing a downloaded catalog model to load after a worker restart. VAD resolution occurs after model resolution: explicit `--vad-model`, a sibling of the effective model, `--model-dir`, the worker executable's adjacent `models/` directory (for example, `<VLC>\models` on Windows), then legacy working-directory candidates. The executable-directory probe uses the process image path rather than the launcher's current directory, so IPTVnator or another launcher cannot hide the bundled VAD by changing CWD.
 
-The worker records model-download diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory). The plugin logs `PLUGIN_MODEL_CTRL`, `PLUGIN_MODEL_PROGRESS`, `PLUGIN_MODEL_PATH`, and `PLUGIN_MODEL_ACTIVATE` through VLC Messages. These diagnostics may include bounded local paths and byte counters, but never auth tokens, PCM, transcripts, or network credentials.
+Network policy is worker-confined. ADR-023 governs explicit, pinned, SHA-256-verified model downloads. ADR-024 governs opt-in subtitle translation: only finalized text is sent to the configured Google web endpoints over HTTPS; PCM/audio is never sent. Translation is disabled by default and the Lua settings callback itself performs no HTTP.
+
+Diagnostic logging is disabled by default. When enabled by the `whisper-logging` config key, the worker records diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory), and the plugin emits events through VLC Messages. Diagnostics may include bounded local paths, segment IDs, byte counters, tier/outcome, and latency, but never auth tokens, PCM, source transcript bodies, translated subtitle bodies, or network credentials.
+
+Worker startup also emits `WORKER_VAD_RESOLVE` diagnostics: the worker current directory, effective Whisper model path, configured model directory, explicit VAD override, every VAD candidate and hit/miss result, and the selected path or RMS fallback. This is intended to diagnose launcher-dependent path issues without logging media content or secrets.
 
 ### ERROR
 
@@ -161,7 +176,7 @@ Bi-directional (primarily Worker to Plugin). Payload: session ID, `u32 error_cod
 The worker executable (`vlc-whisper-worker.exe` / `vlc-whisper-worker`) is spawned by the plugin or launched manually during testing with the following command-line interface:
 
 ```text
-vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [--vad-model <vad_path>] [--backend auto|gpu|cpu] [--gpu-device <id>] [--log-file <log_path>]
+vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [--vad-model <vad_path>] [--backend auto|gpu|cpu] [--gpu-device <id>] [--log-file <log_path>] [--enable-logging]
 ```
 
 | Parameter | Required | Default | Description |
@@ -169,12 +184,13 @@ vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [
 | `--pipe <path>` | Yes | (none) | Named pipe name (Win32) or Unix domain socket path (POSIX). |
 | `--token <64_hex>` | Yes | (none) | 32-byte secret authentication token in 64 hexadecimal characters. |
 | `--model <path>` | No | bundled `models/ggml-tiny.bin` | Path to Whisper GGML model file. |
-| `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). If not specified, the worker auto-discovers `ggml-silero-vad.bin` in the model directory alongside `--model`. If absent, gracefully falls back to RMS Energy VAD. |
+| `--vad-model <path>` | No | (auto-discovered) | Path to Silero VAD GGML model (`ggml-silero-vad.bin`). Explicit value wins; otherwise, after Whisper model resolution, the worker probes its sibling, `--model-dir`, the worker executable's adjacent `models/` directory, then legacy working-directory candidates. If absent, it gracefully falls back to RMS Energy VAD. |
 | `--backend <type>` | No | `auto` | Inference accelerator backend: `auto`, `gpu`, or `cpu`. |
 | `--gpu-device <id>` | No | `0` | GPU/IGPU device index for hardware acceleration. |
-| `--log-file <path>` | No | (temp directory) | Custom destination for diagnostic log output. |
+| `--log-file <path>` | No | disabled | Custom destination for diagnostic log output; implies `--enable-logging`. |
+| `--enable-logging` | No | disabled | Enables worker diagnostic logging and its temp-file output. |
 | `--model-dir <path>` | No | per-user model directory | Destination for explicit catalog downloads; creates the directory on demand. |
 
 ## Compatibility rules
 
-Protocol changes that alter framing, time units, authentication, or message meaning require a major bump. Adding a bounded optional field or optional message requires a minor bump and capability flag. The worker and plugin must expose their protocol/build versions in diagnostics and reject accidental mixed-package installations.
+Protocol changes that alter framing, time units, authentication, or message meaning require a major bump. Adding a bounded optional field or optional message requires a minor bump and capability flag. The worker and plugin must expose their protocol/build versions in diagnostics. A newer peer may communicate with an older same-major peer only when it gates every newer optional message/field on negotiated capabilities; unsupported optional features must fail locally or degrade without sending an unknown wire message.

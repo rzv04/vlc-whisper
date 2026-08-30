@@ -70,7 +70,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
                                                            const char* language, int n_threads, int gpu_device,
-                                                           const char* model_dir) {
+                                                           const char* model_dir, bool logging_enabled) {
   if (!endpoint_name || !auth_token) {
     return NULL;
   }
@@ -115,6 +115,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
       argv[argc++] = "--model-dir";
       argv[argc++] = model_dir;
     }
+    if (logging_enabled) argv[argc++] = "--enable-logging";
     argv[argc] = NULL;
     if (!vw_platform_spawn_process(executable_path, argv, &worker_process)) {
       return NULL;
@@ -213,7 +214,10 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
-  client->worker_capabilities = ack.capability_flags;
+  if (ack_ok) {
+    client->worker_capabilities = ack.capability_flags;
+    client->worker_protocol_minor = ack.selected_minor;
+  }
   free(ack_payload);
   if (!ack_ok) goto fail;
 
@@ -234,7 +238,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const char* model_path) {
   // Wrapper preserving legacy 4-arg ABI for tests; forwards defaults (auto/en/4, no gpu-device)
   return vw_worker_client_launch_and_connect_ex(executable_path, endpoint_name, auth_token, model_path, "auto", "en", 4,
-                                                -1, NULL);
+                                                -1, NULL, false);
 }
 
 void vw_worker_client_disconnect(vw_worker_client_t* client) {
@@ -485,6 +489,42 @@ bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action
   return true;
 }
 
+bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabled, const char* source_lang,
+                                          const char* target_lang, uint8_t mode) {
+  if (!client || !client->pipe_handle) return false;
+  if ((client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
+    // Same-major older workers remain usable when translation is disabled. Enabling an unsupported optional feature
+    // fails locally without sending an unknown message that would desynchronize/terminate the older worker.
+    return !enabled;
+  }
+  vw_msg_translate_ctrl_t ctrl;
+  memset(&ctrl, 0, sizeof(ctrl));
+  memcpy(ctrl.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES);
+  ctrl.enabled = enabled ? 1 : 0;
+  snprintf(ctrl.source_lang, sizeof(ctrl.source_lang), "%s", source_lang ? source_lang : "auto");
+  snprintf(ctrl.target_lang, sizeof(ctrl.target_lang), "%s", target_lang ? target_lang : "en");
+  ctrl.mode = mode;
+
+  uint8_t payload_buf[VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_TRANSLATE_CTRL, &ctrl, payload_buf, sizeof(payload_buf), &payload_len))
+    return false;
+
+  vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
+                           .major = VW_PROTOCOL_VERSION_MAJOR,
+                           .type = VW_MSG_TRANSLATE_CTRL,
+                           .payload_length = (uint32_t)payload_len,
+                           .sequence = ++client->sequence};
+  uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
+  if (!vw_ipc_send(client->pipe_handle, hdr_buf, sizeof(hdr_buf)) ||
+      !vw_ipc_send(client->pipe_handle, payload_buf, payload_len)) {
+    vw_worker_client_drop_transport(client);
+    return false;
+  }
+  return true;
+}
+
 // Sends one control frame (PAUSE/RESUME/STOP) stamped with the client's session id and reason.
 // Drops the transport fail-closed on any write failure (the stream is mis-framed or dead — a
 // partial control frame can never be re-synced). Returns true only when the whole frame was sent.
@@ -617,6 +657,22 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
           out->text_buf[n] = '\0';
           seg->text_utf8 = out->text_buf;
           seg->text_bytes = n;
+
+          if (seg->translated_text_utf8 && seg->translated_text_bytes > 0) {
+            uint16_t tn = seg->translated_text_bytes;
+            if (tn >= VW_MAX_TEXT_BYTES) {
+              tn = VW_MAX_TEXT_BYTES - 1;
+            }
+            memcpy(out->trans_text_buf, seg->translated_text_utf8, tn);
+            out->trans_text_buf[tn] = '\0';
+            seg->translated_text_utf8 = out->trans_text_buf;
+            seg->translated_text_bytes = tn;
+          } else {
+            out->trans_text_buf[0] = '\0';
+            seg->translated_text_utf8 = NULL;
+            seg->translated_text_bytes = 0;
+          }
+
           out->type = VW_MSG_CAPTION_SEGMENT;
           decoded = true;
         }

@@ -14,6 +14,8 @@
 #include "vw_protocol_types.h"
 #include "vw_protocol_util.h"
 #include "vw_source_decoder.h"
+#include "vw_translate.h"
+#include "vw_translate_async.h"
 #include "vw_vad.h"
 #include "vw_worker_queue.h"
 
@@ -28,6 +30,7 @@
 typedef struct vw_worker_reader_arg {
   vw_ipc_handle_t* handle;
   vw_worker_queue_t* queue;
+  vw_translate_async_t* translator;
   _Atomic bool* running;
 } vw_worker_reader_arg_t;
 
@@ -121,6 +124,81 @@ static bool vw_worker_send_model_progress(vw_ipc_handle_t* handle, const uint8_t
   return true;
 }
 
+// Sends cumulative inference timing and queue-drop status without adding a new wire message or blocking inference.
+static bool vw_worker_send_status(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESSION_ID_BYTES],
+                                  const vw_worker_config_t* config, const vw_whisper_engine_t* engine,
+                                  const vw_worker_queue_t* queue, uint32_t* sequence) {
+  if (!handle || !session_id || !config || !sequence) return false;
+  vw_msg_status_t status;
+  memset(&status, 0, sizeof(status));
+  memcpy(status.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
+  status.state = 1;
+  status.inference_us = (int64_t)(engine ? vw_whisper_engine_get_total_inference_us(engine) : 0);
+  status.dropped_audio_us = queue ? (int64_t)vw_worker_queue_get_dropped_audio_us(queue) : 0;
+  const char* resolved =
+      (config->backend == VW_WORKER_BACKEND_CPU || !engine || !vw_whisper_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
+  snprintf(status.resolved_backend, sizeof(status.resolved_backend), "%s", resolved);
+
+  uint8_t payload[64];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_STATUS, &status, payload, sizeof(payload), &payload_len)) return false;
+  vw_frame_header_t header = {.magic = VW_PROTOCOL_MAGIC,
+                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                              .type = VW_MSG_STATUS,
+                              .payload_length = (uint32_t)payload_len,
+                              .sequence = ++(*sequence)};
+  uint8_t header_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&header, header_buf, sizeof(header_buf))) return false;
+  return vw_ipc_send(handle, header_buf, sizeof(header_buf)) && vw_ipc_send(handle, payload, payload_len);
+}
+
+// Serializes one completed caption on the worker's single-writer main loop. Translation threads never touch IPC.
+static bool vw_worker_send_caption_segment(vw_ipc_handle_t* handle, const vw_caption_segment_t* seg,
+                                           uint32_t* sequence) {
+  if (!handle || !seg || !sequence) return false;
+  uint8_t payload[VW_CAPTION_SEGMENT_FIXED_BYTES + VW_MAX_TEXT_BYTES * 2U + 64U];
+  size_t payload_len = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_CAPTION_SEGMENT, seg, payload, sizeof(payload), &payload_len)) return false;
+  vw_frame_header_t header = {.magic = VW_PROTOCOL_MAGIC,
+                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                              .type = VW_MSG_CAPTION_SEGMENT,
+                              .payload_length = (uint32_t)payload_len,
+                              .sequence = ++(*sequence)};
+  uint8_t header_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&header, header_buf, sizeof(header_buf))) return false;
+  return vw_ipc_send(handle, header_buf, sizeof(header_buf)) && vw_ipc_send(handle, payload, payload_len);
+}
+
+// Invalidate asynchronous translation at receive time, before the main loop can be delayed by inference. This makes
+// seek/session/config cancellation independent of worker-loop scheduling. Ordinary POSITION pacing frames do not
+// invalidate; only an explicit SEEK position update does.
+static void vw_worker_reader_invalidate_translation(vw_worker_reader_arg_t* a, const vw_frame_header_t* header,
+                                                    const uint8_t* payload) {
+  if (!a || !a->translator || !header) return;
+  switch (header->type) {
+    case VW_MSG_START_SESSION:
+    case VW_MSG_PAUSE:
+    case VW_MSG_RESUME:
+    case VW_MSG_STOP_SESSION:
+    case VW_MSG_TRANSLATE_CTRL:
+    case VW_MSG_SHUTDOWN:
+      vw_translate_async_invalidate(a->translator);
+      break;
+    case VW_MSG_POSITION: {
+      if (!payload) break;
+      vw_msg_position_t position;
+      memset(&position, 0, sizeof(position));
+      if (vw_protocol_decode_payload(VW_MSG_POSITION, payload, header->payload_length, &position) &&
+          vw_protocol_validate_payload(VW_MSG_POSITION, &position) && (position.flags & VW_POSITION_FLAG_SEEK) != 0) {
+        vw_translate_async_invalidate(a->translator);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 // Dedicated IPC reader thread (ADR-013): the only thread that reads from the pipe. Continuously
 // drains frames into the bounded worker frame queue so inference on the main loop never stalls
 // transport reads. Never sends; all replies stay single-writer in vw_worker_run's main loop.
@@ -174,6 +252,8 @@ static void* vw_worker_reader_main(void* arg) {
         payload_read += (uint32_t)res;
       }
     }
+
+    vw_worker_reader_invalidate_translation(a, &header, payload_buf);
 
     // The queue takes ownership of payload and frees it if the frame is dropped on overflow.
     // A failed push means a counted AUDIO drop, or a control dropped because the all-control queue
@@ -249,15 +329,22 @@ int vw_worker_run(const vw_worker_config_t* config) {
       engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
       engine ? "whisper engine loaded from '%s'" : "whisper engine init FAILED for '%s' (model missing/invalid)",
       effective_model_path);
+  char resolved_vad_model_path[VW_PATH_MAX_BYTES];
+  const char* effective_vad_model_path = NULL;
+  if (vw_worker_config_resolve_vad_model_path(config, effective_model_path, resolved_vad_model_path,
+                                              sizeof(resolved_vad_model_path))) {
+    effective_vad_model_path = resolved_vad_model_path;
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD_RESOLVE", "selected VAD path='%s'", effective_vad_model_path);
+  }
   struct whisper_vad_context* vad_ctx = NULL;
-  if (config->vad_model_path[0] != '\0') {
-    vad_ctx = vw_vad_init_default(config->vad_model_path);
+  if (effective_vad_model_path) {
+    vad_ctx = vw_vad_init_default(effective_vad_model_path);
     if (!vad_ctx) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_VAD",
                    "Silero VAD model failed to load from '%s'; operating on RMS Energy fallback",
-                   config->vad_model_path);
+                   effective_vad_model_path);
     } else {
-      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD", "Silero VAD model loaded (%s)", config->vad_model_path);
+      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD", "Silero VAD model loaded (%s)", effective_vad_model_path);
     }
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_VAD",
@@ -317,6 +404,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
   int64_t decoded_pts_us = 0;
   const int64_t lead_target_us = 30000000LL;  // 30s look-ahead horizon
 
+  // Translation configuration state. The network engine lives on a dedicated bounded worker thread.
+  bool translate_enabled = false;
+  char translate_src_lang[16] = "auto";
+  char translate_dst_lang[16] = "en";
+  uint8_t translate_mode = 1;
+
   vw_worker_queue_t* queue = vw_worker_queue_create(32);
   if (!queue) {
     free(window_samples);
@@ -335,11 +428,19 @@ int vw_worker_run(const vw_worker_config_t* config) {
     return 1;
   }
 
-  vw_worker_reader_arg_t reader_arg = {.handle = handle, .queue = queue, .running = &running};
+  vw_translate_async_t* translator = vw_translate_async_create();
+  if (!translator) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_TRANSLATE",
+                 "translation thread unavailable; enabled translation will degrade immediately to source captions");
+  }
+
+  vw_worker_reader_arg_t reader_arg = {
+      .handle = handle, .queue = queue, .translator = translator, .running = &running};
   vw_thread_t reader_thread;
   if (!vw_platform_thread_create(&reader_thread, vw_worker_reader_main, &reader_arg)) {
     // Reader spawn failure: fail closed rather than starve the pipe.
     vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_READER", "reader thread creation FAILED; worker exiting");
+    if (translator) vw_translate_async_destroy(translator);
     vw_worker_queue_destroy(queue);
     free(window_samples);
     if (audio_buf) vw_audio_buffer_free(audio_buf);
@@ -367,6 +468,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
         has_frame = true;
         break;
       }
+      if (translator && vw_translate_async_has_result(translator)) break;
       // If we have look-ahead decoding work to do (and haven't hit EOF), don't sleep
       if (session_active && source_mode && source_decoder && !paused && !source_eof &&
           (decoded_pts_us < vw_saturating_add_i64(current_playback_pts_us, lead_target_us))) {
@@ -393,6 +495,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
         vw_msg_status_t status;
         vw_msg_position_t position;
         vw_msg_model_ctrl_t model_ctrl;
+        vw_msg_translate_ctrl_t translate_ctrl;
       } payload_decoded;
 
       memset(&payload_decoded, 0, sizeof(payload_decoded));
@@ -426,12 +529,14 @@ int vw_worker_run(const vw_worker_config_t* config) {
         authenticated = true;
         vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_AUTH", "HELLO authenticated; replying HELLO_ACK");
 
-        // Reply HELLO_ACK with the negotiated version and supported capabilities (including SOURCE_MODE)
-        vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
-                                  .selected_minor = VW_PROTOCOL_VERSION_MINOR,
-                                  .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE,
-                                  .worker_version = VW_WORKER_VERSION,
-                                  .worker_version_length = VW_WORKER_VERSION_LENGTH};
+        // Reply HELLO_ACK with the negotiated version and supported capabilities.
+        vw_msg_hello_ack_t ack = {
+            .selected_major = VW_PROTOCOL_VERSION_MAJOR,
+            .selected_minor = VW_PROTOCOL_VERSION_MINOR,
+            .capability_flags =
+                VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE | VW_CAPABILITY_TRANSLATION,
+            .worker_version = VW_WORKER_VERSION,
+            .worker_version_length = VW_WORKER_VERSION_LENGTH};
         uint8_t ack_payload[256];
         size_t ack_len = 0;
         if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, ack_payload, sizeof(ack_payload), &ack_len)) {
@@ -564,37 +669,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
           if (started_written > 0) {
             vw_ipc_send(handle, started_payload_buf, started_written);
           }
-          // Immediately after STARTED, emit one STATUS with resolved backend truth
-          {
-            vw_msg_status_t st;
-            memset(&st, 0, sizeof(st));
-            memcpy(st.session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
-            st.state = 1;
-            st.queued_audio_us = 0;
-            st.inference_us = 0;
-            st.dropped_audio_us = 0;
-            // Runtime truth, not the request: whisper transparently falls back to CPU when the
-            // requested GPU/IGPU ordinal does not exist; the engine re-derives whisper's own
-            // device selection after init, so a Vulkan-built worker without a usable device
-            // reports "cpu". Engine init failure also reports "cpu" (no inference is running).
-            const char* resolved =
-                (config->backend == VW_WORKER_BACKEND_CPU || !vw_whisper_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
-            snprintf(st.resolved_backend, sizeof(st.resolved_backend), "%s", resolved);
-            uint8_t st_payload[64];
-            size_t st_len = 0;
-            if (vw_protocol_encode_payload(VW_MSG_STATUS, &st, st_payload, sizeof(st_payload), &st_len)) {
-              vw_frame_header_t st_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                          .major = VW_PROTOCOL_VERSION_MAJOR,
-                                          .type = VW_MSG_STATUS,
-                                          .payload_length = (uint32_t)st_len,
-                                          .sequence = ++sequence};
-              uint8_t st_hdr_buf[sizeof(vw_frame_header_t)];
-              vw_protocol_encode_header(&st_hdr, st_hdr_buf, sizeof(st_hdr_buf));
-              vw_ipc_send(handle, st_hdr_buf, sizeof(st_hdr_buf));
-              vw_ipc_send(handle, st_payload, st_len);
-              vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_STATUS", "STATUS sent resolved_backend=%s", resolved);
-            }
-          }
+          // Immediately after STARTED, emit one STATUS with resolved backend truth.
+          vw_worker_send_status(handle, payload_decoded.start.session_id.bytes, config, engine, queue, &sequence);
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_STATUS", "STATUS sent resolved backend and zero inference time");
           break;
         }
 
@@ -635,6 +712,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
             if (seek_flag || ((backward_jump || forward_past_decoded) &&
                               payload_decoded.position.current_pts_us != last_playback_pts_us)) {
+              // Explicit seeks were already invalidated by the reader. Re-invalidate here for worker-detected source
+              // re-anchors that arrive without an explicit seek flag.
+              if (translator && !seek_flag) vw_translate_async_invalidate(translator);
               vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEEK",
                            "re-seeking source decoder to %lldus (flag=%d back=%d fwd=%d)",
                            (long long)payload_decoded.position.current_pts_us, (int)seek_flag, (int)backward_jump,
@@ -695,6 +775,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_INFERENCE", "whisper_full FAILED @%lldus",
                                  (long long)window_pts_us);
                   }
+                  vw_worker_send_status(handle, session_id.bytes, config, engine, queue, &sequence);
                 }
               }
               vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
@@ -884,6 +965,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
           break;
         }
 
+        case VW_MSG_TRANSLATE_CTRL: {
+          translate_enabled = (payload_decoded.translate_ctrl.enabled != 0);
+          snprintf(translate_src_lang, sizeof(translate_src_lang), "%s", payload_decoded.translate_ctrl.source_lang);
+          snprintf(translate_dst_lang, sizeof(translate_dst_lang), "%s", payload_decoded.translate_ctrl.target_lang);
+          translate_mode = payload_decoded.translate_ctrl.mode;
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_TRANSLATE", "translate config: enabled=%d from=%s to=%s mode=%d",
+                       (int)translate_enabled, translate_src_lang, translate_dst_lang, (int)translate_mode);
+          break;
+        }
+
         case VW_MSG_SHUTDOWN:
           vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "shutdown requested; exiting");
           if (source_decoder) {
@@ -899,6 +990,28 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
 
       free(frame.payload);
+    }
+
+    // Translation completions are drained before more inference work. The reader invalidates the queue immediately on
+    // seek/session/config controls, so any completion visible here belongs to the current playback epoch.
+    if (translator) {
+      vw_translate_async_result_t translated;
+      while (vw_translate_async_try_pop(translator, &translated)) {
+        if (!session_active ||
+            memcmp(translated.segment.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES) != 0) {
+          continue;
+        }
+        if (vw_worker_send_caption_segment(handle, &translated.segment, &sequence)) {
+          vw_log_event(translated.success ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_TRANSLATE",
+                       "translation complete segment=%llu success=%d tier=%u latency=%uus source_bytes=%u "
+                       "translated_bytes=%u",
+                       (unsigned long long)translated.segment.segment_id, (int)translated.success,
+                       (unsigned int)translated.segment.translation_tier,
+                       (unsigned int)translated.segment.translation_latency_us,
+                       (unsigned int)translated.segment.text_bytes,
+                       (unsigned int)translated.segment.translated_text_bytes);
+        }
+      }
     }
 
     // Model download progress emission: 1 Hz while downloading, immediate on stage transitions.
@@ -995,6 +1108,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 }
               }
             }
+            vw_worker_send_status(handle, session_id.bytes, config, engine, queue, &sequence);
             // Non-Overlapping Drain
             vw_audio_buffer_drain(audio_buf, cut_samples);
           } else {
@@ -1042,6 +1156,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   }
                 }
               }
+              vw_worker_send_status(handle, session_id.bytes, config, engine, queue, &sequence);
               vw_audio_buffer_drain(audio_buf, cut_samples);
             }
           }
@@ -1051,27 +1166,37 @@ int vw_worker_run(const vw_worker_config_t* config) {
       }
     }
 
-    // Drain completed caption segments from builder and emit over IPC
+    // Finalized captions are either emitted immediately (translation disabled/saturated/unavailable) or copied into
+    // the four-job translation queue. Network latency never blocks this worker main loop or inference processing.
     if (builder) {
       vw_caption_segment_t seg;
       while (vw_segment_builder_pop(builder, &seg)) {
         memcpy(seg.session_id.bytes, session_id.bytes, VW_SESSION_ID_BYTES);
-        uint8_t seg_payload[VW_CAPTION_SEGMENT_FIXED_BYTES + VW_SEGMENT_BUILDER_MAX_TEXT_BYTES];
-        size_t seg_len = 0;
-        if (vw_protocol_encode_payload(VW_MSG_CAPTION_SEGMENT, &seg, seg_payload, sizeof(seg_payload), &seg_len)) {
-          vw_frame_header_t seg_hdr = {.magic = VW_PROTOCOL_MAGIC,
-                                       .major = VW_PROTOCOL_VERSION_MAJOR,
-                                       .type = VW_MSG_CAPTION_SEGMENT,
-                                       .payload_length = (uint32_t)seg_len,
-                                       .sequence = ++sequence};
-          uint8_t seg_hdr_buf[sizeof(vw_frame_header_t)];
-          vw_protocol_encode_header(&seg_hdr, seg_hdr_buf, sizeof(seg_hdr_buf));
-          vw_ipc_send(handle, seg_hdr_buf, sizeof(seg_hdr_buf));
-          vw_ipc_send(handle, seg_payload, seg_len);
-          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEGMENT",
-                       "emitted segment id=%llu start=%lld end=%lld is_final=%d text_len=%zu",
-                       (unsigned long long)seg.segment_id, (long long)seg.start_pts_us, (long long)seg.end_pts_us,
-                       seg.is_final, seg.text_utf8 ? strlen(seg.text_utf8) : 0);
+        seg.translated_text_utf8 = NULL;
+        seg.translated_text_bytes = 0;
+        seg.translation_tier = VW_TRANSLATE_TIER_NONE;
+        seg.translation_latency_us = 0;
+
+        bool queued_for_translation = false;
+        if (translate_enabled && translator && seg.text_utf8 && seg.text_utf8[0]) {
+          queued_for_translation =
+              vw_translate_async_submit(translator, &seg, translate_src_lang, translate_dst_lang);
+        }
+        if (!translate_enabled || !queued_for_translation) {
+          if (translate_enabled) {
+            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_TRANSLATE",
+                         "translation queue unavailable/saturated for segment=%llu; emitting source immediately",
+                         (unsigned long long)seg.segment_id);
+          }
+          if (vw_worker_send_caption_segment(handle, &seg, &sequence)) {
+            vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SEGMENT",
+                         "emitted segment id=%llu start=%lld end=%lld is_final=%d text_len=%zu trans_len=0",
+                         (unsigned long long)seg.segment_id, (long long)seg.start_pts_us, (long long)seg.end_pts_us,
+                         seg.is_final, seg.text_utf8 ? strlen(seg.text_utf8) : 0);
+          }
+        } else {
+          vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_TRANSLATE", "queued segment=%llu source_bytes=%u",
+                       (unsigned long long)seg.segment_id, (unsigned int)seg.text_bytes);
         }
         if (seg.text_utf8) free(seg.text_utf8);
       }
@@ -1081,6 +1206,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
   // Shutdown order
   atomic_store(&running, false);
   vw_platform_thread_join(reader_thread);
+  if (translator) {
+    vw_translate_async_destroy(translator);
+    translator = NULL;
+  }
   const uint64_t dropped_audio_us = vw_worker_queue_get_dropped_audio_us(queue);
   vw_worker_queue_destroy(queue);
 
