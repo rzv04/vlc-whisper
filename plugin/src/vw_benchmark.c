@@ -64,7 +64,6 @@ static int64_t vw_benchmark_trans_percentile(const vw_benchmark_t* benchmark, un
   size_t index = ((size_t)percentile * (benchmark->translation_latency_sample_count - 1U) + 99U) / 100U;
   return sorted[index];
 }
-
 static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, int64_t end_us) {
   if (!benchmark || !benchmark->active || benchmark->report_path[0] == '\0') return false;
   char temp_path[VW_PATH_MAX_BYTES];
@@ -221,7 +220,6 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
     benchmark->translation_failure_count++;
   }
 }
-
 void vw_benchmark_record_caption_sent(vw_benchmark_t* benchmark, int64_t now_us) {
   if (!benchmark || !benchmark->active) return;
   benchmark->captions_sent++;

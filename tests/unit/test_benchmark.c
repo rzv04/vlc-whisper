@@ -40,8 +40,8 @@ int main(void) {
 
   vw_benchmark_record_translation(&benchmark, 1, 150000, true);
   vw_benchmark_record_translation(&benchmark, 2, 200000, true);
-  vw_benchmark_record_translation(&benchmark, 0, 100000, false);   // transport/parser failure before deadline
-  vw_benchmark_record_translation(&benchmark, 0, 800000, false);   // global cue deadline exhausted
+  vw_benchmark_record_translation(&benchmark, 0, 100000, false);  // transport/parser failure before deadline
+  vw_benchmark_record_translation(&benchmark, 0, 800000, false);  // global cue deadline exhausted
   EXPECT(benchmark.translation_requests_sent == 4);
   EXPECT(benchmark.translation_success_count == 2);
   EXPECT(benchmark.translation_tier1_count == 1);

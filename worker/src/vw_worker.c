@@ -198,7 +198,6 @@ static void vw_worker_reader_invalidate_translation(vw_worker_reader_arg_t* a, c
       break;
   }
 }
-
 // Dedicated IPC reader thread (ADR-013): the only thread that reads from the pipe. Continuously
 // drains frames into the bounded worker frame queue so inference on the main loop never stalls
 // transport reads. Never sends; all replies stay single-writer in vw_worker_run's main loop.
@@ -434,8 +433,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                  "translation thread unavailable; enabled translation will degrade immediately to source captions");
   }
 
-  vw_worker_reader_arg_t reader_arg = {
-      .handle = handle, .queue = queue, .translator = translator, .running = &running};
+  vw_worker_reader_arg_t reader_arg = {.handle = handle, .queue = queue, .translator = translator, .running = &running};
   vw_thread_t reader_thread;
   if (!vw_platform_thread_create(&reader_thread, vw_worker_reader_main, &reader_arg)) {
     // Reader spawn failure: fail closed rather than starve the pipe.
@@ -530,13 +528,12 @@ int vw_worker_run(const vw_worker_config_t* config) {
         vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_AUTH", "HELLO authenticated; replying HELLO_ACK");
 
         // Reply HELLO_ACK with the negotiated version and supported capabilities.
-        vw_msg_hello_ack_t ack = {
-            .selected_major = VW_PROTOCOL_VERSION_MAJOR,
-            .selected_minor = VW_PROTOCOL_VERSION_MINOR,
-            .capability_flags =
-                VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE | VW_CAPABILITY_TRANSLATION,
-            .worker_version = VW_WORKER_VERSION,
-            .worker_version_length = VW_WORKER_VERSION_LENGTH};
+        vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
+                                  .selected_minor = VW_PROTOCOL_VERSION_MINOR,
+                                  .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE |
+                                                      VW_CAPABILITY_TRANSLATION,
+                                  .worker_version = VW_WORKER_VERSION,
+                                  .worker_version_length = VW_WORKER_VERSION_LENGTH};
         uint8_t ack_payload[256];
         size_t ack_len = 0;
         if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, ack_payload, sizeof(ack_payload), &ack_len)) {
@@ -1179,8 +1176,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
         bool queued_for_translation = false;
         if (translate_enabled && translator && seg.text_utf8 && seg.text_utf8[0]) {
-          queued_for_translation =
-              vw_translate_async_submit(translator, &seg, translate_src_lang, translate_dst_lang);
+          queued_for_translation = vw_translate_async_submit(translator, &seg, translate_src_lang, translate_dst_lang);
         }
         if (!translate_enabled || !queued_for_translation) {
           if (translate_enabled) {

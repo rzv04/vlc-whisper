@@ -56,7 +56,6 @@ typedef struct vw_benchmark {
 // Records translation telemetry for every attempted caption, including failed latency. Failures at/above the global
 // translation deadline are classified as timeouts; earlier transport/parser failures are counted separately.
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
-
 // Starts a bounded benchmark session, creates its private temporary report, and writes the initial active snapshot
 // without recording transcript or PCM data.
 bool vw_benchmark_begin(vw_benchmark_t* benchmark, const char* model_id, const char* backend, int64_t now_us);
