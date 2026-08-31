@@ -18,6 +18,9 @@ static uint32_t g_hook_delay_ms = 0;
 static atomic_bool g_first_request_blocked;
 static atomic_bool g_first_request_entered;
 static atomic_bool g_first_request_released;
+static atomic_uint g_barrier_target;
+static atomic_uint g_barrier_arrivals;
+static atomic_bool g_barrier_released;
 
 static vw_caption_segment_t make_segment(uint64_t id, char* text);
 
@@ -59,6 +62,15 @@ static bool async_http_hook(const char* host, const char* path, const char* body
     atomic_store(&g_first_request_entered, true);
     while (!atomic_load(&g_first_request_released)) sleep_ms(1);
   }
+
+  unsigned barrier_target = atomic_load(&g_barrier_target);
+  if (barrier_target > 0U) {
+    unsigned arrival = atomic_fetch_add(&g_barrier_arrivals, 1U) + 1U;
+    if (arrival <= barrier_target) {
+      while (!atomic_load(&g_barrier_released)) sleep_ms(1);
+    }
+  }
+
   if (strstr(path, "batchexecute")) return false;
   if (strcmp(host, "translate.googleapis.com") == 0) {
     const char* response = "[[[\"Salut lume\",\"Hello world\",null,null,1]],null,\"en\"]";
@@ -78,6 +90,7 @@ static void test_hard_cap_inflight_fifo_ordering(void) {
   atomic_store(&g_first_request_blocked, true);
   atomic_store(&g_first_request_entered, false);
   atomic_store(&g_first_request_released, false);
+  atomic_store(&g_barrier_target, 0U);
   g_hook_delay_ms = 0;
 
   char texts[VW_TRANSLATE_ASYNC_QUEUE_CAPACITY + 2U][32];
@@ -93,7 +106,7 @@ static void test_hard_cap_inflight_fifo_ordering(void) {
     assert(vw_translate_async_submit(async, &seg, "en", "ro"));
   }
 
-  // The hard-cap eviction completed cue 2 before blocked cue 1. It must not become visible first.
+  // Later workers may complete cues while cue 1 is blocked. Ordered popping must keep them hidden behind cue 1.
   vw_translate_async_result_t result;
   assert(!vw_translate_async_try_pop(async, &result));
   atomic_store(&g_first_request_released, true);
@@ -116,27 +129,40 @@ static void test_hard_cap_inflight_fifo_ordering(void) {
   vw_translate_set_test_http_hook(NULL, NULL);
 }
 
-static void test_active_budget_includes_inflight_request(void) {
+static void test_active_budget_runs_requests_concurrently(void) {
   vw_translate_set_test_http_hook(async_http_hook, NULL);
   vw_translate_async_t* async = vw_translate_async_create();
   assert(async != NULL);
 
-  atomic_store(&g_first_request_blocked, true);
+  atomic_store(&g_first_request_blocked, false);
   atomic_store(&g_first_request_entered, false);
-  atomic_store(&g_first_request_released, false);
+  atomic_store(&g_first_request_released, true);
+  atomic_store(&g_barrier_target, VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
+  atomic_store(&g_barrier_arrivals, 0U);
+  atomic_store(&g_barrier_released, false);
   g_hook_delay_ms = 0;
 
   char texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U][32];
-  for (size_t i = 0; i < VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U; i++) {
+  for (size_t i = 0; i < VW_TRANSLATE_ASYNC_ACTIVE_BUDGET; i++) {
     snprintf(texts[i], sizeof(texts[i]), "Budget phrase %zu", i + 1U);
     vw_caption_segment_t seg = make_segment(i + 1U, texts[i]);
     assert(vw_translate_async_submit(async, &seg, "en", "ro"));
-    if (i == 0) {
-      for (int retry = 0; retry < 100 && !atomic_load(&g_first_request_entered); retry++) sleep_ms(5);
-      assert(atomic_load(&g_first_request_entered));
-    }
   }
-  atomic_store(&g_first_request_released, true);
+
+  for (int retry = 0; retry < 200 && atomic_load(&g_barrier_arrivals) < VW_TRANSLATE_ASYNC_ACTIVE_BUDGET; retry++) {
+    sleep_ms(2);
+  }
+  assert(atomic_load(&g_barrier_arrivals) == VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
+
+  snprintf(texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET], sizeof(texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET]),
+           "Budget phrase %u", VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U);
+  vw_caption_segment_t saturated =
+      make_segment(VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U, texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET]);
+  assert(vw_translate_async_submit(async, &saturated, "en", "ro"));
+
+  sleep_ms(10);
+  assert(atomic_load(&g_barrier_arrivals) == VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
+  atomic_store(&g_barrier_released, true);
 
   size_t popped_count = 0;
   size_t attempted_count = 0;
@@ -146,12 +172,22 @@ static void test_active_budget_includes_inflight_request(void) {
       sleep_ms(5);
       continue;
     }
-    if (result.attempted) attempted_count++;
+    assert(result.segment.segment_id == popped_count + 1U);
+    if (result.segment.segment_id <= VW_TRANSLATE_ASYNC_ACTIVE_BUDGET) {
+      assert(result.attempted);
+      assert(result.success);
+      attempted_count++;
+    } else {
+      assert(!result.attempted);
+      assert(!result.success);
+      assert(result.segment.translated_text_utf8 == NULL);
+    }
     popped_count++;
   }
   assert(popped_count == VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U);
   assert(attempted_count == VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
 
+  atomic_store(&g_barrier_target, 0U);
   vw_translate_async_destroy(async);
   vw_translate_set_test_http_hook(NULL, NULL);
 }
@@ -174,6 +210,7 @@ static void test_saturation_fifo_ordering(void) {
   vw_translate_async_t* async = vw_translate_async_create();
   assert(async != NULL);
 
+  atomic_store(&g_barrier_target, 0U);
   g_hook_delay_ms = 80;
 
   char texts[6][32];
@@ -185,7 +222,7 @@ static void test_saturation_fifo_ordering(void) {
     assert(vw_translate_async_submit(async, &seg, "en", "ro"));
   }
 
-  // Drain all 6 results and assert strict chronological monotonicity
+  // Drain all 6 results and assert strict chronological monotonicity.
   uint64_t expected_id = 1;
   int popped_count = 0;
   for (int retry = 0; retry < 400 && popped_count < 6; retry++) {
@@ -194,7 +231,6 @@ static void test_saturation_fifo_ordering(void) {
       assert(res.segment.segment_id == expected_id);
       assert(res.segment.start_pts_us == (int64_t)expected_id * 1000000LL);
       if (res.success) {
-        assert(res.success);
         assert(strcmp(res.segment.translated_text_utf8, "Salut lume") == 0);
       } else {
         assert(res.segment.translated_text_utf8 == NULL);
@@ -220,6 +256,7 @@ static void test_invalidation_clears_active_budget(void) {
   atomic_store(&g_first_request_blocked, true);
   atomic_store(&g_first_request_entered, false);
   atomic_store(&g_first_request_released, false);
+  atomic_store(&g_barrier_target, 0U);
   g_hook_delay_ms = 0;
 
   char text1[] = "Old epoch phrase 1";
@@ -228,15 +265,13 @@ static void test_invalidation_clears_active_budget(void) {
   for (int retry = 0; retry < 100 && !atomic_load(&g_first_request_entered); retry++) sleep_ms(5);
   assert(atomic_load(&g_first_request_entered));
 
-  // Invalidate while old job is blocked in-flight
+  // Invalidate while old job is blocked in-flight.
   vw_translate_async_invalidate(async);
 
-  // Submit new job under new epoch: it must get fresh active budget (attempted = true)
+  // Submit new job under new epoch: it must get fresh active budget and run on another available worker.
   char text2[] = "New epoch phrase 2";
   vw_caption_segment_t seg2 = make_segment(2, text2);
   assert(vw_translate_async_submit(async, &seg2, "en", "ro"));
-
-  atomic_store(&g_first_request_released, true);
 
   vw_translate_async_result_t result;
   bool got_new = false;
@@ -251,6 +286,7 @@ static void test_invalidation_clears_active_budget(void) {
   }
   assert(got_new);
 
+  atomic_store(&g_first_request_released, true);
   vw_translate_async_destroy(async);
   vw_translate_set_test_http_hook(NULL, NULL);
 }
@@ -260,6 +296,7 @@ int main(void) {
   vw_translate_async_t* async = vw_translate_async_create();
   assert(async != NULL);
 
+  atomic_store(&g_barrier_target, 0U);
   char first_text[] = "Hello world";
   vw_caption_segment_t first = make_segment(1, first_text);
   g_hook_delay_ms = 150;
@@ -301,7 +338,7 @@ int main(void) {
   vw_translate_set_test_http_hook(NULL, NULL);
 
   test_saturation_fifo_ordering();
-  test_active_budget_includes_inflight_request();
+  test_active_budget_runs_requests_concurrently();
   test_hard_cap_inflight_fifo_ordering();
   test_invalidation_clears_active_budget();
 

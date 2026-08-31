@@ -28,10 +28,10 @@ typedef struct vw_translate_async_completion {
 } vw_translate_async_completion_t;
 
 struct vw_translate_async {
-  pthread_t thread;
+  pthread_t threads[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET];
   pthread_mutex_t mutex;
   pthread_cond_t cond;
-  bool thread_started;
+  size_t thread_count;
   bool stopping;
   uint64_t epoch;
   uint64_t next_submit_ordinal;
@@ -172,13 +172,23 @@ vw_translate_async_t* vw_translate_async_create(void) {
     free(async);
     return NULL;
   }
-  if (pthread_create(&async->thread, NULL, vw_translate_async_thread_main, async) != 0) {
-    pthread_cond_destroy(&async->cond);
-    pthread_mutex_destroy(&async->mutex);
-    free(async);
-    return NULL;
+
+  for (size_t i = 0; i < VW_TRANSLATE_ASYNC_ACTIVE_BUDGET; i++) {
+    if (pthread_create(&async->threads[i], NULL, vw_translate_async_thread_main, async) != 0) {
+      pthread_mutex_lock(&async->mutex);
+      async->stopping = true;
+      pthread_cond_broadcast(&async->cond);
+      pthread_mutex_unlock(&async->mutex);
+      for (size_t started = 0; started < async->thread_count; started++) {
+        pthread_join(async->threads[started], NULL);
+      }
+      pthread_cond_destroy(&async->cond);
+      pthread_mutex_destroy(&async->mutex);
+      free(async);
+      return NULL;
+    }
+    async->thread_count++;
   }
-  async->thread_started = true;
   return async;
 }
 
@@ -195,7 +205,7 @@ void vw_translate_async_destroy(vw_translate_async_t* async) {
   async->result_count = 0;
   pthread_cond_broadcast(&async->cond);
   pthread_mutex_unlock(&async->mutex);
-  if (async->thread_started) pthread_join(async->thread, NULL);
+  for (size_t i = 0; i < async->thread_count; i++) pthread_join(async->threads[i], NULL);
   pthread_cond_destroy(&async->cond);
   pthread_mutex_destroy(&async->mutex);
   free(async);
@@ -229,8 +239,8 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
     return false;
   }
 
-  // Bound every accepted cue, including completed cues not yet consumed and the one network request currently
-  // in flight. Rejection drops only the newest input cue; it never exposes a newer caption ahead of older work.
+  // Bound every accepted cue, including completed cues not yet consumed and worker requests currently in flight.
+  // Rejection drops only the newest input cue; it never exposes a newer caption ahead of older work.
   if (async->job_count + async->inflight_count + async->result_count >= VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
     pthread_mutex_unlock(&async->mutex);
     return false;

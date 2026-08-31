@@ -25,12 +25,12 @@ typedef struct vw_translate_async_result {
 
 typedef void (*vw_translate_async_delivery_fn)(const vw_translate_async_result_t* result, void* user_data);
 
-// Creates one background translator instance with dedicated worker thread. Network activity occurs exclusively on
-// this background thread without blocking the worker loop.
+// Creates one background translator instance with a fixed worker pool sized to the active network budget. Network
+// activity occurs exclusively on those background threads without blocking the worker loop.
 vw_translate_async_t* vw_translate_async_create(void);
 
-// Stops background translation thread, drains any in-flight request, and releases all synchronization mutexes and
-// conditional variables.
+// Stops all background translation threads, drains any in-flight requests, and releases all synchronization mutexes
+// and conditional variables.
 void vw_translate_async_destroy(vw_translate_async_t* async);
 
 // Advances internal playback epoch and drops all queued and in-flight translation jobs. Called immediately upon seek,
