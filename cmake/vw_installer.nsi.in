@@ -66,11 +66,11 @@ Function Is64BitPE
       StrCpy $1 1
     ${EndIf}
   ${EndIf}
+  StrCpy $0 $1
   Pop $3
   Pop $2
-  Exch $1
-  Pop $0
-  Push $1
+  Pop $1
+  Exch $0
 FunctionEnd
 
 Function CheckVLC64Bit
@@ -131,9 +131,7 @@ Function .onInit
     Abort
     proceed_install:
   ${Else}
-    Push $0
-    StrCpy $0 "$VLC_DIR\vlc.exe"
-    Push $0
+    Push "$VLC_DIR\vlc.exe"
     Call Is64BitPE
     Pop $0
     ${If} $0 == 0
@@ -176,14 +174,22 @@ FunctionEnd
 
 
 ; Stop only worker processes whose executable path belongs to this installation.
-; A process-name-only taskkill would terminate unrelated VLC-Whisper installs.
+; The wait stays inside PowerShell so the NSIS InstFiles section does not jump
+; backwards and make the progress bar visibly retreat/advance.
+; Returns 0 when all owned workers are gone, 1 on timeout, 2 on query failure.
 ; ------------------------------------------------------------------------------
 Function StopOwnedWorkers
-  nsExec::Exec 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$targets=@(''$INSTDIR\vlc-whisper-worker.exe'',''$INSTDIR\vlc-whisper-worker-cpu.exe''); Get-CimInstance Win32_Process | Where-Object { $$_.Name -in @(''vlc-whisper-worker.exe'',''vlc-whisper-worker-cpu.exe'') -and $$targets -contains $$_.ExecutablePath } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$targets=@(''$INSTDIR\vlc-whisper-worker.exe'',''$INSTDIR\vlc-whisper-worker-cpu.exe''); $$names=@(''vlc-whisper-worker.exe'',''vlc-whisper-worker-cpu.exe''); try { $$owned=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $$_.Name -in $$names -and $$targets -contains $$_.ExecutablePath }; $$owned | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; for ($$i=0; $$i -lt 20; $$i++) { $$left=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $$_.Name -in $$names -and $$targets -contains $$_.ExecutablePath }; if ($$null -eq $$left) { exit 0 }; Start-Sleep -Milliseconds 200 }; exit 1 } catch { exit 2 }"'
+  Pop $0
+  Pop $1
+  Push $0
 FunctionEnd
 
 Function un.StopOwnedWorkers
-  nsExec::Exec 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$targets=@(''$INSTDIR\vlc-whisper-worker.exe'',''$INSTDIR\vlc-whisper-worker-cpu.exe''); Get-CimInstance Win32_Process | Where-Object { $$_.Name -in @(''vlc-whisper-worker.exe'',''vlc-whisper-worker-cpu.exe'') -and $$targets -contains $$_.ExecutablePath } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"'
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$targets=@(''$INSTDIR\vlc-whisper-worker.exe'',''$INSTDIR\vlc-whisper-worker-cpu.exe''); $$names=@(''vlc-whisper-worker.exe'',''vlc-whisper-worker-cpu.exe''); try { $$owned=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $$_.Name -in $$names -and $$targets -contains $$_.ExecutablePath }; $$owned | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; for ($$i=0; $$i -lt 20; $$i++) { $$left=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $$_.Name -in $$names -and $$targets -contains $$_.ExecutablePath }; if ($$null -eq $$left) { exit 0 }; Start-Sleep -Milliseconds 200 }; exit 1 } catch { exit 2 }"'
+  Pop $0
+  Pop $1
+  Push $0
 FunctionEnd
 
 
@@ -217,96 +223,111 @@ Section "VLC Plugin & AI Engine" SecCore
 
   DetailPrint "Stopping owned worker processes..."
   Call StopOwnedWorkers
+  Pop $0
+  ${If} $0 != "0"
+    DetailPrint "Could not confirm all owned workers stopped; locked binaries will be staged for reboot-safe replacement."
+  ${EndIf}
 
-  StrCpy $0 0
-  worker_wait_loop:
-    Sleep 800
-    nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq vlc-whisper-worker.exe" /NH'
-    Pop $1
-    Pop $2
-    ${If} $2 == "INFO: No tasks are running"
-      Goto worker_cpu_check
-    ${EndIf}
-    ${If} $2 == "INFO: No tasks"
-      Goto worker_cpu_check
-    ${EndIf}
-    ${If} $2 == ""
-      Goto worker_cpu_check
-    ${EndIf}
-    IntOp $0 $0 + 1
-    ${If} $0 < 5
-      Goto worker_wait_loop
-    ${EndIf}
-  worker_cpu_check:
-    nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq vlc-whisper-worker-cpu.exe" /NH'
-    Pop $1
-    Pop $2
-    ${If} $2 == "INFO: No tasks are running"
-      Goto workers_stopped
-    ${EndIf}
-    ${If} $2 == "INFO: No tasks"
-      Goto workers_stopped
-    ${EndIf}
-    ${If} $2 == ""
-      Goto workers_stopped
-    ${EndIf}
-    IntOp $0 $0 + 1
-    ${If} $0 < 5
-      Goto worker_wait_loop
-    ${EndIf}
-  workers_stopped:
-
+  ; Stage the new plugin before touching the installed copy. If the old DLL is
+  ; locked, schedule delete-then-rename so a failed upgrade cannot reboot into
+  ; an installation where the old file was deleted without a replacement.
   SetOutPath "$INSTDIR\plugins\audio_filter"
+  ClearErrors
+  Delete "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll.vw-new"
+  File /oname=libvlc_whisper_plugin.dll.vw-new "@CMAKE_BINARY_DIR@/plugin/libvlc_whisper_plugin.dll"
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONSTOP "Failed to stage the plugin DLL for installation."
+    Abort "Plugin DLL staging failed"
+  ${EndIf}
   ClearErrors
   Delete "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
   ${If} ${FileExists} "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
+    ClearErrors
     Delete /REBOOTOK "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
-    DetailPrint "Plugin DLL is locked; scheduling replacement on reboot."
+    Rename /REBOOTOK "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll.vw-new" "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to schedule plugin DLL replacement on reboot."
+      Abort "Plugin DLL reboot replacement failed"
+    ${EndIf}
+    DetailPrint "Plugin DLL is locked; replacement is staged for reboot."
     SetRebootFlag true
-  ${EndIf}
-  ClearErrors
-  File "@CMAKE_BINARY_DIR@/plugin/libvlc_whisper_plugin.dll"
-  ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "Failed to install plugin DLL (file locked). A reboot may be required."
-    SetRebootFlag true
-    Abort "Plugin DLL copy failed"
-  ${EndIf}
-  ${IfNot} ${FileExists} "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
-    MessageBox MB_OK|MB_ICONSTOP "Plugin DLL was not installed correctly."
-    Abort "Plugin install failed"
+  ${Else}
+    ClearErrors
+    Rename "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll.vw-new" "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONSTOP "Failed to install plugin DLL."
+      Abort "Plugin DLL install failed"
+    ${EndIf}
   ${EndIf}
 
   SetOutPath "$INSTDIR"
+
+  ; GPU worker is optional for CPU-only package builds, so stage it nonfatally.
   ClearErrors
-  Delete "$INSTDIR\vlc-whisper-worker.exe"
-  ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe"
-    Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker.exe"
-    SetRebootFlag true
-  ${EndIf}
-  ClearErrors
-  Delete "$INSTDIR\vlc-whisper-worker-cpu.exe"
-  ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe"
-    Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker-cpu.exe"
-    SetRebootFlag true
-  ${EndIf}
-  ClearErrors
-  File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
+  Delete "$INSTDIR\vlc-whisper-worker.exe.vw-new"
+  File /nonfatal /oname=vlc-whisper-worker.exe.vw-new "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "Failed to install GPU worker (file locked or missing). Reboot may be required."
-    SetRebootFlag true
-    Abort "GPU worker install failed"
+    MessageBox MB_OK|MB_ICONSTOP "Failed to stage the GPU worker."
+    Abort "GPU worker staging failed"
   ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe.vw-new"
+    ClearErrors
+    Delete "$INSTDIR\vlc-whisper-worker.exe"
+    ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe"
+      ClearErrors
+      Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker.exe"
+      Rename /REBOOTOK "$INSTDIR\vlc-whisper-worker.exe.vw-new" "$INSTDIR\vlc-whisper-worker.exe"
+      ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "Failed to schedule GPU worker replacement on reboot."
+        Abort "GPU worker reboot replacement failed"
+      ${EndIf}
+      SetRebootFlag true
+    ${Else}
+      ClearErrors
+      Rename "$INSTDIR\vlc-whisper-worker.exe.vw-new" "$INSTDIR\vlc-whisper-worker.exe"
+      ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "Failed to install GPU worker."
+        Abort "GPU worker install failed"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  ; CPU fallback is handled independently so GPU packages retain their
+  ; loader-less fallback and CPU-only packages remain valid.
   ClearErrors
-  File /nonfatal "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker-cpu.exe"
+  Delete "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new"
+  File /nonfatal /oname=vlc-whisper-worker-cpu.exe.vw-new "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker-cpu.exe"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "Failed to install CPU fallback worker. Reboot may be required."
-    SetRebootFlag true
-    Abort "CPU worker install failed"
+    MessageBox MB_OK|MB_ICONSTOP "Failed to stage the CPU fallback worker."
+    Abort "CPU worker staging failed"
   ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new"
+    ClearErrors
+    Delete "$INSTDIR\vlc-whisper-worker-cpu.exe"
+    ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe"
+      ClearErrors
+      Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker-cpu.exe"
+      Rename /REBOOTOK "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new" "$INSTDIR\vlc-whisper-worker-cpu.exe"
+      ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "Failed to schedule CPU worker replacement on reboot."
+        Abort "CPU worker reboot replacement failed"
+      ${EndIf}
+      SetRebootFlag true
+    ${Else}
+      ClearErrors
+      Rename "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new" "$INSTDIR\vlc-whisper-worker-cpu.exe"
+      ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "Failed to install CPU fallback worker."
+        Abort "CPU worker install failed"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
   ${IfNot} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe"
+  ${AndIfNot} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe.vw-new"
   ${AndIfNot} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe"
-    MessageBox MB_OK|MB_ICONSTOP "No worker binary was installed (files may be locked). Reboot and retry."
-    SetRebootFlag true
+  ${AndIfNot} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new"
+    MessageBox MB_OK|MB_ICONSTOP "No worker binary was installed or staged."
     Abort "No worker installed"
   ${EndIf}
 
@@ -390,44 +411,10 @@ Section "Uninstall"
 
   DetailPrint "Stopping owned worker processes..."
   Call un.StopOwnedWorkers
-  Sleep 800
-  StrCpy $0 0
-  unst_worker_wait:
-    Sleep 600
-    nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq vlc-whisper-worker.exe" /NH'
-    Pop $1
-    Pop $2
-    ${If} $2 == "INFO: No tasks are running"
-      Goto unst_worker_cpu
-    ${EndIf}
-    ${If} $2 == "INFO: No tasks"
-      Goto unst_worker_cpu
-    ${EndIf}
-    ${If} $2 == ""
-      Goto unst_worker_cpu
-    ${EndIf}
-    IntOp $0 $0 + 1
-    ${If} $0 < 4
-      Goto unst_worker_wait
-    ${EndIf}
-  unst_worker_cpu:
-    nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq vlc-whisper-worker-cpu.exe" /NH'
-    Pop $1
-    Pop $2
-    ${If} $2 == "INFO: No tasks are running"
-      Goto unst_workers_done
-    ${EndIf}
-    ${If} $2 == "INFO: No tasks"
-      Goto unst_workers_done
-    ${EndIf}
-    ${If} $2 == ""
-      Goto unst_workers_done
-    ${EndIf}
-    IntOp $0 $0 + 1
-    ${If} $0 < 4
-      Goto unst_worker_wait
-    ${EndIf}
-  unst_workers_done:
+  Pop $0
+  ${If} $0 != "0"
+    DetailPrint "Could not confirm all owned workers stopped; locked binaries will be removed on reboot if necessary."
+  ${EndIf}
 
   ClearErrors
   Delete "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
@@ -435,6 +422,7 @@ Section "Uninstall"
     Delete /REBOOTOK "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll"
     SetRebootFlag true
   ${EndIf}
+  Delete "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll.vw-new"
 
   ClearErrors
   Delete "$INSTDIR\vlc-whisper-worker.exe"
@@ -442,12 +430,14 @@ Section "Uninstall"
     Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker.exe"
     SetRebootFlag true
   ${EndIf}
+  Delete "$INSTDIR\vlc-whisper-worker.exe.vw-new"
   ClearErrors
   Delete "$INSTDIR\vlc-whisper-worker-cpu.exe"
   ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker-cpu.exe"
     Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker-cpu.exe"
     SetRebootFlag true
   ${EndIf}
+  Delete "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new"
 
   Delete "$INSTDIR\models\ggml-tiny.bin"
   Delete "$INSTDIR\models\ggml-tiny.en.bin"
