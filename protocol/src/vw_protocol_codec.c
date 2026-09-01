@@ -183,6 +183,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_STARTED: {
       const vw_msg_started_t* p = (const vw_msg_started_t*)payload;
+      ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->source_active);
       break;
     }
@@ -398,7 +399,13 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     }
     case VW_MSG_STARTED: {
       vw_msg_started_t* p = (vw_msg_started_t*)out_payload;
-      DEC_FIELD(p->source_active);
+      memset(p, 0, sizeof(*p));
+      if (buffer_size == 1U) {
+        DEC_FIELD(p->source_active);
+      } else {
+        DEC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
+        DEC_FIELD(p->source_active);
+      }
       break;
     }
     case VW_MSG_SHUTDOWN:

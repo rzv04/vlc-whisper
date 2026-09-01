@@ -4,7 +4,7 @@
 
 This project has **no supported HTTP API, cloud transcription API, database, account, or authentication API**. “API” means the local versioned IPC protocol between the VLC integration and `vlc-whisper-worker.exe`. Optional subtitle translation is an opt-in worker feature that uses undocumented Google Translate web endpoints; those endpoints are not a VLC-Whisper API contract.
 
-All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=5` (Protocol v1.5); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version. New optional message types are capability-gated so a newer same-major plugin never sends an unknown message to an older worker.
+All integers are unsigned/signed little-endian fixed-width fields. Text is strict UTF-8 without NUL terminators. The current protocol is `major=1, minor=6` (Protocol v1.6); a peer must reject unsupported major versions and may ignore optional fields added in a compatible minor version. New optional message types are capability-gated so a newer same-major plugin never sends an unknown message to an older worker.
 
 ## Transport Timeouts & Guarantees
 
@@ -56,11 +56,15 @@ Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capa
 
 ### START
 
-Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. `STARTED` either confirms effective settings or responds with `ERROR`.
+Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. `STARTED` either confirms effective settings or responds with `ERROR`. The VLC plugin generates a fresh random session ID for an initial playback start and for every accepted live or source seek epoch; restarting a caption session does not require restarting the worker process or authenticated transport.
 
 ### POSITION (v1.1)
 
-Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown. Arrival of an explicit `SEEK` invalidates all queued/in-flight translation work from the previous playback epoch before that old work can become visible. If a native source decoder rejects a seek, the worker retains its previous decoded anchor; an initial source seek failure disables source mode and the `STARTED` reply advertises live PCM.
+Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). The wire message paces worker look-ahead decoding (30s horizon), communicates pause state, and retains an in-session `SEEK` operation for protocol compatibility and direct worker tests.
+
+The VLC integration applies a stronger source-seek policy at the worker-client layer: when `vw_worker_client_send_position()` is asked to send a source-mode `SEEK`, it first sends `STOP(SEEK_DISCONTINUITY)` for the current session, issues a fresh `START` with a new random session ID and the requested seek target as `timeline_origin_pts_us`, waits for `STARTED(source_active=1)`, reapplies the cached `TRANSLATE_CTRL` settings, and then sends pacing `POSITION` for the new session with the `SEEK` bit cleared. The worker process and IPC pipe stay alive, but the caption epoch does not. Any source or translated `SEGMENT` already buffered from before the seek still carries the previous session ID and is rejected by the plugin's session-ID check. This protects backward seeks and modest forward seeks where comparing only `segment.start_pts_us` against the new target would not identify every stale cue.
+
+If the fresh source `START` cannot re-enter source mode, the worker-client drops the transport so the supervisor can recover instead of continuing with ambiguous source/live state. The worker's direct in-session `POSITION(SEEK)` handling still retains the old decoded anchor when a native decoder rejects the seek.
 
 ### AUDIO
 
@@ -72,7 +76,8 @@ Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i6
 
 - **Phrase-by-Phrase Timing (`ADR-017`)**: Segment timing is derived from internal Whisper sub-segment boundaries ($t_0, t_1$ in centiseconds scaled by `10000LL` to microsecond PTS), rather than coarse 8-second window spans.
 - **`is_final` Invariant**: `is_final == true` denotes an immutable, committed subtitle cue to be rendered on screen via SPU (`vout_PutSubpicture`). Uncommitted/in-flight hypotheses are held until their window onset is finalized or drained.
-- **Real-Time Translation Fields (v1.5)**: When translation is enabled and available, finalized cues are copied to a dedicated bounded translation thread (maximum four pending jobs). The main worker inference/control loop never performs network I/O. The three fallback tiers share one absolute **800 ms total cue deadline**; the budget is not reset per tier. On success, `translated_text_utf8` carries the translated text, `translation_latency_us` carries total translation elapsed time in microseconds, and `translation_tier` reports the resolving tier (`1 = Web RPC`, `2 = GTX`, `3 = Mobile scrape`). On failure/deadline/queue unavailability, the source caption is emitted without translated text. Seek/session/config invalidation drops results from an older translation epoch, and delivery releases the cancellation mutex before blocking IPC.
+- **Session-Epoch Invariant**: The plugin renders a segment only when its `session_id` equals the active worker-client session. Source and translated captions buffered before a seek cannot become visible after the fresh `START` epoch even if their PTS is numerically ahead of the new playhead.
+- **Real-Time Translation Fields (v1.5)**: When translation is enabled and available, finalized cues are copied to a dedicated bounded translation thread (maximum four pending jobs). The main worker inference/control loop never performs network I/O. The three fallback tiers share one absolute **800 ms total cue deadline**; the budget is not reset per tier. On success, `translated_text_utf8` carries the translated text, `translation_latency_us` carries total translation elapsed time in microseconds, and `translation_tier` reports the resolving tier (`1 = Web RPC`, `2 = GTX`, `3 = Mobile scrape`). On failure/deadline/queue unavailability, the source caption is emitted without translated text. The single main-loop control owner serializes seek/session/config invalidation with result delivery; the translator mutex is released before blocking IPC.
 - **Silence Screen Blanking**: Non-contiguous phrases (e.g. 0.6s pause between speakers) generate distinct non-overlapping subpictures, naturally blanking the screen during conversational pauses.
 
 Example semantic value, shown as JSON only for readability:
@@ -95,12 +100,12 @@ Example semantic value, shown as JSON only for readability:
 
 Plugin to worker. Payload 50 bytes: session ID (`16 bytes`), `u8 enabled` (0=disabled, 1=enabled), `char source_lang[16]` (NUL-padded language code or `"auto"`), `char target_lang[16]` (NUL-padded destination language code e.g. `"ro"` / `"en"`), `u8 mode` (0=translation only, 1=dual line).
 
-- Semantics: dynamically synchronizes translation preferences to the active worker mid-stream without requiring worker process restart or playback disruption. This control carries the active `session_id`; stale or mismatched controls are ignored. It is optional-minor-version functionality and is sent only when `HELLO_ACK.capability_flags` includes `VW_CAPABILITY_TRANSLATION`.
+- Semantics: dynamically synchronizes translation preferences to the active worker mid-stream without requiring worker process restart or playback disruption. This control carries the active `session_id`; stale or mismatched controls are ignored. It is optional-minor-version functionality and is sent only when `HELLO_ACK.capability_flags` includes `VW_CAPABILITY_TRANSLATION`. The worker-client caches the accepted setting so a source seek can reapply it immediately after the new `START` epoch.
 - Privacy/realtime: this control carries configuration only. Subtitle text egress occurs only inside the worker's asynchronous translator after the user enables translation. The VLC Lua extension performs no translation HTTP requests.
 
-### STARTED (v1.2)
+### STARTED (v1.6)
 
-Worker to plugin. Payload: `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if source file lookahead mode initialized successfully; `VW_SOURCE_ACTIVE_INACTIVE = 0` if live streaming mode). Confirms session initialization and effective settings after `START`.
+Worker to plugin. Protocol v1.6 payload: the 16-byte `session_id` copied from `START`, followed by `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if source file lookahead mode initialized successfully; `VW_SOURCE_ACTIVE_INACTIVE = 0` if live streaming mode). The client requires the correlated session ID and a strictly increasing worker sequence from v1.6 peers. It accepts the legacy zero- or one-byte reply only when the negotiated worker minor is v1.5 or older.
 
 ### CONTROL MESSAGES (`PAUSE`, `RESUME`, `STOP`)
 
@@ -108,7 +113,7 @@ Plugin to worker. Payload: session ID, `u16 reason`.
 
 - `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); asynchronous translation work from the pre-pause epoch is invalidated. A control with a stale or mismatched session ID is ignored.
 - `RESUME`: Resumes active transcription processing after pause. A control with a stale or mismatched session ID is ignored. Reason codes: `USER_RESUME=1`.
-- `STOP`: Terminates active captioning session, clears buffers, resets VAD state, and invalidates pending translation work. A stale or mismatched session ID is ignored. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` with the current session ID multiple times or on an idle session is a safe no-op.
+- `STOP`: Terminates active captioning session, clears buffers, resets VAD state, and invalidates pending translation work. A stale or mismatched session ID is ignored. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on live and source seeks before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` with the current session ID multiple times or on an idle session is a safe no-op.
 
 ### SHUTDOWN
 
@@ -197,4 +202,4 @@ vlc-whisper-worker --pipe <path> --token <64_hex_chars> [--model <model_path>] [
 
 ## Compatibility rules
 
-Protocol changes that alter framing, time units, authentication, or message meaning require a major bump. Adding a bounded optional field or optional message requires a minor bump and capability flag. The worker and plugin must expose their protocol/build versions in diagnostics. A newer peer may communicate with an older same-major peer only when it gates every newer optional message/field on negotiated capabilities; unsupported optional features must fail locally or degrade without sending an unknown wire message.
+Protocol changes that alter framing, time units, authentication, or wire-message meaning require a major bump. Adding a bounded optional field or optional message requires a minor bump and capability flag. Protocol v1.6 extends `STARTED` with session correlation while retaining legacy decoding for negotiated v1.5-or-older workers. The worker and plugin must expose their protocol/build versions in diagnostics. A newer peer may communicate with an older same-major peer only when it gates every newer optional message/field on the negotiated minor or capabilities; unsupported optional features must fail locally or degrade without sending an unknown wire message.

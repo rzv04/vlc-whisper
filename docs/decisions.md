@@ -487,4 +487,3 @@ callback guarantees (AGENTS.md Rule 4 & 5).
 - Seamless real-time subtitle translation without requiring API keys, accounts, or credit cards.
 - Full privacy compliance: audio PCM is never transmitted over the network; only finalized Whisper text fragments are sent when opted-in.
 - Graceful degradation: network disconnection seamlessly displays original transcription cues without caption freezes or VLC media drops.
-

@@ -23,10 +23,10 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 5U
-#define VW_CLIENT_VERSION "1.5.0"
+#define VW_PROTOCOL_VERSION_MINOR 6U
+#define VW_CLIENT_VERSION "1.6.0"
 #define VW_CLIENT_VERSION_LENGTH 5U
-#define VW_WORKER_VERSION "1.5.0"
+#define VW_WORKER_VERSION "1.6.0"
 #define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
@@ -84,7 +84,7 @@ typedef enum vw_message_type {
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
   VW_MSG_SHUTDOWN = 11,        // zero-payload: instruct worker to exit
-  VW_MSG_STARTED = 12,         // worker confirms session started; carries uint8_t source_active
+  VW_MSG_STARTED = 12,         // worker confirms session ID and source activation state
   VW_MSG_POSITION = 13,        // plugin sends media playback position and pacing updates
   VW_MSG_MODEL_CTRL = 14,      // plugin requests model download or abort by catalog id
   VW_MSG_MODEL_PROGRESS = 15,  // worker reports model download progress and stage
@@ -138,6 +138,7 @@ typedef struct vw_msg_start {
 } vw_msg_start_t;
 
 typedef struct vw_msg_started {
+  vw_session_id_t session_id;
   uint8_t source_active;  // 1 if source file lookahead mode active; 0 if live streaming mode
 } vw_msg_started_t;
 
@@ -145,7 +146,7 @@ typedef struct vw_msg_started {
 #define VW_SOURCE_ACTIVE_INACTIVE 0U
 #define VW_SOURCE_ACTIVE_ACTIVE 1U
 
-#define VW_MSG_STARTED_PAYLOAD_BYTES 1U
+#define VW_MSG_STARTED_PAYLOAD_BYTES (VW_SESSION_ID_BYTES + 1U)
 
 // Position update flags (bitfield)
 #define VW_POSITION_FLAG_SEEK (1U << 0)

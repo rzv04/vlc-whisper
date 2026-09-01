@@ -50,8 +50,8 @@ bool vw_translate_async_has_result(vw_translate_async_t* async);
 // buffers.
 bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_result_t* out);
 
-// Delivers the next ordered completion while serializing against epoch invalidation, preventing stale cue emission
-// during concurrent seek or translation-configuration controls.
+// Removes and delivers the next ordered completion without holding its mutex across delivery. The worker main loop
+// serializes this call with epoch-invalidating controls; background completion threads remain safe and nonblocking.
 bool vw_translate_async_try_deliver(vw_translate_async_t* async, vw_translate_async_delivery_fn deliver,
                                     void* user_data);
 

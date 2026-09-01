@@ -393,7 +393,10 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "WinHttpOpen failed (%lu)", (unsigned long)GetLastError());
     return false;
   }
-  WinHttpSetTimeouts(hSession, 10000, 10000, 30000, 30000);
+  // Keep receive operations interruptible by the atomic abort flag. The abort
+  // path does not close a handle concurrently with WinHttpReadData: WinHTTP
+  // handle ownership remains with this downloader thread until it returns.
+  WinHttpSetTimeouts(hSession, 10000, 10000, 1000, 1000);
   pthread_mutex_lock(&dl->lock);
   dl->hSession = hSession;
   pthread_mutex_unlock(&dl->lock);
@@ -705,11 +708,8 @@ void vw_model_download_abort(vw_model_download_t* dl) {
   pthread_mutex_unlock(&dl->lock);
   if (pid > 0) kill(pid, SIGTERM);
 #else
-  pthread_mutex_lock(&dl->lock);
-  HINTERNET hReq = dl->hRequest;
-  dl->hRequest = NULL;
-  pthread_mutex_unlock(&dl->lock);
-  if (hReq) WinHttpCloseHandle(hReq);
+  // The downloader thread owns WinHTTP handles and observes this flag between
+  // short receive timeouts; closing them here would race an in-flight read.
 #endif
   pthread_mutex_lock(&dl->lock);
   if (dl->progress.stage != VW_MODEL_STAGE_DONE && dl->progress.stage != VW_MODEL_STAGE_FAILED &&

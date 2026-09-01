@@ -9,13 +9,14 @@
     {
       "name": "windows-x64-release",
       "displayName": "Windows x64 Release (MinGW Cross)",
-      "description": "Cross-compile Windows x64 release binaries using MinGW GCC",
+      "description": "Cross-compile Windows x64 release binaries using MinGW GCC; Vulkan is required and configure fails instead of silently producing CPU-only output",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/windows-x64-release",
       "toolchainFile": "${sourceDir}/cmake/toolchains/windows-x64-mingw.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "BUILD_TESTING": "ON"
+        "BUILD_TESTING": "ON",
+        "VW_REQUIRE_VULKAN": "ON"
       }
     },
     {

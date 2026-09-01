@@ -1,34 +1,77 @@
-# Verifies that required Windows worker binaries exist before NSIS compilation.
-# Fails hard so a misconfigured build never ships a workerless or single-worker installer.
+# Verifies required Windows release inputs before NSIS compilation.
+# Fails hard so a misconfigured build never ships stale workers or unverified model weights.
 if(NOT DEFINED WORKER_DIR)
   message(FATAL_ERROR "WORKER_DIR not defined")
 endif()
+if(NOT DEFINED STAGE_DIR)
+  message(FATAL_ERROR "STAGE_DIR not defined")
+endif()
+if(NOT DEFINED SOURCE_ROOT)
+  message(FATAL_ERROR "SOURCE_ROOT not defined")
+endif()
 set(_gpu "${WORKER_DIR}/vlc-whisper-worker.exe")
 set(_cpu "${WORKER_DIR}/vlc-whisper-worker-cpu.exe")
-# When VW_REQUIRE_CPU_FALLBACK is ON (GPU package), both must exist.
-# For pure CPU builds, GPU may be absent but CPU must exist.
+
+# When VW_REQUIRE_CPU_FALLBACK is ON (GPU package), both workers must exist.
+# For explicit CPU-only builds, the CPU worker is required and the GPU worker may be absent.
 if(VW_REQUIRE_CPU_FALLBACK)
   if(NOT EXISTS "${_gpu}")
-    message(FATAL_ERROR "Missing GPU worker '${_gpu}'. Build windows-x64-release first.")
+    message(FATAL_ERROR "Missing GPU worker '${_gpu}'. The production Windows release must not silently degrade to CPU-only.")
   endif()
   if(NOT EXISTS "${_cpu}")
     message(FATAL_ERROR
-      "Missing CPU fallback worker '${_cpu}'. The GPU installer must always bundle the CPU worker for loader-less fallback. "
-      "Build windows-x64-release-cpu and copy vlc-whisper-worker-cpu.exe into ${WORKER_DIR}/ "
-      "(see README 'Building the Windows Installer').")
+      "Missing CPU fallback worker '${_cpu}'. The GPU installer must always bundle the CPU worker for loader-less fallback.")
   endif()
 else()
-  if(NOT EXISTS "${_gpu}" AND NOT EXISTS "${_cpu}")
-    message(FATAL_ERROR "No worker binary found in ${WORKER_DIR} (expected vlc-whisper-worker.exe or vlc-whisper-worker-cpu.exe)")
+  if(NOT EXISTS "${_cpu}")
+    message(FATAL_ERROR "Missing CPU worker '${_cpu}' for CPU-only package build")
   endif()
 endif()
-# Also require plugin and models for packaging
+
 if(NOT DEFINED PLUGIN_PATH OR NOT EXISTS "${PLUGIN_PATH}")
   message(FATAL_ERROR "Missing plugin '${PLUGIN_PATH}'")
 endif()
-foreach(_model IN LISTS REQUIRED_MODELS)
-  if(NOT EXISTS "${_model}")
-    message(FATAL_ERROR "Missing required model '${_model}' — run 'cmake --build --preset windows-x64-release --target provision_models' or place it manually")
+
+function(vw_verify_release_model model_path expected_sha256 label)
+  if(NOT model_path OR NOT expected_sha256)
+    message(FATAL_ERROR "Missing ${label} model path/hash configuration")
   endif()
-endforeach()
-message(STATUS "Worker inputs validated: gpu=${_gpu} cpu=${_cpu}")
+  if(NOT EXISTS "${model_path}")
+    message(FATAL_ERROR "Missing required ${label} model '${model_path}'")
+  endif()
+  file(SHA256 "${model_path}" _actual_sha256)
+  if(NOT _actual_sha256 STREQUAL expected_sha256)
+    message(FATAL_ERROR
+      "${label} model SHA-256 mismatch for '${model_path}'\n"
+      "  expected: ${expected_sha256}\n"
+      "  actual:   ${_actual_sha256}")
+  endif()
+  message(STATUS "Verified ${label} model: ${model_path}")
+endfunction()
+
+# Copy every input into a build-owned staging directory, then verify the exact
+# model snapshots consumed by NSIS. Validation never authorizes a later copy of
+# a mutable source path.
+file(REMOVE_RECURSE "${STAGE_DIR}")
+file(MAKE_DIRECTORY "${STAGE_DIR}/models")
+if(EXISTS "${_gpu}")
+  file(COPY "${_gpu}" DESTINATION "${STAGE_DIR}")
+endif()
+if(EXISTS "${_cpu}")
+  file(COPY "${_cpu}" DESTINATION "${STAGE_DIR}")
+endif()
+file(COPY "${PLUGIN_PATH}" DESTINATION "${STAGE_DIR}")
+file(COPY "${WHISPER_MODEL_PATH}" DESTINATION "${STAGE_DIR}/models")
+file(COPY "${VAD_MODEL_PATH}" DESTINATION "${STAGE_DIR}/models")
+file(COPY "${SOURCE_ROOT}/models/manifest.json" DESTINATION "${STAGE_DIR}/models")
+file(COPY "${SOURCE_ROOT}/lua" DESTINATION "${STAGE_DIR}")
+file(COPY "${SOURCE_ROOT}/LICENSE" DESTINATION "${STAGE_DIR}")
+file(COPY "${SOURCE_ROOT}/THIRD_PARTY_NOTICES.md" DESTINATION "${STAGE_DIR}")
+
+get_filename_component(_whisper_model_name "${WHISPER_MODEL_PATH}" NAME)
+get_filename_component(_vad_model_name "${VAD_MODEL_PATH}" NAME)
+vw_verify_release_model("${STAGE_DIR}/models/${_whisper_model_name}" "${WHISPER_MODEL_SHA256}"
+                        "staged Whisper tiny")
+vw_verify_release_model("${STAGE_DIR}/models/${_vad_model_name}" "${VAD_MODEL_SHA256}" "staged Silero VAD")
+
+message(STATUS "Release inputs validated: gpu=${_gpu} cpu=${_cpu} plugin=${PLUGIN_PATH}")

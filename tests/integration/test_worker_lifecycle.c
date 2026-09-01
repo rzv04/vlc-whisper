@@ -47,7 +47,7 @@ int main(void) {
   // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
   strncpy(config.pipe_name, "\\\\.\\pipe\\test_lifecycle_socket", sizeof(config.pipe_name) - 1);
 #else
-  strncpy(config.pipe_name, "test_lifecycle_socket", sizeof(config.pipe_name) - 1);
+  snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-lifecycle-%ld.sock", (long)getpid());
 #endif
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 
@@ -191,7 +191,8 @@ int main(void) {
 #ifdef _WIN32
     strncpy(with_model.pipe_name, "\\\\.\\pipe\\test_lifecycle_model_socket", sizeof(with_model.pipe_name) - 1);
 #else
-    strncpy(with_model.pipe_name, "test_lifecycle_model_socket", sizeof(with_model.pipe_name) - 1);
+    snprintf(with_model.pipe_name, sizeof(with_model.pipe_name), "/tmp/vlc-whisper-test-lifecycle-model-%ld.sock",
+             (long)getpid());
 #endif
     strncpy(with_model.model_path, model_path, sizeof(with_model.model_path) - 1);
 

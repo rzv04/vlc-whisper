@@ -19,7 +19,8 @@ struct vw_source_decoder {
   int64_t duration_us;
   int64_t current_pts_us;
   bool eof_reached;
-  int16_t leftover_buffer[4096];
+  int16_t* leftover_buffer;
+  size_t leftover_capacity;
   size_t leftover_count;
   bool com_initialized;
 };
@@ -277,8 +278,32 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
           decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
 
           size_t remainder = samples_in_sample - needed;
-          if (remainder > sizeof(decoder->leftover_buffer) / sizeof(int16_t)) {
-            remainder = sizeof(decoder->leftover_buffer) / sizeof(int16_t);
+          if (remainder > decoder->leftover_capacity) {
+            size_t new_capacity = decoder->leftover_capacity > 0 ? decoder->leftover_capacity : 4096;
+            while (new_capacity < remainder) {
+              if (new_capacity > SIZE_MAX / 2) {
+                new_capacity = remainder;
+                break;
+              }
+              new_capacity *= 2;
+            }
+            if (new_capacity > SIZE_MAX / sizeof(int16_t)) {
+              pBuffer->lpVtbl->Unlock(pBuffer);
+              pBuffer->lpVtbl->Release(pBuffer);
+              pSample->lpVtbl->Release(pSample);
+              decoder->eof_reached = true;
+              break;
+            }
+            int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
+            if (!new_buffer) {
+              pBuffer->lpVtbl->Unlock(pBuffer);
+              pBuffer->lpVtbl->Release(pBuffer);
+              pSample->lpVtbl->Release(pSample);
+              decoder->eof_reached = true;
+              break;
+            }
+            decoder->leftover_buffer = new_buffer;
+            decoder->leftover_capacity = new_capacity;
           }
           memcpy(decoder->leftover_buffer, in_samples + needed, remainder * sizeof(int16_t));
           decoder->leftover_count = remainder;
@@ -304,6 +329,7 @@ void vw_source_decoder_close(vw_source_decoder_t* decoder) {
       decoder->p_reader = NULL;
     }
     bool do_uninit = decoder->com_initialized;
+    free(decoder->leftover_buffer);
     free(decoder);
     if (do_uninit) CoUninitialize();
   }

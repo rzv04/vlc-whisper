@@ -1,6 +1,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,7 @@ static void vw_plugin_log_sink(vw_log_level_t level, const char* event_id, const
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -68,24 +70,60 @@ static int64_t vw_plugin_input_position_us(input_thread_t* input);
 
 static char vw_plugin_dl_anchor;
 
+#ifdef _WIN32
+// Converts a UTF-8 path to UTF-16 for Win32 filesystem and discovery APIs.
+static bool vw_plugin_utf8_to_wide(const char* input, wchar_t* out, size_t out_chars) {
+  if (!input || !out || out_chars == 0 || out_chars > INT_MAX) return false;
+  return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, -1, out, (int)out_chars) > 0;
+}
+
+// Converts a NUL-terminated UTF-16 value to the plugin's internal UTF-8 representation.
+static bool vw_plugin_wide_to_utf8(const wchar_t* input, char* out, size_t out_size) {
+  if (!input || !out || out_size == 0 || out_size > INT_MAX) return false;
+  return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input, -1, out, (int)out_size, NULL, NULL) > 0;
+}
+
+// Reads a Windows environment variable through the Unicode API and returns UTF-8 without truncation.
+static bool vw_plugin_get_environment_utf8(const wchar_t* name, char* out, size_t out_size) {
+  if (!name || !out || out_size == 0) return false;
+  wchar_t wide_value[VW_PATH_MAX_BYTES];
+  DWORD length = GetEnvironmentVariableW(name, wide_value, (DWORD)(sizeof(wide_value) / sizeof(wide_value[0])));
+  if (length == 0 || length >= sizeof(wide_value) / sizeof(wide_value[0])) return false;
+  return vw_plugin_wide_to_utf8(wide_value, out, out_size);
+}
+
+// Resolves a module filename with the Unicode Win32 API and converts the complete path to UTF-8.
+static bool vw_plugin_get_module_path_utf8(HMODULE module, char* out, size_t out_size) {
+  if (!out || out_size == 0) return false;
+  wchar_t wide_path[VW_PATH_MAX_BYTES];
+  DWORD length = GetModuleFileNameW(module, wide_path, (DWORD)(sizeof(wide_path) / sizeof(wide_path[0])));
+  if (length == 0 || length >= sizeof(wide_path) / sizeof(wide_path[0])) return false;
+  wide_path[length] = L'\0';
+  return vw_plugin_wide_to_utf8(wide_path, out, out_size);
+}
+#endif
+
 // Returns per-user model directory mirroring worker vw_model_download_default_dir (%LOCALAPPDATA%\\vlc-whisper\\models
 // on Windows via LOCALAPPDATA; $XDG_DATA_HOME/vlc-whisper/models else $HOME/.local/share on Linux).
 static bool vw_plugin_get_model_dir(char* out, size_t out_size) {
   if (!out || out_size == 0) return false;
 #ifdef _WIN32
-  const char* base = getenv("LOCALAPPDATA");
+  char base[VW_PATH_MAX_BYTES];
   char tmp[4096];
-  if (base && base[0]) {
-    snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", base);
+  if (vw_plugin_get_environment_utf8(L"LOCALAPPDATA", base, sizeof(base)) && base[0]) {
+    int written = snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", base);
+    if (written < 0 || (size_t)written >= sizeof(tmp)) return false;
   } else {
-    const char* home = getenv("USERPROFILE");
-    if (home && home[0]) {
-      snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", home);
+    char home[VW_PATH_MAX_BYTES];
+    if (vw_plugin_get_environment_utf8(L"USERPROFILE", home, sizeof(home)) && home[0]) {
+      int written = snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", home);
+      if (written < 0 || (size_t)written >= sizeof(tmp)) return false;
     } else {
       snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
     }
   }
-  snprintf(out, out_size, "%s", tmp);
+  if (strlen(tmp) >= out_size) return false;
+  strcpy(out, tmp);
 #else
   const char* xdg = getenv("XDG_DATA_HOME");
   char tmp[4096];
@@ -145,7 +183,9 @@ static const char* vw_plugin_catalog_id_from_path(const char* path) {
 
 static bool vw_plugin_path_exists(const char* path) {
 #ifdef _WIN32
-  DWORD attr = GetFileAttributesA(path);
+  wchar_t wide_path[VW_PATH_MAX_BYTES];
+  if (!vw_plugin_utf8_to_wide(path, wide_path, sizeof(wide_path) / sizeof(wide_path[0]))) return false;
+  DWORD attr = GetFileAttributesW(wide_path);
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 #else
   return access(path, F_OK) == 0;
@@ -186,7 +226,7 @@ static bool vw_plugin_probe_ancestors(const char* file_path, int max_up, const c
       char candidate[VW_PATH_MAX_BYTES];
       memcpy(candidate, file_path, try_len);
 #ifdef _WIN32
-      candidate[try_len] = '\\';  // native separator: GetFileAttributesA/CreateProcessW expect backslashes
+      candidate[try_len] = '\\';  // Native separator for Unicode Win32 filesystem and process APIs.
 #else
       candidate[try_len] = '/';
 #endif
@@ -208,17 +248,25 @@ static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_
   const HKEY roots[] = {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
   for (int i = 0; i < 2; i++) {
     HKEY hkey = NULL;
-    if (RegOpenKeyExA(roots[i], "Software\\VLC-Whisper", 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
-      char val[MAX_PATH];
-      DWORD len = sizeof(val);
+    if (RegOpenKeyExW(roots[i], L"Software\\VLC-Whisper", 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
+      wchar_t wide_value[VW_PATH_MAX_BYTES];
+      DWORD len = sizeof(wide_value);
       DWORD type = 0;
-      if (RegQueryValueExA(hkey, "InstallPath", NULL, &type, (LPBYTE)val, &len) == ERROR_SUCCESS && type == REG_SZ &&
-          len > 0) {
+      if (RegQueryValueExW(hkey, L"InstallPath", NULL, &type, (LPBYTE)wide_value, &len) == ERROR_SUCCESS &&
+          type == REG_SZ && len >= sizeof(wchar_t) && len <= sizeof(wide_value) && len % sizeof(wchar_t) == 0) {
         RegCloseKey(hkey);
-        size_t vlen = (len < sizeof(val)) ? len : sizeof(val) - 1;
-        val[vlen] = '\0';
-        snprintf(candidate, sizeof(candidate), "%s\\.vw_probe", val);
-        if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+        size_t value_chars = len / sizeof(wchar_t);
+        wide_value[value_chars < sizeof(wide_value) / sizeof(wide_value[0])
+                       ? value_chars
+                       : sizeof(wide_value) / sizeof(wide_value[0]) - 1] = L'\0';
+        char value[VW_PATH_MAX_BYTES];
+        if (vw_plugin_wide_to_utf8(wide_value, value, sizeof(value))) {
+          int written = snprintf(candidate, sizeof(candidate), "%s\\.vw_probe", value);
+          if (written >= 0 && (size_t)written < sizeof(candidate) &&
+              vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) {
+            return true;
+          }
+        }
       } else {
         RegCloseKey(hkey);
       }
@@ -226,19 +274,23 @@ static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_
   }
 
   // 2. Probe %LOCALAPPDATA%/vlc-whisper
-  char local_app_data[MAX_PATH];
-  DWORD llen = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, sizeof(local_app_data));
-  if (llen > 0 && llen < sizeof(local_app_data)) {
-    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", local_app_data);
-    if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+  char local_app_data[VW_PATH_MAX_BYTES];
+  if (vw_plugin_get_environment_utf8(L"LOCALAPPDATA", local_app_data, sizeof(local_app_data))) {
+    int written = snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", local_app_data);
+    if (written >= 0 && (size_t)written < sizeof(candidate) &&
+        vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) {
+      return true;
+    }
   }
 
   // 3. Probe %PROGRAMFILES%/vlc-whisper
-  char prog_files[MAX_PATH];
-  DWORD plen = GetEnvironmentVariableA("PROGRAMFILES", prog_files, sizeof(prog_files));
-  if (plen > 0 && plen < sizeof(prog_files)) {
-    snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", prog_files);
-    if (vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) return true;
+  char prog_files[VW_PATH_MAX_BYTES];
+  if (vw_plugin_get_environment_utf8(L"PROGRAMFILES", prog_files, sizeof(prog_files))) {
+    int written = snprintf(candidate, sizeof(candidate), "%s\\vlc-whisper\\.vw_probe", prog_files);
+    if (written >= 0 && (size_t)written < sizeof(candidate) &&
+        vw_plugin_probe_ancestors(candidate, 0, names, name_count, out, out_size)) {
+      return true;
+    }
   }
   return false;
 }
@@ -250,19 +302,15 @@ static bool vw_plugin_probe_windows_paths(const char* const* names, size_t name_
 static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
 #ifdef _WIN32
   const char* worker_names[] = {"vlc-whisper-worker.exe", "vlc-whisper-worker-cpu.exe"};
-  char plugin_path[MAX_PATH];
+  char plugin_path[VW_PATH_MAX_BYTES];
   HMODULE hmod = NULL;
-  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
-      hmod) {
-    DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
-    if (len > 0 && len < sizeof(plugin_path)) {
-      if (vw_plugin_probe_ancestors(plugin_path, 3, worker_names, 2, out, out_size)) return true;
-    }
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         (LPCWSTR)(const void*)&vw_plugin_dl_anchor, &hmod) &&
+      hmod && vw_plugin_get_module_path_utf8(hmod, plugin_path, sizeof(plugin_path))) {
+    if (vw_plugin_probe_ancestors(plugin_path, 3, worker_names, 2, out, out_size)) return true;
   }
-  char exe_path[MAX_PATH];
-  DWORD elen = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
-  if (elen > 0 && elen < sizeof(exe_path)) {
+  char exe_path[VW_PATH_MAX_BYTES];
+  if (vw_plugin_get_module_path_utf8(NULL, exe_path, sizeof(exe_path))) {
     if (vw_plugin_probe_ancestors(exe_path, 0, worker_names, 2, out, out_size)) return true;
   }
   if (vw_plugin_probe_windows_paths(worker_names, 2, out, out_size)) return true;
@@ -289,19 +337,15 @@ static bool vw_plugin_resolve_worker_path(char* out, size_t out_size) {
 static bool vw_plugin_resolve_cpu_worker_path(char* out, size_t out_size) {
 #ifdef _WIN32
   const char* cpu_names[] = {"vlc-whisper-worker-cpu.exe"};
-  char plugin_path[MAX_PATH];
+  char plugin_path[VW_PATH_MAX_BYTES];
   HMODULE hmod = NULL;
-  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
-      hmod) {
-    DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
-    if (len > 0 && len < sizeof(plugin_path)) {
-      if (vw_plugin_probe_ancestors(plugin_path, 3, cpu_names, 1, out, out_size)) return true;
-    }
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         (LPCWSTR)(const void*)&vw_plugin_dl_anchor, &hmod) &&
+      hmod && vw_plugin_get_module_path_utf8(hmod, plugin_path, sizeof(plugin_path))) {
+    if (vw_plugin_probe_ancestors(plugin_path, 3, cpu_names, 1, out, out_size)) return true;
   }
-  char exe_path[MAX_PATH];
-  DWORD elen = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
-  if (elen > 0 && elen < sizeof(exe_path)) {
+  char exe_path[VW_PATH_MAX_BYTES];
+  if (vw_plugin_get_module_path_utf8(NULL, exe_path, sizeof(exe_path))) {
     if (vw_plugin_probe_ancestors(exe_path, 0, cpu_names, 1, out, out_size)) return true;
   }
   if (vw_plugin_probe_windows_paths(cpu_names, 1, out, out_size)) return true;
@@ -371,19 +415,15 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
   const size_t model_name_count = sizeof(model_names) / sizeof(model_names[0]);
   const size_t model_file_count = sizeof(model_files) / sizeof(model_files[0]);
 #ifdef _WIN32
-  char plugin_path[MAX_PATH];
+  char plugin_path[VW_PATH_MAX_BYTES];
   HMODULE hmod = NULL;
-  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         (LPCSTR)&vw_plugin_dl_anchor, &hmod) &&
-      hmod) {
-    DWORD len = GetModuleFileNameA(hmod, plugin_path, (DWORD)sizeof(plugin_path));
-    if (len > 0 && len < sizeof(plugin_path)) {
-      if (vw_plugin_probe_ancestors(plugin_path, 3, model_names, model_name_count, out, out_size)) return true;
-    }
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         (LPCWSTR)(const void*)&vw_plugin_dl_anchor, &hmod) &&
+      hmod && vw_plugin_get_module_path_utf8(hmod, plugin_path, sizeof(plugin_path))) {
+    if (vw_plugin_probe_ancestors(plugin_path, 3, model_names, model_name_count, out, out_size)) return true;
   }
-  char exe_path[MAX_PATH];
-  DWORD elen = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
-  if (elen > 0 && elen < sizeof(exe_path)) {
+  char exe_path[VW_PATH_MAX_BYTES];
+  if (vw_plugin_get_module_path_utf8(NULL, exe_path, sizeof(exe_path))) {
     if (vw_plugin_probe_ancestors(exe_path, 0, model_names, model_name_count, out, out_size)) return true;
   }
   if (vw_plugin_probe_windows_paths(model_names, model_name_count, out, out_size)) return true;
@@ -1495,8 +1535,6 @@ static block_t* vw_plugin_filter(filter_t* p_filter, block_t* p_block) {
     sys->capture.sample_remainder = 0;
     sys->capture.resample_source_rate = 0;
     atomic_store(&sys->invalid_pts_pending, true);
-    vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PTS_RESYNC",
-                 "valid PTS resumed after invalid interval; draining old queue");
     sys->last_pts_was_invalid = false;
     // Skip this transition block's audio to ensure old queue is drained before new audio is enqueued.
     // Next block's audio will be the first new-epoch audio forwarded.
@@ -1614,7 +1652,37 @@ static int vw_plugin_open(vlc_object_t* obj) {
     return VLC_EGENERIC;
   }
 #else
-  snprintf(sys->pipe_name, sizeof(sys->pipe_name), "/tmp/vlc-whisper-%ld.sock", (long)getpid());
+  // Use an unpredictable, per-instance endpoint. The transport authenticates separately,
+  // but predictable names permit stale-file collisions and endpoint hijacking attempts.
+  uint8_t endpoint_random[16];
+  if (!vw_platform_get_random_bytes(endpoint_random, sizeof(endpoint_random))) {
+    vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_PIPE_RNG_FAIL", "CSPRNG failed for Unix socket name");
+    vw_log_set_sink(NULL, NULL);
+    vw_spsc_queue_destroy(sys->queue);
+    p_filter->p_sys = NULL;
+    free(sys);
+    return VLC_EGENERIC;
+  }
+  char endpoint_hex[sizeof(endpoint_random) * 2 + 1];
+  for (size_t i = 0; i < sizeof(endpoint_random); i++) snprintf(endpoint_hex + i * 2, 3, "%02x", endpoint_random[i]);
+  endpoint_hex[sizeof(endpoint_hex) - 1] = '\0';
+  const char* runtime_dir = "/tmp";
+  const char* configured_runtime_dir = getenv("XDG_RUNTIME_DIR");
+  struct stat runtime_stat;
+  if (configured_runtime_dir && configured_runtime_dir[0] == '/' && stat(configured_runtime_dir, &runtime_stat) == 0 &&
+      S_ISDIR(runtime_stat.st_mode) && runtime_stat.st_uid == geteuid() &&
+      (runtime_stat.st_mode & (S_IWGRP | S_IWOTH)) == 0) {
+    runtime_dir = configured_runtime_dir;
+  }
+  int endpoint_length =
+      snprintf(sys->pipe_name, sizeof(sys->pipe_name), "%s/vlc-whisper-%s.sock", runtime_dir, endpoint_hex);
+  // sockaddr_un::sun_path is 108 bytes on supported Linux builds. An unusually long runtime directory falls back to
+  // the bounded random /tmp name instead of passing a truncated endpoint to the worker.
+  if (endpoint_length < 0 || endpoint_length >= 108) {
+    snprintf(sys->pipe_name, sizeof(sys->pipe_name), "/tmp/vlc-whisper-%s.sock", endpoint_hex);
+  }
+  memset(endpoint_random, 0, sizeof(endpoint_random));
+  memset(endpoint_hex, 0, sizeof(endpoint_hex));
 #endif
 
   // Explicit per-install override for layouts outside the bounded discovery paths.

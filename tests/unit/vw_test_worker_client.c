@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "vw_ipc_transport.h"
 #include "vw_platform.h"
@@ -93,6 +96,12 @@ static void* vw_fake_server_thread(void* arg) {
   } else if (hdr.type != VW_MSG_START_SESSION) {
     vw_ipc_close(server);
     return (void*)10;
+  }
+  vw_msg_start_t start;
+  if (!vw_protocol_decode_payload(VW_MSG_START_SESSION, payload, hdr.payload_length, &start) ||
+      strcmp(start.language, "ro") != 0) {
+    vw_ipc_close(server);
+    return (void*)17;
   }
 
   // Step 5: Delay 100ms (testing client's polling/waiting loop), then reply with zero-payload STARTED frame
@@ -405,7 +414,8 @@ int main(void) {
   // Named pipes require the \\\\.\\pipe\\ prefix on Windows.
   const char* pipe_name = "\\\\.\\pipe\\test_worker_client_socket";
 #else
-  const char* pipe_name = "test_worker_client_socket";
+  char pipe_name[256];
+  snprintf(pipe_name, sizeof(pipe_name), "/tmp/vlc-whisper-worker-client-%ld.sock", (long)getpid());
 #endif
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES] = {0};
 
@@ -417,7 +427,8 @@ int main(void) {
   vw_platform_sleep_ms(100);
 
   // Test 1: Connect and perform HELLO/HELLO_ACK handshake
-  vw_worker_client_t* client = vw_worker_client_launch_and_connect(NULL, pipe_name, auth_token, NULL);
+  vw_worker_client_t* client =
+      vw_worker_client_launch_and_connect_ex(NULL, pipe_name, auth_token, NULL, "auto", "ro", 4, -1, NULL, false);
   EXPECT(client != NULL);
 
   // Test 2: Send MODEL_CTRL before START_SESSION; the worker-scoped download path has no caption session yet.
@@ -461,11 +472,11 @@ int main(void) {
 
   // Test 8: receive_frame decodes worker frames in order, skips unknown types, times out, and EOFs.
   // Fresh endpoint; the frames server pushes PAUSE (skipped), SEGMENT, STATUS, ERROR, then closes.
-  const char* pipe_name2 =
 #ifdef _WIN32
-      "\\\\.\\pipe\\test_worker_client_socket_frames";
+  const char* pipe_name2 = "\\\\.\\pipe\\test_worker_client_socket_frames";
 #else
-      "test_worker_client_socket_frames";
+  char pipe_name2[256];
+  snprintf(pipe_name2, sizeof(pipe_name2), "/tmp/vlc-whisper-worker-client-frames-%ld.sock", (long)getpid());
 #endif
   pthread_t thread2;
   err = pthread_create(&thread2, NULL, vw_fake_server_frames_thread, (void*)pipe_name2);
@@ -515,18 +526,19 @@ int main(void) {
 
   // Test 9: Silent server — receive_frame with a short timeout returns 0 (no frame) and keeps
   // the transport usable. Reuse a fresh endpoint with a listener that only does the handshake.
-  const char* pipe_name3 =
 #ifdef _WIN32
-      "\\\\.\\pipe\\test_worker_client_socket_silent";
+  const char* pipe_name3 = "\\\\.\\pipe\\test_worker_client_socket_silent";
 #else
-      "test_worker_client_socket_silent";
+  char pipe_name3[256];
+  snprintf(pipe_name3, sizeof(pipe_name3), "/tmp/vlc-whisper-worker-client-silent-%ld.sock", (long)getpid());
 #endif
   pthread_t thread3;
   err = pthread_create(&thread3, NULL, vw_fake_server_thread, (void*)pipe_name3);
   EXPECT(err == 0);
   vw_platform_sleep_ms(100);
 
-  vw_worker_client_t* client3 = vw_worker_client_launch_and_connect(NULL, pipe_name3, auth_token, NULL);
+  vw_worker_client_t* client3 =
+      vw_worker_client_launch_and_connect_ex(NULL, pipe_name3, auth_token, NULL, "auto", "ro", 4, -1, NULL, false);
   EXPECT(client3 != NULL);
   EXPECT(vw_worker_client_start_session(client3, 0, "ggml-tiny.en.bin", NULL));
 
@@ -554,11 +566,11 @@ int main(void) {
 
   // Test 10: Corrupt header — receive_frame must report VW_IPC_RECV_FATAL (never the timeout
   // value) and drop the transport, so the sender stops instead of spinning on a dead client.
-  const char* pipe_name4 =
 #ifdef _WIN32
-      "\\\\.\\pipe\\test_worker_client_socket_badheader";
+  const char* pipe_name4 = "\\\\.\\pipe\\test_worker_client_socket_badheader";
 #else
-      "test_worker_client_socket_badheader";
+  char pipe_name4[256];
+  snprintf(pipe_name4, sizeof(pipe_name4), "/tmp/vlc-whisper-worker-client-badheader-%ld.sock", (long)getpid());
 #endif
   pthread_t thread4;
   err = pthread_create(&thread4, NULL, vw_fake_server_bad_header_thread, (void*)pipe_name4);

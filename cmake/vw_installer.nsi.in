@@ -6,6 +6,7 @@
 !include "x64.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+!define VW_PACKAGE_IS_GPU @VW_PACKAGE_IS_GPU@
 
 ; General Configuration
 Name "VLC-Whisper AI Subtitles"
@@ -90,6 +91,20 @@ Function CheckVLC64Bit
   Pop $0
 FunctionEnd
 
+; Accept only VLC 3.x builds, whose plugin ABI this package targets.
+Function CheckVLCVersion
+  GetDLLVersion "$INSTDIR\vlc.exe" $0 $1
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONSTOP "Could not read the VLC version from '$INSTDIR\vlc.exe'."
+    Abort
+  ${EndIf}
+  IntOp $2 $0 >> 16
+  ${If} $2 != 3
+    MessageBox MB_OK|MB_ICONSTOP "This installer targets VLC 3.x (64-bit). The selected VLC executable is version $0.$1."
+    Abort
+  ${EndIf}
+FunctionEnd
+
 ; ------------------------------------------------------------------------------
 ; Directory Page Leave Callback (Validate VLC Installation Target)
 ; ------------------------------------------------------------------------------
@@ -100,6 +115,7 @@ Function DirectoryLeave
     Abort
   ${EndIf}
   Call CheckVLC64Bit
+  Call CheckVLCVersion
 FunctionEnd
 
 ; ------------------------------------------------------------------------------
@@ -234,7 +250,7 @@ Section "VLC Plugin & AI Engine" SecCore
   SetOutPath "$INSTDIR\plugins\audio_filter"
   ClearErrors
   Delete "$INSTDIR\plugins\audio_filter\libvlc_whisper_plugin.dll.vw-new"
-  File /oname=libvlc_whisper_plugin.dll.vw-new "@CMAKE_BINARY_DIR@/plugin/libvlc_whisper_plugin.dll"
+  File /oname=libvlc_whisper_plugin.dll.vw-new "@VW_STAGE_DIR@/libvlc_whisper_plugin.dll"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "Failed to stage the plugin DLL for installation."
     Abort "Plugin DLL staging failed"
@@ -262,10 +278,11 @@ Section "VLC Plugin & AI Engine" SecCore
 
   SetOutPath "$INSTDIR"
 
-  ; GPU worker is optional for CPU-only package builds, so stage it nonfatally.
+  ; GPU worker is staged when present. The production GPU preset requires it;
+  ; explicit CPU-only packages intentionally have no canonical GPU worker.
   ClearErrors
   Delete "$INSTDIR\vlc-whisper-worker.exe.vw-new"
-  File /nonfatal /oname=vlc-whisper-worker.exe.vw-new "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
+  File /nonfatal /oname=vlc-whisper-worker.exe.vw-new "@VW_STAGE_DIR@/vlc-whisper-worker.exe"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "Failed to stage the GPU worker."
     Abort "GPU worker staging failed"
@@ -292,11 +309,23 @@ Section "VLC Plugin & AI Engine" SecCore
     ${EndIf}
   ${EndIf}
 
+!if ${VW_PACKAGE_IS_GPU} == 0
+  ; Runtime discovery prefers vlc-whisper-worker.exe. A CPU-only upgrade must
+  ; remove any canonical GPU worker left by a previous GPU package so stale
+  ; code can never outrank the freshly installed -cpu worker.
+  ClearErrors
+  Delete "$INSTDIR\vlc-whisper-worker.exe"
+  ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe"
+    Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker.exe"
+    SetRebootFlag true
+  ${EndIf}
+!endif
+
   ; CPU fallback is handled independently so GPU packages retain their
   ; loader-less fallback and CPU-only packages remain valid.
   ClearErrors
   Delete "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new"
-  File /nonfatal /oname=vlc-whisper-worker-cpu.exe.vw-new "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker-cpu.exe"
+  File /nonfatal /oname=vlc-whisper-worker-cpu.exe.vw-new "@VW_STAGE_DIR@/vlc-whisper-worker-cpu.exe"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "Failed to stage the CPU fallback worker."
     Abort "CPU worker staging failed"
@@ -332,16 +361,16 @@ Section "VLC Plugin & AI Engine" SecCore
   ${EndIf}
 
   SetOutPath "$INSTDIR\models"
-  File "@CMAKE_SOURCE_DIR@/models/manifest.json"
-  File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.bin"
-  File /nonfatal "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
+  File "@VW_STAGE_DIR@/models/manifest.json"
+  File "@VW_STAGE_DIR@/models/ggml-tiny.bin"
+  File "@VW_STAGE_DIR@/models/ggml-silero-vad.bin"
 
   SetOutPath "$INSTDIR\lua\extensions"
-  File "@CMAKE_SOURCE_DIR@/lua/extensions/vlc_whisper_settings.lua"
+  File "@VW_STAGE_DIR@/lua/extensions/vlc_whisper_settings.lua"
 
   SetOutPath "$INSTDIR\vlc-whisper"
-  File /oname=LICENSE-vlc-whisper.txt "@CMAKE_SOURCE_DIR@/LICENSE"
-  File /oname=THIRD_PARTY_NOTICES-vlc-whisper.md "@CMAKE_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"
+  File /oname=LICENSE-vlc-whisper.txt "@VW_STAGE_DIR@/LICENSE"
+  File /oname=THIRD_PARTY_NOTICES-vlc-whisper.md "@VW_STAGE_DIR@/THIRD_PARTY_NOTICES.md"
 
   WriteRegStr HKLM "Software\VLC-Whisper" "InstallPath" "$INSTDIR"
   WriteRegStr HKLM "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
@@ -440,7 +469,6 @@ Section "Uninstall"
   Delete "$INSTDIR\vlc-whisper-worker-cpu.exe.vw-new"
 
   Delete "$INSTDIR\models\ggml-tiny.bin"
-  Delete "$INSTDIR\models\ggml-tiny.en.bin"
   Delete "$INSTDIR\models\ggml-silero-vad.bin"
   Delete "$INSTDIR\models\manifest.json"
   RMDir "$INSTDIR\models"

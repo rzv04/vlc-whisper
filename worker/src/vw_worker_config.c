@@ -22,10 +22,19 @@
 #include "vw_log.h"
 static bool vw_worker_config_file_exists(const char* path) {
   if (!path || !path[0]) return false;
+#ifdef _WIN32
+  wchar_t wide_path[VW_PATH_MAX_BYTES];
+  int wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide_path,
+                                        (int)(sizeof(wide_path) / sizeof(wide_path[0])));
+  if (wide_length <= 0) return false;
+  DWORD attributes = GetFileAttributesW(wide_path);
+  return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+#else
   FILE* file = fopen(path, "rb");
   if (!file) return false;
   fclose(file);
   return true;
+#endif
 }
 
 static bool vw_worker_config_is_absolute_path(const char* path) {
@@ -67,9 +76,15 @@ static bool vw_worker_config_get_executable_dir(char* out, size_t out_size) {
   char executable_path[VW_PATH_MAX_BYTES];
   size_t path_length;
 #ifdef _WIN32
-  DWORD windows_path_length = GetModuleFileNameA(NULL, executable_path, (DWORD)sizeof(executable_path));
-  if (windows_path_length == 0 || windows_path_length >= sizeof(executable_path)) return false;
-  path_length = (size_t)windows_path_length;
+  wchar_t wide_executable_path[VW_PATH_MAX_BYTES];
+  DWORD windows_path_length = GetModuleFileNameW(
+      NULL, wide_executable_path, (DWORD)(sizeof(wide_executable_path) / sizeof(wide_executable_path[0])));
+  if (windows_path_length == 0 || windows_path_length >= sizeof(wide_executable_path) / sizeof(wide_executable_path[0]))
+    return false;
+  int utf8_length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_executable_path, (int)windows_path_length,
+                                        executable_path, (int)sizeof(executable_path) - 1, NULL, NULL);
+  if (utf8_length <= 0) return false;
+  path_length = (size_t)utf8_length;
 #elif defined(__linux__)
   ssize_t linux_path_length = readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1);
   if (linux_path_length <= 0 || (size_t)linux_path_length >= sizeof(executable_path)) return false;

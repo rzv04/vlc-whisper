@@ -23,6 +23,14 @@ typedef struct vw_worker_client {
   bool worker_source_active;
   uint32_t worker_capabilities;
   uint16_t worker_protocol_minor;
+  char active_model_id[VW_MAX_MODEL_ID_BYTES];
+  char active_source_url[VW_MAX_SOURCE_URL_BYTES];
+  char language[16];
+  bool translation_configured;
+  bool translate_enabled;
+  char translate_source_lang[16];
+  char translate_target_lang[16];
+  uint8_t translate_mode;
 } vw_worker_client_t;
 
 // Returns true if the worker confirmed that look-ahead source file decoding mode is active for the current session via
@@ -48,8 +56,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
 bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,
                                     const char* source_url);
 
-// Encodes and transmits a playback position and pacing update over IPC to throttle look-ahead worker decoding,
-// adjusting buffer horizons and handling seeks.
+// Sends playback position/pacing updates; a source-mode SEEK atomically STOPs and STARTs a fresh random session epoch
+// before sending the new position so buffered pre-seek captions can never match the current session identifier.
 bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
                                     float playback_rate, uint32_t flags);
 

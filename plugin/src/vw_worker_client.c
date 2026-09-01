@@ -3,6 +3,7 @@
 
 #include "vw_worker_client.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,7 @@ static int receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t d
   size_t got = 0;
   while (got < len) {
     int64_t now_us = vw_platform_get_monotonic_time_us();
+    if (now_us < 0) return VW_IPC_RECV_FATAL;
     if (now_us >= deadline_us) return (got == 0) ? VW_IPC_RECV_TIMEOUT : VW_IPC_RECV_FATAL;
     uint32_t remaining_us = (uint32_t)(deadline_us - now_us);
     uint32_t timeout_us = (remaining_us < 3000000U) ? remaining_us : 3000000U;
@@ -53,6 +55,15 @@ static void token_to_hex(const uint8_t tok[VW_AUTH_TOKEN_BYTES], char out[VW_AUT
   }
 }
 
+// Computes a bounded monotonic deadline; a clock failure or signed overflow fails closed instead of spinning forever.
+static bool vw_worker_client_make_deadline(int64_t duration_us, int64_t* out_deadline_us) {
+  if (!out_deadline_us || duration_us < 0) return false;
+  int64_t now_us = vw_platform_get_monotonic_time_us();
+  if (now_us < 0 || duration_us > INT64_MAX - now_us) return false;
+  *out_deadline_us = now_us + duration_us;
+  return true;
+}
+
 // A frame send that fails part-way leaves the byte stream dead or desynced
 // (e.g. header written but payload not: the worker waits for the declared
 // payload and would consume the next frame as it). Such a connection can
@@ -65,6 +76,8 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
     client->session_active = false;
   }
 }
+
+static bool send_control_frame(vw_worker_client_t* client, vw_message_type_t type, uint16_t reason);
 
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
@@ -159,6 +172,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   client->pipe_handle = ipc;
   client->worker_process = worker_process;
   client->sequence = 1;
+  snprintf(client->language, sizeof(client->language), "%s", (language && language[0]) ? language : "en");
 
   // --- HELLO handshake ---
   vw_msg_hello_t hello = {.min_major = VW_PROTOCOL_VERSION_MAJOR,
@@ -188,7 +202,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
 
   // Total budget for the HELLO/HELLO_ACK reads: a silently-dead worker must not
   // hang module open forever (each vw_ipc_receive can block up to 3s on timeout).
-  const int64_t handshake_deadline_us = vw_platform_get_monotonic_time_us() + VW_HANDSHAKE_TIMEOUT_US;
+  int64_t handshake_deadline_us = 0;
+  if (!vw_worker_client_make_deadline(VW_HANDSHAKE_TIMEOUT_US, &handshake_deadline_us)) goto fail;
 
   // Wait for HELLO_ACK (header, then payload)
   uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
@@ -212,6 +227,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   }
   if (ack_ok) {
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
+    if (ack.selected_minor > VW_PROTOCOL_VERSION_MINOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
   if (ack_ok) {
@@ -272,12 +288,13 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
                           .source_kind = source_url ? VW_SOURCE_LOCAL_FILE : VW_SOURCE_LIVE_AUDIO};
   memcpy(start.session_id.bytes, client->session_id, 16);
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);
-  strncpy(start.language, "en", sizeof(start.language) - 1);
+  snprintf(start.language, sizeof(start.language), "%s", client->language[0] ? client->language : "en");
   if (source_url) {
     size_t url_len = strlen(source_url);
     if (url_len >= sizeof(start.source_url)) {
-      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_START_URL", "source_url too long (%zu >= %zu); truncating", url_len,
+      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_START_URL", "source_url too long (%zu >= %zu); rejecting", url_len,
                    sizeof(start.source_url));
+      return false;
     }
     strncpy(start.source_url, source_url, sizeof(start.source_url) - 1);
     start.source_url[sizeof(start.source_url) - 1] = '\0';
@@ -303,8 +320,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     return false;
   }
 
-  const int64_t deadline_us =
-      vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the STARTED/ERROR confirmation wait
+  int64_t deadline_us = 0;
+  if (!vw_worker_client_make_deadline(5000000, &deadline_us)) return false;
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t resp_hdr_buf[sizeof(vw_frame_header_t)];
     if (receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us) != VW_IPC_RECV_OK) {
@@ -324,6 +341,16 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     }
 
     if (resp_hdr.type == VW_MSG_STARTED) {
+      if (client->worker_sequence_valid && resp_hdr.sequence <= client->last_worker_sequence) {
+        vw_worker_client_drop_transport(client);
+        return false;
+      }
+      client->last_worker_sequence = resp_hdr.sequence;
+      client->worker_sequence_valid = true;
+      if (client->worker_protocol_minor >= 6U && resp_hdr.payload_length != VW_MSG_STARTED_PAYLOAD_BYTES) {
+        vw_worker_client_drop_transport(client);
+        return false;
+      }
       if (resp_hdr.payload_length > 0) {
         uint8_t* resp_payload = (uint8_t*)malloc(resp_hdr.payload_length);
         if (!resp_payload) {
@@ -336,16 +363,26 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
           return false;
         }
         vw_msg_started_t started_msg = {0};
-        if (vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, resp_hdr.payload_length, &started_msg)) {
-          client->worker_source_active = (started_msg.source_active == VW_SOURCE_ACTIVE_ACTIVE);
-        } else {
-          client->worker_source_active = false;
+        bool started_ok =
+            vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, resp_hdr.payload_length, &started_msg);
+        if (started_ok && resp_hdr.payload_length != VW_MSG_STARTED_PAYLOAD_BYTES && resp_hdr.payload_length != 1U)
+          started_ok = false;
+        if (started_ok && resp_hdr.payload_length == VW_MSG_STARTED_PAYLOAD_BYTES &&
+            memcmp(started_msg.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0)
+          started_ok = false;
+        if (!started_ok) {
+          free(resp_payload);
+          vw_worker_client_drop_transport(client);
+          return false;
         }
+        client->worker_source_active = (started_msg.source_active == VW_SOURCE_ACTIVE_ACTIVE);
         free(resp_payload);
       } else {
         client->worker_source_active = false;
       }
       client->session_active = true;
+      snprintf(client->active_model_id, sizeof(client->active_model_id), "%s", start.model_id);
+      snprintf(client->active_source_url, sizeof(client->active_source_url), "%s", start.source_url);
       return true;
     } else if (resp_hdr.type == VW_MSG_ERROR) {
       if (resp_hdr.payload_length > 0) {
@@ -403,10 +440,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   return false;
 }
 
-bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
-                                    float playback_rate, uint32_t flags) {
-  if (!client || !client->pipe_handle || !client->session_active) return false;
-
+static bool vw_worker_client_send_position_frame(vw_worker_client_t* client, int64_t current_pts_us,
+                                                 int64_t input_time_us, float playback_rate, uint32_t flags) {
   vw_msg_position_t pos = {.current_pts_us = current_pts_us,
                            .input_time_us = input_time_us,
                            .playback_rate = playback_rate > 0.0f ? playback_rate : 1.0f,
@@ -431,6 +466,53 @@ bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_
     return false;
   }
   return true;
+}
+
+bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
+                                    float playback_rate, uint32_t flags) {
+  if (!client || !client->pipe_handle || !client->session_active) return false;
+
+  if ((flags & VW_POSITION_FLAG_SEEK) != 0 && client->worker_source_active && client->active_source_url[0] != '\0') {
+    char model_id[VW_MAX_MODEL_ID_BYTES];
+    char source_url[VW_MAX_SOURCE_URL_BYTES];
+    snprintf(model_id, sizeof(model_id), "%s", client->active_model_id);
+    snprintf(source_url, sizeof(source_url), "%s", client->active_source_url);
+
+    bool translation_configured = client->translation_configured;
+    bool translate_enabled = client->translate_enabled;
+    char translate_source_lang[sizeof(client->translate_source_lang)];
+    char translate_target_lang[sizeof(client->translate_target_lang)];
+    snprintf(translate_source_lang, sizeof(translate_source_lang), "%s", client->translate_source_lang);
+    snprintf(translate_target_lang, sizeof(translate_target_lang), "%s", client->translate_target_lang);
+    uint8_t translate_mode = client->translate_mode;
+
+    if (!send_control_frame(client, VW_MSG_STOP_SESSION, VW_CTRL_REASON_SEEK_DISCONTINUITY)) return false;
+    client->session_active = false;
+    client->worker_source_active = false;
+
+    if (!vw_worker_client_start_session(client, current_pts_us, model_id[0] ? model_id : NULL, source_url)) {
+      return false;
+    }
+    if (!client->worker_source_active) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_SOURCE_EPOCH",
+                   "source seek restart did not re-enter source mode; dropping transport for supervisor recovery");
+      vw_worker_client_drop_transport(client);
+      return false;
+    }
+
+    if (translation_configured && (client->worker_capabilities & VW_CAPABILITY_TRANSLATION) != 0 &&
+        !vw_worker_client_send_translate_ctrl(client, translate_enabled, translate_source_lang, translate_target_lang,
+                                              translate_mode)) {
+      return false;
+    }
+
+    vw_log_event(VW_LOG_LEVEL_DEBUG, "CLIENT_SOURCE_EPOCH",
+                 "source seek restarted caption epoch at %lldus before pacing update", (long long)current_pts_us);
+    return vw_worker_client_send_position_frame(client, current_pts_us, input_time_us, playback_rate,
+                                                flags & ~VW_POSITION_FLAG_SEEK);
+  }
+
+  return vw_worker_client_send_position_frame(client, current_pts_us, input_time_us, playback_rate, flags);
 }
 
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk) {
@@ -503,6 +585,15 @@ bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabl
   if ((client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
     // Same-major older workers remain usable when translation is disabled. Enabling an unsupported optional feature
     // fails locally without sending an unknown message that would desynchronize/terminate the older worker.
+    if (!enabled) {
+      client->translation_configured = true;
+      client->translate_enabled = false;
+      snprintf(client->translate_source_lang, sizeof(client->translate_source_lang), "%s",
+               source_lang ? source_lang : "auto");
+      snprintf(client->translate_target_lang, sizeof(client->translate_target_lang), "%s",
+               target_lang ? target_lang : "en");
+      client->translate_mode = mode;
+    }
     return !enabled;
   }
   vw_msg_translate_ctrl_t ctrl;
@@ -517,7 +608,6 @@ bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabl
   size_t payload_len = 0;
   if (!vw_protocol_encode_payload(VW_MSG_TRANSLATE_CTRL, &ctrl, payload_buf, sizeof(payload_buf), &payload_len))
     return false;
-
   vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
                            .major = VW_PROTOCOL_VERSION_MAJOR,
                            .type = VW_MSG_TRANSLATE_CTRL,
@@ -530,6 +620,11 @@ bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabl
     vw_worker_client_drop_transport(client);
     return false;
   }
+  client->translation_configured = true;
+  client->translate_enabled = enabled;
+  snprintf(client->translate_source_lang, sizeof(client->translate_source_lang), "%s", ctrl.source_lang);
+  snprintf(client->translate_target_lang, sizeof(client->translate_target_lang), "%s", ctrl.target_lang);
+  client->translate_mode = mode;
   return true;
 }
 
@@ -603,7 +698,8 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
   // mid-frame — finish it with the transport's own receive bound (3 s) so a transient delay
   // between the header and payload messages cannot desync the stream. Any payload failure (timeout
   // or fatal) still drops: the header is gone, so a later call would read the payload as a header.
-  const int64_t deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)timeout_us;
+  int64_t deadline_us = 0;
+  if (!vw_worker_client_make_deadline((int64_t)timeout_us, &deadline_us)) return VW_IPC_RECV_FATAL;
 
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t hdr_buf[sizeof(vw_frame_header_t)];
@@ -636,7 +732,12 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
       if (hdr.payload_length > 0) {
         uint8_t* tmp = (uint8_t*)malloc(hdr.payload_length);
         if (tmp) {
-          const int64_t drain_deadline = vw_platform_get_monotonic_time_us() + 3000000;
+          int64_t drain_deadline = 0;
+          if (!vw_worker_client_make_deadline(3000000, &drain_deadline)) {
+            free(tmp);
+            vw_worker_client_drop_transport(client);
+            return VW_IPC_RECV_FATAL;
+          }
           if (receive_all(client->pipe_handle, tmp, hdr.payload_length, drain_deadline) != VW_IPC_RECV_OK) {
             free(tmp);
             vw_worker_client_drop_transport(client);
@@ -653,7 +754,11 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
     client->last_worker_sequence = hdr.sequence;
     client->worker_sequence_valid = true;
 
-    const int64_t payload_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
+    int64_t payload_deadline_us = 0;
+    if (!vw_worker_client_make_deadline(3000000, &payload_deadline_us)) {
+      vw_worker_client_drop_transport(client);
+      return VW_IPC_RECV_FATAL;
+    }
     uint8_t* payload = NULL;
     if (hdr.payload_length > 0) {
       payload = (uint8_t*)malloc(hdr.payload_length);
