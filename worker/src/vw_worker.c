@@ -202,7 +202,6 @@ static void* vw_worker_reader_main(void* arg) {
   bool plugin_seq_valid = false;
 
   while (atomic_load(a->running)) {
-    // Receive the 20-byte header, retrying on timeout but leaving promptly when shutting down.
     int32_t bytes_read = 0;
     while (bytes_read < (int32_t)sizeof(vw_frame_header_t)) {
       int32_t res = vw_ipc_receive(a->handle, header_buf + bytes_read, sizeof(vw_frame_header_t) - bytes_read);
@@ -419,7 +418,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
   memset(&session_id, 0, sizeof(session_id));
   bool session_active = false;
   bool paused = false;
-  size_t live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+  bool live_progressive_mode = false;
+  size_t live_next_inference_samples = VW_WINDOW_SAMPLES;
   uint64_t sequence = 1;
 
   vw_source_decoder_t* source_decoder = NULL;
@@ -593,7 +593,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
               source_decoder = NULL;
             }
             if (audio_buf) vw_audio_buffer_clear(audio_buf);
-            live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+            live_progressive_mode = false;
+            live_next_inference_samples = VW_WINDOW_SAMPLES;
             if (builder) {
               vw_caption_segment_t stale_seg;
               while (vw_segment_builder_pop(builder, &stale_seg)) {
@@ -623,7 +624,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
 
           memcpy(session_id.bytes, payload_decoded.start.session_id.bytes, VW_SESSION_ID_BYTES);
           session_active = true;
-          live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+          live_progressive_mode = (payload_decoded.start.source_kind == VW_SOURCE_LIVE_AUDIO);
+          live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
           if (builder) {
             vw_segment_builder_clear(builder);
           }
@@ -682,8 +684,9 @@ int vw_worker_run(const vw_worker_config_t* config) {
             eof_retry_count = 0;
           }
 
-          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION", "session started (STARTED sent source_active=%d)",
-                       source_mode ? 1 : 0);
+          vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_SESSION",
+                       "session started (STARTED sent source_active=%d progressive_live=%d)", source_mode ? 1 : 0,
+                       live_progressive_mode ? 1 : 0);
 
           vw_msg_started_t started_payload = {.source_active =
                                                   source_mode ? VW_SOURCE_ACTIVE_ACTIVE : VW_SOURCE_ACTIVE_INACTIVE};
@@ -726,7 +729,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             paused = is_pos_paused;
             if (paused) {
               if (audio_buf) vw_audio_buffer_clear(audio_buf);
-              live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+              live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
               if (builder) vw_segment_builder_clear(builder);
               if (vad_ctx) vw_vad_reset_state(vad_ctx);
             } else {
@@ -742,7 +745,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   source_eof = false;
                   eof_retry_count = 0;
                   if (audio_buf) vw_audio_buffer_clear(audio_buf);
-                  live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+                  live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
                   if (builder) vw_segment_builder_clear(builder);
                   if (vad_ctx) vw_vad_reset_state(vad_ctx);
                 }
@@ -777,7 +780,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 source_eof = false;
                 eof_retry_count = 0;
                 if (audio_buf) vw_audio_buffer_clear(audio_buf);
-                live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+                live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
                 if (builder) vw_segment_builder_clear(builder);
                 if (vad_ctx) vw_vad_reset_state(vad_ctx);
               }
@@ -803,7 +806,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
             vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_AUDIO", "invalid audio PTS %lldus; clearing buffer",
                          (long long)pts_us);
             if (audio_buf) vw_audio_buffer_clear(audio_buf);
-            live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+            live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
             if (builder) vw_segment_builder_clear(builder);
             if (vad_ctx) vw_vad_reset_state(vad_ctx);
             break;
@@ -817,12 +820,14 @@ int vw_worker_run(const vw_worker_config_t* config) {
               size_t requested_samples = buffered_samples < VW_WINDOW_SAMPLES ? buffered_samples : VW_WINDOW_SAMPLES;
               size_t read_cnt =
                   vw_audio_buffer_get_samples(audio_buf, window_samples, requested_samples, &window_pts_us);
+              bool growing_live_window = live_progressive_mode && read_cnt < VW_WINDOW_SAMPLES;
+              int64_t read_duration_us = (int64_t)((read_cnt * 1000000ULL) / VW_AUDIO_SAMPLE_RATE);
 
               if (read_cnt > 0 && engine) {
                 if (vw_vad_detect_speech(window_samples, read_cnt, vad_ctx)) {
                   vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
-                               "live speech window %zu samples @%lldus; transcribing", read_cnt,
-                               (long long)window_pts_us);
+                               "PCM speech window %zu samples @%lldus progressive=%d; transcribing", read_cnt,
+                               (long long)window_pts_us, live_progressive_mode ? 1 : 0);
                   if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
                     if (builder) {
                       int n_segs = vw_whisper_engine_get_segment_count(engine);
@@ -830,6 +835,13 @@ int vw_worker_run(const vw_worker_config_t* config) {
                         vw_whisper_segment_t seg_info;
                         if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info)) {
                           if (seg_info.no_speech_prob >= 0.60f) {
+                            continue;
+                          }
+                          if (growing_live_window &&
+                              seg_info.t1_us > read_duration_us - VW_LIVE_EDGE_HOLDBACK_US) {
+                            vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
+                                         "holding progressive trailing segment end=%lldus frontier=%lldus",
+                                         (long long)seg_info.t1_us, (long long)read_duration_us);
                             continue;
                           }
                           int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
@@ -848,14 +860,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 }
               }
 
-              if (read_cnt < VW_WINDOW_SAMPLES) {
-                size_t next_target = read_cnt + VW_HOP_SAMPLES;
+              if (live_progressive_mode && read_cnt < VW_WINDOW_SAMPLES) {
+                size_t next_target = read_cnt + VW_LIVE_HOP_SAMPLES;
                 live_next_inference_samples = next_target < VW_WINDOW_SAMPLES ? next_target : VW_WINDOW_SAMPLES;
                 break;
               }
 
               live_next_inference_samples = VW_WINDOW_SAMPLES;
-              vw_audio_buffer_drain(audio_buf, VW_HOP_SAMPLES);
+              size_t drain_samples =
+                  live_progressive_mode ? VW_LIVE_HOP_SAMPLES : VW_LOCAL_FALLBACK_HOP_SAMPLES;
+              vw_audio_buffer_drain(audio_buf, drain_samples);
             }
           }
           break;
@@ -869,7 +883,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
           }
           paused = true;
           if (audio_buf) vw_audio_buffer_clear(audio_buf);
-          live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+          live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
           if (builder) vw_segment_builder_clear(builder);
           if (vad_ctx) vw_vad_reset_state(vad_ctx);
           if (translator) vw_translate_async_invalidate(translator);
@@ -895,7 +909,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
               source_eof = false;
               eof_retry_count = 0;
               if (audio_buf) vw_audio_buffer_clear(audio_buf);
-              live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+              live_next_inference_samples = live_progressive_mode ? VW_LIVE_STARTUP_SAMPLES : VW_WINDOW_SAMPLES;
               if (builder) vw_segment_builder_clear(builder);
               if (vad_ctx) vw_vad_reset_state(vad_ctx);
               if (translator) vw_translate_async_invalidate(translator);
@@ -923,7 +937,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
             source_mode = false;
           }
           if (audio_buf) vw_audio_buffer_clear(audio_buf);
-          live_next_inference_samples = VW_LIVE_STARTUP_SAMPLES;
+          live_progressive_mode = false;
+          live_next_inference_samples = VW_WINDOW_SAMPLES;
           if (builder) vw_segment_builder_clear(builder);
           if (vad_ctx) vw_vad_reset_state(vad_ctx);
           if (translator) vw_translate_async_invalidate(translator);
