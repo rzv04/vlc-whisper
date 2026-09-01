@@ -32,7 +32,7 @@ vlc-whisper/
 │   │   ├── vw_audio_capture.h                 # Decoded PCM extraction & monotonic media PTS assignment
 │   │   ├── vw_caption_presenter.h             # Translates transcript segments into VLC SPU/OSD caption cues with 1.0s reading floor
 │   │   ├── vw_benchmark.h                     # Per-session benchmark counters, latency samples, and report lifecycle
-│   │   ├── vw_worker_client.h                 # Authenticated IPC client, worker process supervisor
+│   │   ├── vw_worker_client.h                 # Authenticated IPC client, source-seek epoch state & worker process supervisor
 │   │   ├── vw_queue.h                         # Bounded realtime-safe SPSC audio queue declarations
 │   │   └── vw_platform.h                      # OS abstraction: CSPRNG, timing, process spawning
 │   └── src/
@@ -41,12 +41,12 @@ vlc-whisper/
 │       ├── vw_audio_capture.c                 # Audio callback handler & PCM format normalization
 │       ├── vw_caption_presenter.c             # Schedules and renders timed text captions via SPU with 1.0s floor & OSD fallback
 │       ├── vw_benchmark.c                     # Bounded per-session metrics and private temporary text report writer
-│       ├── vw_worker_client.c                 # Worker process launcher, IPC client & HELLO handshake
+│       ├── vw_worker_client.c                 # Worker launcher, IPC handshake, fresh source-seek sessions & translation reapply
 │       ├── vw_queue.c                         # Non-blocking lock-free SPSC queue implementation
 │       ├── vw_platform_win32.c                # Windows: paths, BCrypt CSPRNG, process spawn, timing
 │       └── vw_platform_linux.c                # Linux/Unix: random bytes, posix_spawn, timing
 ├── worker/                                    # Standalone local transcription worker application
-│   ├── CMakeLists.txt                         # Builds vlc-whisper-worker executable and links whisper.cpp
+│   ├── CMakeLists.txt                         # Builds worker; official Windows release can require Vulkan fail-closed
 │   ├── include/
 │   │   ├── vw_worker.h                        # Main worker event loop and IPC message dispatcher
 │   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
@@ -121,6 +121,7 @@ vlc-whisper/
 │   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
 │   │   ├── test_platform.c                    # Platform abstraction (RNG, time, spawn) tests
 │   │   ├── vw_test_worker_client.c            # Worker IPC client API (start/send/stop/shutdown) tests
+│   │   ├── test_worker_client_seek_epoch.c    # Source backward/forward seek epoch + stale translated/source cue regression
 │   │   ├── test_worker_config.c               # Worker CLI plus CWD-independent model/VAD directory resolution tests
 │   │   └── test_model_download.c              # Model download: sha256 vectors, catalog, progress, retry tests
 │   ├── integration/                           # Sub-system IPC and process tests
@@ -143,16 +144,17 @@ vlc-whisper/
 │   └── snippets/                              # Standalone C17 sample code files
 │       └── vw_sample_whisper_pcm.c            # 16kHz WAV reader, float resampler & Whisper runner
 ├── cmake/                                     # Build system configurations & toolchains
-│   ├── vw_packaging.cmake                     # CPack archive, NSIS installer, and CPU fallback staging target
-│   ├── vw_installer.nsi.in                   # Templated NSIS installer with owned-process and reboot-safe replacement logic
-│   ├── vw_check_workers.cmake                 # Fatal pre-package validation for plugin, model, GPU, and CPU worker inputs
+│   ├── vw_packaging.cmake                     # Explicit release model allowlist, NSIS/CPack & CPU fallback staging
+│   ├── vw_provision_model.cmake               # Verify existing pinned model hash or opt-in download + verify
+│   ├── vw_installer.nsi.in                   # Templated NSIS installer with owned-process, stale-GPU cleanup & reboot-safe replacement
+│   ├── vw_check_workers.cmake                 # Fatal pre-package validation for plugin, exact model hashes, GPU and CPU workers
 │   ├── vw_memcheck_gate.cmake                 # CTest/Valgrind defect-summary gate with CPU-only worker execution
 │   ├── valgrind.supp                          # Narrow third-party loader suppressions for the memcheck gate
 │   └── toolchains/
 │       └── windows-x64-mingw.cmake            # MinGW cross-compilation CMake toolchain configuration
 ├── ai/                                        # Internal AI/agent workspace context & logs
 ├── CMakeLists.txt                             # Root CMake build configuration
-├── CMakePresets.json                          # Native and cross-compilation build presets
+├── CMakePresets.json                          # Native and cross-compilation build presets; production Windows requires Vulkan
 ├── LICENSE                                    # Root MIT License
 ├── THIRD_PARTY_NOTICES.md                     # Legal notices and third-party open-source attributions
 ├── AGENTS.md                                  # Coding standards, architectural invariants & privacy rules
@@ -165,18 +167,19 @@ The `models/` directory serves as the local offline store for GGML model files a
 
 - **Local Model Files (`models/*.bin`)**: Bundled or user-provisioned GGML weights (the bundled default is
   `ggml-tiny.bin`; additional catalog models are downloaded into the per-user directory). Binary model files are
-  git-ignored.
+  git-ignored. Release packaging does not glob these files: it explicitly allows only `ggml-tiny.bin` and
+  `ggml-silero-vad.bin`, and both existing files must match their pinned SHA-256 values before packaging.
 - **Model Manifest (`models/manifest.json`)**: Declares supported models, expected SHA-256 hashes, language scope (`en`), and disk/RAM footprint bounds per ADR-007.
 
 ## Plugin Files
 
 | File                     | Responsibility                                                            |
 | ------------------------ | ------------------------------------------------------------------------- |
-| `vw_whisper_module.c`   | VLC module registration, activation/deactivation, module setup; since 14c also hosts the sender thread (SPSC drain + worker frame drain, 5/20 ms cadence), model-path discovery, and worker-scoped model-download orchestration |
+| `vw_whisper_module.c`   | VLC module registration, activation/deactivation, module setup; since 14c also hosts the sender thread (SPSC drain + worker frame drain, 5/20 ms cadence), model-path discovery, worker-scoped model-download orchestration, and final stale-session caption rejection before presentation |
 | `vw_session.c`           | Caption session state: start, pause, resume, stop, discontinuity, failure |
 | `vw_audio_capture.c`     | Receive/normalize PCM and associate monotonic media PTS                   |
 | `vw_queue.c`             | Bounded audio producer-consumer queue and overload/drop policy            |
-| `vw_worker_client.c`     | Launch worker, IPC connect, HELLO handshake, send/receive, cleanup        |
+| `vw_worker_client.c`     | Launch worker, IPC connect/HELLO, cache active source/translation settings, and turn a source seek into STOP → fresh START/session ID → translation reapply → POSITION while retaining the worker process/pipe |
 | `vw_caption_presenter.c` | VLC caption SPU rendering with OSD fallback and look-ahead scheduling; owns a separate wall-clock SPU channel for model-download progress that survives pause/seek blanking |
 | `vw_benchmark.c`        | Bounded aggregate session metrics, live PTS-to-monotonic latency samples, and unique temporary key/value report snapshots |
 | `vw_log.c`               | Opt-in privacy-safe diagnostics; disabled by default and never logs PCM/transcripts |
@@ -242,7 +245,7 @@ Payload structs are constructed at call sites with C99 designated initializers (
 
 ## Tests
 
-- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, caption timing, platform abstraction.
+- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, caption timing, platform abstraction, worker-client source seek epoch regression.
 - `tests/integration/`: worker process, pipe handshake, lifecycle/errors/cleanup.
 - `tests/e2e/`: repeatable manual test of the pinned VLC build and local English video.
 - `tests/fixtures/`: legal, small, deterministic offline input data only.
