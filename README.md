@@ -40,7 +40,7 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 ### Option 1: Standalone Installer (Recommended)
 
 1. **Download**: Grab `vlc-whisper-<version>-win64-setup.exe` from [Latest Releases](https://github.com/rzv04/vlc-whisper/releases).
-2. **Install**: Run the setup wizard. It automatically locates your 64-bit VLC installation, installs the audio filter plugin, bundles the multilingual `tiny` speech model, and regenerates VLC's plugin cache. Should your VLC folder not be automatically detected, manually select the destination folder in the wizard (should look something like `C:\Program Files\VideoLAN\VLC` ).
+2. **Install**: Run the setup wizard. It automatically locates your 64-bit VLC installation, installs the audio filter plugin, bundles the multilingual `tiny` speech model and Silero VAD model, and invalidates VLC's plugin cache so VLC rebuilds it on the next launch. Should your VLC folder not be automatically detected, manually select the destination folder in the wizard (should look something like `C:\Program Files\VideoLAN\VLC` ).
 3. **Launch & Watch**: Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video — subtitles will appear on screen automatically!
 4. Alternatively, open VLC, go to `Tools -> Preferences (Ctrl+P) -> Show settings -> All -> Audio -> Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator).
 
@@ -52,8 +52,8 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
    ```cmd
    vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
    ```
-4. Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video — subtitles will appear on screen automatically!
-5. Alternatively, open VLC, go to `Tools -> Preferences (Ctrl+P) -> Show settings -> All -> Audio -> Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator).
+4. Launch VLC with `--audio-filter=vlc_whisper`, or enable the filter under **Tools > Preferences > Show settings: All > Audio > Filters**, and play a video.
+5. The portable archive contains only the release allowlist of model assets (`ggml-tiny.bin`, `ggml-silero-vad.bin`, and `manifest.json`); locally downloaded development models are never swept into the archive.
 
 ---
 
@@ -69,7 +69,7 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 | **Validated Languages**      | **English, Romanian**                        | Fully tested end-to-end. Other languages supported by the bundled Whisper models may work but have not yet been validated by VLC-Whisper. |
 | **Subtitle Translation**     | **Opt-in (Keyless Google Translate Engine)** | 3-tier fallback (Web RPC, GTX, Mobile scrape). Off by default.                                                                            |
 
-> **Validation limits on this branch (b59214a):** Linux unit suite passes; Windows installer packaging validates GPU+CPU worker pair pre-NSIS but has not yet had a clean Windows VM smoke run; Valgrind memcheck requires `VW_FORCE_CPU=1` to suppress Vulkan loader false positives (VW-034). See `docs/issues.md` and `docs/test-strategy.md`.
+> **Validation limits on this branch:** Linux automated coverage is the primary CI gate; Windows release packaging has explicit GPU/CPU/model preflight checks but still requires the documented Windows VM smoke pass before publishing. See `docs/issues.md` and `docs/test-strategy.md`.
 
 ## Key Features
 
@@ -214,14 +214,16 @@ cd vlc-whisper
 
 ### CMake Presets Reference
 
-| Preset Name               | Target OS     | Backend                        | Output Binary                | Purpose                      |
-| :------------------------ | :------------ | :----------------------------- | :--------------------------- | :--------------------------- |
-| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker`         | Linux development & tests    |
-| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                       | `vlc-whisper-worker-cpu`     | CPU-only testing             |
-| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                | `vlc-whisper-worker-cpu`     | Test code coverage           |
-| `windows-x64-release`     | Windows x64   | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe`     | Production Windows installer |
-| `windows-x64-release-cpu` | Windows x64   | CPU-only                       | `vlc-whisper-worker-cpu.exe` | Standalone CPU release       |
-| `windows-x64-debug`       | Windows x64   | Vulkan GPU (auto CPU fallback) | `vlc-whisper-worker.exe`     | Windows debug symbols        |
+| Preset Name               | Target OS     | Backend                                      | Output Binary                | Purpose                      |
+| :------------------------ | :------------ | :------------------------------------------- | :--------------------------- | :--------------------------- |
+| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback)               | `vlc-whisper-worker`         | Linux development & tests    |
+| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                                     | `vlc-whisper-worker-cpu`     | CPU-only testing             |
+| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                              | `vlc-whisper-worker-cpu`     | Test code coverage           |
+| `windows-x64-release`     | Windows x64   | Vulkan GPU required; CPU fallback bundled    | `vlc-whisper-worker.exe`     | Production Windows installer |
+| `windows-x64-release-cpu` | Windows x64   | CPU-only                                     | `vlc-whisper-worker-cpu.exe` | Explicit CPU-only release    |
+| `windows-x64-debug`       | Windows x64   | Vulkan GPU (development may fall back to CPU)| `vlc-whisper-worker.exe`     | Windows debug symbols        |
+
+The production `windows-x64-release` preset is intentionally fail-closed: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset. For the MinGW cross-build, provide the configured `VW_VULKAN_SDK` layout when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
 
 ---
 
@@ -242,18 +244,30 @@ cmake --preset windows-x64-release-cpu
 cmake --build --preset windows-x64-release-cpu -j4
 ```
 
+A CPU-only installer removes (or schedules reboot-time removal of) any old `vlc-whisper-worker.exe` left by a previous GPU package. Runtime worker discovery therefore cannot select stale GPU code ahead of the newly installed `vlc-whisper-worker-cpu.exe`.
+
 #### 3. Building the Windows Installer (.exe & .zip)
 
+Release packaging requires the exact pinned `models/ggml-tiny.bin` and `models/ggml-silero-vad.bin`. Existing files are SHA-256 checked before they are accepted; a wrong or stale local file fails packaging instead of being bundled. Build-time downloads remain opt-in.
+
 ```bash
+# Either place the two pinned model files under models/ yourself, or allow the
+# provisioning target to fetch both once with their expected SHA-256 values.
+cmake --preset windows-x64-release -DVW_PROVISION_MODELS=ON
+cmake --build --preset windows-x64-release --target provision_models
+
 # Build the GPU release. The installer target automatically builds and stages the CPU
-# fallback in an isolated VW_WITH_VULKAN=OFF sub-build, then validates both workers.
-cmake --preset windows-x64-release
+# fallback in an isolated VW_WITH_VULKAN=OFF sub-build, then validates both workers
+# plus the exact tiny and Silero VAD hashes before invoking NSIS.
 cmake --build --preset windows-x64-release --target installer
 
 # Package the portable ZIP archive after the installer target has staged all artifacts.
+# CPack uses an explicit model allowlist; extra gitignored models in models/ are excluded.
 cpack --config build/windows-x64-release/CPackConfig.cmake
-
 ```
+
+For an offline release build, omit `-DVW_PROVISION_MODELS=ON` and place the two files manually; the same SHA-256 verification still runs before packaging.
+
 ---
 
 ### Testing & Quality Assurance
