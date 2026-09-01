@@ -737,12 +737,6 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
         vw_caption_segment_t* seg = &out->segment;
         if (vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, payload, hdr.payload_length, seg) &&
             vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, seg)) {
-          if (!client->session_active ||
-              memcmp(seg->session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0) {
-            vw_log_event(VW_LOG_LEVEL_DEBUG, "CLIENT_STALE_SEGMENT",
-                         "discarding caption from stale session before presenter dispatch");
-            break;
-          }
           // Copy segment text into owned storage so the caller's zero-heap path never aliases
           // the freed wire payload.
           uint16_t n = seg->text_bytes;
