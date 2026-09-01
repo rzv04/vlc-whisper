@@ -2,11 +2,10 @@
 
 Wired Lua extension dialog for VLC 3.0.23 that reads/writes the plugin config namespace
 and submits worker commands through the plugin’s ~2 s config bridge. Lua never waits, sleeps, polls download state,
-or performs network I/O. No translation.
-
+or performs network I/O. Translation is handled by the worker's bounded async engine (21b) via TRANSLATE_CTRL.
 ## Files
 
-- `lua/extensions/vlc_whisper_settings.lua` — the extension (descriptor `VLC-Whisper Settings`, dialog with Engine/Model/Language/Threads (CPU engine) + Detected-backend status label).
+- `lua/extensions/vlc_whisper_settings.lua` — the extension (descriptor `VLC-Whisper Settings`, dialog with Engine/Model/Language/Threads (CPU engine), diagnostic-logging checkbox, and Detected-backend status label).
 
 ## Config keys (plugin registers; Lua writes via `vlc.config.set`)
 
@@ -14,9 +13,10 @@ or performs network I/O. No translation.
 - `model-path` — relative path under `models/`, e.g. `models/ggml-tiny.bin` (bundled `tiny` is the default; an explicit user selection remains authoritative and may be absent until downloaded)
 - `whisper-language` — `"en"` (default) | `ro` | `tr` | `de` | `fr` | `es` — **no `auto`** entry in this dialog; automatic language selection is a later UI step
 - `whisper-threads` — CPU-engine thread count, integer `1..16`, default `4` (clamped on Apply)
+- `whisper-logging` — diagnostic logging enabled (`true`) or disabled (`false`, default); applies to plugin and worker diagnostics
 - `whisper-backend-active` — read-only mirror written by plugin when `STATUS` v1.3 `resolved_backend` drains (`gpu`/`cpu`); Lua reads it for the status label
 
-Language/dropdown wiring: `Apply` does `tonumber` + clamp `1..16` for threads, then `vlc.config.set` ×4 (model-path
+Language/dropdown wiring: `Apply` does `tonumber` + clamp `1..16` for threads, then `vlc.config.set` ×5 (model-path
 set to `models/<chosen>.bin` relative path) and logs `[VLC-Whisper] applied …` lines. Plugin sender-loop polls every
 ~2 s; any diff vs last-applied snapshot → `vw_plugin_respawn_worker()` (brief caption gap, then resumes on a new
 epoch). All four currently apply via respawn (live per-call for language/threads is a future optimization).
@@ -93,7 +93,7 @@ directory, including incomplete `.part` files.
 
 6. Change **Engine** to `gpu` on a machine without Vulkan, click **Apply**. After restart the **Detected backend** label reads `cpu` (worker resolved `VW_HAVE_VULKAN` → `cpu`; `STATUS` `resolved_backend` mirrored into `whisper-backend-active`).
 
-7. Close and re-open the dialog — it re-reads `whisper-backend`, `model-path`, `whisper-language`, `whisper-threads` and shows the last applied values.
+7. Close and re-open the dialog — it re-reads `whisper-backend`, `model-path`, `whisper-language`, `whisper-threads`, and `whisper-logging`, showing the last applied values.
 
 ## Linux manual test
 
@@ -122,10 +122,8 @@ Selection allowed even if file absent; `E_MODEL_MISSING` disables captions until
 
 - No `auto` language option (automatic language selection is a later UI step).
 - No second settings dialog; model download actions remain in this single Lua extension.
-- No translation (21b).
+- Translation is available via worker's opt-in 3-tier engine (21b); this dialog triggers translation via TRANSLATE_CTRL after session start.
 - Settings do NOT persist across VLC restart unless VLC exits cleanly (`vlcrc` save happens on clean exit).
-
-## Syntax check
 
 ```sh
 luac -p lua/extensions/vlc_whisper_settings.lua && echo "syntax OK"

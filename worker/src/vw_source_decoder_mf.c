@@ -19,23 +19,47 @@ struct vw_source_decoder {
   int64_t duration_us;
   int64_t current_pts_us;
   bool eof_reached;
-  int16_t leftover_buffer[4096];
+  int16_t* leftover_buffer;
+  size_t leftover_capacity;
   size_t leftover_count;
+  bool com_initialized;
 };
 
 // URL decode helper to convert file URI (e.g. file:///C:/video%20file.mp4) to native Windows path.
+// Preserves UNC authority: file://server/share/video.mp4 -> \\server\share\video.mp4
 static void vw_source_decoder_normalize_win32_path(const char* url, char* out_path, size_t max_out) {
   if (!url || !out_path || max_out == 0) return;
   const char* src = url;
+  bool is_unc = false;
 
-  // Strip file:/// or file://
+  // Strip file:/// (local) vs file:// (UNC authority). file:///C:/... is local,
+  // file://server/share/... is UNC and must retain leading \\.
   if (strncmp(src, "file:///", 8) == 0) {
     src += 8;
   } else if (strncmp(src, "file://", 7) == 0) {
     src += 7;
+    // Any file:// not followed by third slash carries an authority component.
+    // Treat non-empty authority that is not "localhost" as UNC.
+    if (src[0] != '\0' && src[0] != '/') {
+      // file://localhost/C:/... should be treated as local
+      if (strncmp(src, "localhost/", 10) == 0) {
+        src += 10;
+      } else {
+        is_unc = true;
+      }
+    }
   }
 
   size_t dst_idx = 0;
+  if (is_unc) {
+    if (max_out < 3) {
+      out_path[0] = '\0';
+      return;
+    }
+    out_path[0] = '\\';
+    out_path[1] = '\\';
+    dst_idx = 2;
+  }
   while (*src && dst_idx + 1 < max_out) {
     if (*src == '%' && src[1] && src[2]) {
       char hex[3] = {src[1], src[2], '\0'};
@@ -47,7 +71,6 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
         continue;
       }
     }
-    // Convert forward slash to backslash if drive letter follows
     if (*src == '/') {
       out_path[dst_idx++] = '\\';
     } else {
@@ -61,14 +84,34 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
 vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_info_t* info) {
   if (!url || url[0] == '\0') return NULL;
 
+  // Media Foundation requires COM to be initialized on the calling thread.
+  // Use MULTITHREADED apartment suitable for worker threads; balance every
+  // successful CoInitializeEx with CoUninitialize on the decoder's lifetime.
+  // RPC_E_CHANGED_MODE means an incompatible apartment is already active — MF cannot be used safely, fail closed.
+  HRESULT co_hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+  if (co_hr == RPC_E_CHANGED_MODE) {
+    return NULL;
+  }
+  if (FAILED(co_hr)) {
+    return NULL;
+  }
+  bool com_initialized = (co_hr == S_OK || co_hr == S_FALSE);
+  bool need_com_uninit_on_fail = com_initialized;
+
   char clean_path[4096];
   vw_source_decoder_normalize_win32_path(url, clean_path, sizeof(clean_path));
 
   int wlen = MultiByteToWideChar(CP_UTF8, 0, clean_path, -1, NULL, 0);
-  if (wlen <= 0) return NULL;
+  if (wlen <= 0) {
+    if (need_com_uninit_on_fail) CoUninitialize();
+    return NULL;
+  }
 
   wchar_t* wpath = (wchar_t*)malloc((size_t)wlen * sizeof(wchar_t));
-  if (!wpath) return NULL;
+  if (!wpath) {
+    if (need_com_uninit_on_fail) CoUninitialize();
+    return NULL;
+  }
   MultiByteToWideChar(CP_UTF8, 0, clean_path, -1, wpath, wlen);
 
   IMFSourceReader* pReader = NULL;
@@ -76,6 +119,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   free(wpath);
 
   if (FAILED(hr) || !pReader) {
+    if (need_com_uninit_on_fail) CoUninitialize();
     return NULL;
   }
 
@@ -84,6 +128,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   hr = pReader->lpVtbl->SetStreamSelection(pReader, (DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
   if (FAILED(hr)) {
     pReader->lpVtbl->Release(pReader);
+    if (need_com_uninit_on_fail) CoUninitialize();
     return NULL;
   }
 
@@ -92,6 +137,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   hr = MFCreateMediaType(&pPartialType);
   if (FAILED(hr) || !pPartialType) {
     pReader->lpVtbl->Release(pReader);
+    if (need_com_uninit_on_fail) CoUninitialize();
     return NULL;
   }
 
@@ -106,17 +152,20 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
 
   if (FAILED(hr)) {
     pReader->lpVtbl->Release(pReader);
+    if (need_com_uninit_on_fail) CoUninitialize();
     return NULL;
   }
 
   vw_source_decoder_t* decoder = (vw_source_decoder_t*)calloc(1, sizeof(vw_source_decoder_t));
   if (!decoder) {
     pReader->lpVtbl->Release(pReader);
+    if (need_com_uninit_on_fail) CoUninitialize();
     return NULL;
   }
 
   decoder->p_reader = pReader;
   decoder->duration_us = -1;
+  decoder->com_initialized = com_initialized;
 
   // Retrieve media duration if available
   PROPVARIANT var;
@@ -124,7 +173,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   if (SUCCEEDED(pReader->lpVtbl->GetPresentationAttribute(pReader, (DWORD)MF_SOURCE_READER_MEDIASOURCE, &MF_PD_DURATION,
                                                           &var)) &&
       var.vt == VT_UI8) {
-    decoder->duration_us = (int64_t)(var.uhVal.QuadPart / 10);  // 100ns to µs
+    decoder->duration_us = (int64_t)(var.uhVal.QuadPart / 10);  // 100ns to us
   }
   PropVariantClear(&var);
 
@@ -229,8 +278,32 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
           decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
 
           size_t remainder = samples_in_sample - needed;
-          if (remainder > sizeof(decoder->leftover_buffer) / sizeof(int16_t)) {
-            remainder = sizeof(decoder->leftover_buffer) / sizeof(int16_t);
+          if (remainder > decoder->leftover_capacity) {
+            size_t new_capacity = decoder->leftover_capacity > 0 ? decoder->leftover_capacity : 4096;
+            while (new_capacity < remainder) {
+              if (new_capacity > SIZE_MAX / 2) {
+                new_capacity = remainder;
+                break;
+              }
+              new_capacity *= 2;
+            }
+            if (new_capacity > SIZE_MAX / sizeof(int16_t)) {
+              pBuffer->lpVtbl->Unlock(pBuffer);
+              pBuffer->lpVtbl->Release(pBuffer);
+              pSample->lpVtbl->Release(pSample);
+              decoder->eof_reached = true;
+              break;
+            }
+            int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
+            if (!new_buffer) {
+              pBuffer->lpVtbl->Unlock(pBuffer);
+              pBuffer->lpVtbl->Release(pBuffer);
+              pSample->lpVtbl->Release(pSample);
+              decoder->eof_reached = true;
+              break;
+            }
+            decoder->leftover_buffer = new_buffer;
+            decoder->leftover_capacity = new_capacity;
           }
           memcpy(decoder->leftover_buffer, in_samples + needed, remainder * sizeof(int16_t));
           decoder->leftover_count = remainder;
@@ -255,7 +328,10 @@ void vw_source_decoder_close(vw_source_decoder_t* decoder) {
       decoder->p_reader->lpVtbl->Release(decoder->p_reader);
       decoder->p_reader = NULL;
     }
+    bool do_uninit = decoder->com_initialized;
+    free(decoder->leftover_buffer);
     free(decoder);
+    if (do_uninit) CoUninitialize();
   }
 }
 

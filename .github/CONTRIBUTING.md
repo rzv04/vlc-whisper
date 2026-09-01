@@ -15,6 +15,8 @@ Thank you for contributing to VLC-Whisper! Please review the following guideline
 7. **Discontinuity Handling**: Seeking, rate changes, or media swaps clear captions and end the caption session gracefully without affecting VLC media playback.
 8. **Header Documentation**: Every non-third-party function in `.h` header files must have a concise (20–30 words) doc comment explaining its behavior and any realtime constraints.
 
+9. **Versioning**: VLC-Whisper follows Semantic Versioning. During the 0.x phase, patch releases contain fixes and small non-breaking changes; minor releases may introduce new features or behavior changes. Public releases are tagged as vMAJOR.MINOR.PATCH.
+
 ---
 
 ## Verification Checklist

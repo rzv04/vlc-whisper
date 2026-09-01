@@ -114,8 +114,7 @@ static bool vw_segment_builder_enqueue(vw_segment_builder_t* builder, const char
 // enqueue (or in-place replace), so history never retains a phrase that was not actually output.
 static void vw_segment_builder_commit_history(vw_segment_builder_t* builder, const char* text, int64_t start,
                                               int64_t end) {
-  size_t len = strlen(text);
-  size_t copy_len = len < VW_SEGMENT_BUILDER_MAX_TEXT_BYTES ? len : (VW_SEGMENT_BUILDER_MAX_TEXT_BYTES - 1);
+  size_t copy_len = vw_utf8_safe_len(text, VW_SEGMENT_BUILDER_MAX_TEXT_BYTES - 1U);
   size_t h_slot = builder->history_head;
   builder->history[h_slot].start_pts_us = start;
   builder->history[h_slot].end_pts_us = end;

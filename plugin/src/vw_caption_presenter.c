@@ -288,11 +288,27 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     return false;
   }
 
+  char combined_text[VW_PRESENTER_MAX_TEXT_BYTES * 2 + 8];
+  const char* text_to_render = segment->text_utf8;
+
+  if (segment->translated_text_utf8 && segment->translated_text_bytes > 0 && segment->translated_text_utf8[0] != '\0') {
+    int mode = 1;  // default: dual-line (source on top, translated on bottom)
+    if (presenter->p_filter_ctx) {
+      mode = var_InheritInteger((vlc_object_t*)presenter->p_filter_ctx, "whisper-translate-mode");
+    }
+    if (mode == 0) {
+      text_to_render = segment->translated_text_utf8;
+    } else {
+      snprintf(combined_text, sizeof(combined_text), "%s\n%s", segment->text_utf8, segment->translated_text_utf8);
+      text_to_render = combined_text;
+    }
+  }
+
   float rate = vw_caption_presenter_get_rate(presenter);
 
   if (!presenter->p_filter_ctx) {
     // Standalone unit test mode without live VLC object hierarchy
-    return vw_caption_presenter_display(NULL, segment->text_utf8, duration_us);
+    return vw_caption_presenter_display(NULL, text_to_render, duration_us);
   }
 
   filter_t* p_filter = (filter_t*)presenter->p_filter_ctx;
@@ -341,21 +357,21 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     }
     start_tick = vw_saturating_add_i64(now_tick, lead_us);
     stop_tick = vw_saturating_add_i64(start_tick, dur_wallclock_us);
-    rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, segment->text_utf8,
-                                               SUBPICTURE_ALIGN_BOTTOM, 20, start_tick, stop_tick, !media_timeline);
+    rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, text_to_render, SUBPICTURE_ALIGN_BOTTOM,
+                                               20, start_tick, stop_tick, !media_timeline);
   }
 
   // Graceful fallback to OSD if SPU rendering failed or was unregistered
   if (!rendered) {
-    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)dur_wallclock_us, segment->text_utf8);
+    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, (vlc_tick_t)dur_wallclock_us, text_to_render);
     rendered = true;
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_OSD_RENDER",
                  "Rendered caption via OSD fallback (text_len=%zu duration=%lldus)",
-                 segment->text_utf8 ? strlen(segment->text_utf8) : 0, (long long)dur_wallclock_us);
+                 text_to_render ? strlen(text_to_render) : 0, (long long)dur_wallclock_us);
   } else {
     vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_SPU_RENDER",
                  "Rendered caption on SPU ch=%d vout=%p (text_len=%zu start=%lldus stop=%lldus)",
-                 presenter->spu_channel_id, (void*)vout, segment->text_utf8 ? strlen(segment->text_utf8) : 0,
+                 presenter->spu_channel_id, (void*)vout, text_to_render ? strlen(text_to_render) : 0,
                  (long long)start_tick, (long long)stop_tick);
   }
 
@@ -372,7 +388,10 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   float rate = vw_caption_presenter_get_rate(presenter);
   int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
 
-  // If a preceding cue was buffered, dispatch it now with duration clipped to the incoming segment's start PTS
+  // If a preceding cue was buffered, dispatch it now with duration clipped to the incoming segment's start PTS,
+  // but never below the one-second readability floor. Use the existing presenter timing model (rate-scaled floor)
+  // rather than speculative overlap: if the successor starts <1s after the pending start, extend (allow overlap)
+  // to preserve the floor instead of creating an unreadable flash.
   if (presenter->has_pending) {
     int64_t raw_duration_us = presenter->pending_segment.end_pts_us - presenter->pending_segment.start_pts_us;
     int64_t target_dur_us = (raw_duration_us <= 0)                   ? 2000000LL
@@ -380,15 +399,22 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
                                                                      : raw_duration_us;
     int64_t target_end_us = presenter->pending_segment.start_pts_us + target_dur_us;
 
-    // Clip target_end_us to incoming segment start if incoming cue starts after pending cue's start
-    int64_t clipped_end_us =
-        (segment->start_pts_us > presenter->pending_segment.start_pts_us && target_end_us > segment->start_pts_us)
-            ? segment->start_pts_us
-            : target_end_us;
+    int64_t clipped_end_us = target_end_us;
+    if (segment->start_pts_us > presenter->pending_segment.start_pts_us && target_end_us > segment->start_pts_us) {
+      int64_t gap_us = segment->start_pts_us - presenter->pending_segment.start_pts_us;
+      // Only clip when the gap preserves the floor; otherwise keep floor (overlap is preferable to flash).
+      if (gap_us >= min_media_floor_us) {
+        clipped_end_us = segment->start_pts_us;
+      } else {
+        clipped_end_us = presenter->pending_segment.start_pts_us + min_media_floor_us;
+      }
+    }
     int64_t duration_us = clipped_end_us - presenter->pending_segment.start_pts_us;
     if (duration_us <= 0) {
       duration_us = (raw_duration_us > 0) ? raw_duration_us : 2000000LL;
+      if (duration_us < min_media_floor_us) duration_us = min_media_floor_us;
     }
+    if (duration_us < min_media_floor_us) duration_us = min_media_floor_us;
 
     vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us,
                                          media_timeline);
@@ -398,10 +424,27 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   // Buffer incoming segment as pending so its display duration can be clipped by any successor cue
   presenter->has_pending = true;
   presenter->pending_segment = *segment;
-  strncpy(presenter->pending_text, segment->text_utf8, sizeof(presenter->pending_text) - 1);
-  presenter->pending_text[sizeof(presenter->pending_text) - 1] = '\0';
+  size_t raw_len = segment->text_bytes ? segment->text_bytes : strlen(segment->text_utf8);
+  size_t max_src = raw_len < VW_MAX_TEXT_BYTES ? raw_len : VW_MAX_TEXT_BYTES;
+  size_t text_bytes = vw_utf8_safe_len(segment->text_utf8, max_src);
+  memcpy(presenter->pending_text, segment->text_utf8, text_bytes);
+  presenter->pending_text[text_bytes] = '\0';
   presenter->pending_segment.text_utf8 = presenter->pending_text;
-  presenter->pending_segment.text_bytes = (uint16_t)strlen(presenter->pending_text);
+  presenter->pending_segment.text_bytes = (uint16_t)text_bytes;
+
+  if (segment->translated_text_utf8 && segment->translated_text_bytes > 0) {
+    size_t trans_raw = segment->translated_text_bytes;
+    size_t max_trans = trans_raw < VW_MAX_TEXT_BYTES ? trans_raw : VW_MAX_TEXT_BYTES;
+    size_t translated_bytes = vw_utf8_safe_len(segment->translated_text_utf8, max_trans);
+    memcpy(presenter->pending_translated_text, segment->translated_text_utf8, translated_bytes);
+    presenter->pending_translated_text[translated_bytes] = '\0';
+    presenter->pending_segment.translated_text_utf8 = presenter->pending_translated_text;
+    presenter->pending_segment.translated_text_bytes = (uint16_t)translated_bytes;
+  } else {
+    presenter->pending_translated_text[0] = '\0';
+    presenter->pending_segment.translated_text_utf8 = NULL;
+    presenter->pending_segment.translated_text_bytes = 0;
+  }
 
   return true;
 }

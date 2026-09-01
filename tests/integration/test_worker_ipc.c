@@ -26,7 +26,7 @@ int main(void) {
   // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
   strncpy(config.pipe_name, "\\\\.\\pipe\\test_ipc_socket", sizeof(config.pipe_name) - 1);
 #else
-  strncpy(config.pipe_name, "test_ipc_socket", sizeof(config.pipe_name) - 1);
+  snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-ipc-%ld.sock", (long)getpid());
 #endif
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 
@@ -97,13 +97,13 @@ int main(void) {
   EXPECT(vw_protocol_decode_payload(VW_MSG_ERROR, rpayload, reply_hdr.payload_length, &dec));
   EXPECT(dec.error.error_code == E_AUDIO_FORMAT);
 
-  // Send a valid SHUTDOWN message
+  // Send a valid SHUTDOWN message after HELLO (sequence 1) and START (sequence 2).
   vw_frame_header_t hdr;
   hdr.magic = VW_PROTOCOL_MAGIC;
   hdr.major = VW_PROTOCOL_VERSION_MAJOR;
   hdr.type = VW_MSG_SHUTDOWN;
   hdr.payload_length = 0;
-  hdr.sequence = 1;
+  hdr.sequence = 3;
 
   uint8_t hdr_buf[20];
   EXPECT(vw_protocol_encode_header(&hdr, hdr_buf, 20));

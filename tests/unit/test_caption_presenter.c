@@ -24,6 +24,7 @@
 #undef vlc_list_children
 #undef vlc_list_release
 #undef var_Get
+#undef var_Inherit
 
 // Globals for tracking mock calls
 static int g_flush_calls = 0;
@@ -146,6 +147,16 @@ int var_Get(vlc_object_t* p_obj, const char* psz_name, vlc_value_t* p_val) {
   (void)psz_name;
   if (p_val) {
     p_val->f_float = g_mock_rate;
+  }
+  return VLC_SUCCESS;
+}
+
+int var_Inherit(vlc_object_t* p_obj, const char* psz_name, int i_type, vlc_value_t* p_val) {
+  (void)p_obj;
+  (void)psz_name;
+  (void)i_type;
+  if (p_val) {
+    p_val->i_int = 1;  // default dual-line
   }
   return VLC_SUCCESS;
 }
@@ -396,7 +407,7 @@ int main(void) {
   assert(g_last_subpic_b_ephemer == true);
   assert(g_last_subpic_b_subtitle == false);
 
-  // Test 16: Adjacent cue clipping preventing SPU presentation interval overlap
+  // Test 16: Adjacent cue floor policy preserves readability, allowing a short overlap.
   vw_caption_segment_t cueA = {.start_pts_us = 10000000LL,  // 10.0s
                                .end_pts_us = 10200000LL,    // 10.2s (200ms raw)
                                .text_utf8 = (char*)"Yeah.",
@@ -417,7 +428,7 @@ int main(void) {
   int64_t cueA_start = g_last_subpic_start;
   int64_t cueA_stop = g_last_subpic_stop;
   assert(cueA_start == 100000000LL);
-  assert(cueA_stop == 100000000LL + 600000LL);  // Clipped to 10.6s (600ms duration)
+  assert(cueA_stop == 100000000LL + 1000000LL);  // Keep the one-second floor; overlap cueB when necessary.
   assert(g_last_subpic_b_ephemer == true);
   assert(g_last_subpic_b_subtitle == false);
 
@@ -430,8 +441,8 @@ int main(void) {
   assert(g_last_subpic_b_ephemer == true);
   assert(g_last_subpic_b_subtitle == false);
 
-  // Verify zero overlap between cueA stop and cueB start
-  assert(cueA_stop == cueB_start);
+  // The documented floor takes precedence over clipping when cues begin less than one second apart.
+  assert(cueA_stop > cueB_start);
 
   // Test 17: Minimum display floor under variable playback rates (guarantees >= 1.0s wall clock)
   // At 2.0x rate: 200ms raw acoustic duration -> clamped to 2.0s media floor -> 1.0s wall-clock duration
@@ -529,11 +540,26 @@ int main(void) {
   assert(spu_presenter.model_progress_channel_id == -1);
   assert(spu_presenter.model_progress_channel_registered == false);
 
+  // Test 22: Dual-line translated subtitle rendering
+  vw_caption_segment_t trans_cue = {.start_pts_us = 600000000LL,
+                                    .end_pts_us = 602000000LL,
+                                    .text_utf8 = (char*)"Hello world",
+                                    .text_bytes = 11,
+                                    .translated_text_utf8 = (char*)"Salut lume",
+                                    .translated_text_bytes = 10,
+                                    .is_final = true};
+  g_mock_mdate = 600000000LL;
+  g_put_subpicture_calls = 0;
+  assert(vw_caption_presenter_show_segment(&spu_presenter, &trans_cue, 600000000LL, true));
+  assert(vw_caption_presenter_flush(&spu_presenter, 600000000LL, true));
+  assert(g_put_subpicture_calls == 1);
+  assert(strcmp(g_last_subpic_text, "Hello world\nSalut lume") == 0);
+
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (21/21 tests)\n");
+  printf("test_caption_presenter PASSED (22/22 tests)\n");
   return 0;
 }

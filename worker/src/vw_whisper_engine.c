@@ -6,16 +6,90 @@
 
 #include "ggml-backend.h"
 #include "vw_log.h"
+#include "vw_platform.h"
 #include "whisper.h"
+
+#ifdef _WIN32
+#include <windows.h>
+typedef struct {
+  FILE* file;
+} vw_whisper_file_loader_t;
+
+static size_t vw_whisper_file_read(void* context, void* output, size_t read_size) {
+  vw_whisper_file_loader_t* loader = (vw_whisper_file_loader_t*)context;
+  return loader && loader->file ? fread(output, 1, read_size, loader->file) : 0;
+}
+
+static bool vw_whisper_file_eof(void* context) {
+  vw_whisper_file_loader_t* loader = (vw_whisper_file_loader_t*)context;
+  return !loader || !loader->file || feof(loader->file) != 0;
+}
+
+static void vw_whisper_file_close(void* context) {
+  vw_whisper_file_loader_t* loader = (vw_whisper_file_loader_t*)context;
+  if (!loader) return;
+  if (loader->file) fclose(loader->file);
+  free(loader);
+}
+
+static struct whisper_context* vw_whisper_init_utf8_path(const char* model_path, struct whisper_context_params params) {
+  int wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model_path, -1, NULL, 0);
+  if (wide_length <= 0) return NULL;
+  wchar_t* wide_path = (wchar_t*)calloc((size_t)wide_length, sizeof(wchar_t));
+  if (!wide_path) return NULL;
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model_path, -1, wide_path, wide_length) <= 0) {
+    free(wide_path);
+    return NULL;
+  }
+  vw_whisper_file_loader_t* context = (vw_whisper_file_loader_t*)calloc(1, sizeof(*context));
+  if (context) context->file = _wfopen(wide_path, L"rb");
+  free(wide_path);
+  if (!context || !context->file) {
+    free(context);
+    return NULL;
+  }
+  struct whisper_model_loader loader = {context, vw_whisper_file_read, vw_whisper_file_eof, vw_whisper_file_close};
+  return whisper_init_with_params(&loader, params);
+}
+#endif
+
+static void vw_whisper_log_callback(enum ggml_log_level level, const char* text, void* user_data) {
+  (void)user_data;
+  vw_log_level_t mapped;
+  switch (level) {
+    case GGML_LOG_LEVEL_ERROR:
+      mapped = VW_LOG_LEVEL_ERROR;
+      break;
+    case GGML_LOG_LEVEL_WARN:
+      mapped = VW_LOG_LEVEL_WARN;
+      break;
+    case GGML_LOG_LEVEL_INFO:
+    case GGML_LOG_LEVEL_CONT:
+      mapped = VW_LOG_LEVEL_INFO;
+      break;
+    case GGML_LOG_LEVEL_DEBUG:
+      mapped = VW_LOG_LEVEL_DEBUG;
+      break;
+    default:
+      return;
+  }
+  vw_log_event(mapped, "WHISPER", "%s", text ? text : "");
+}
 
 vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device) {
   if (!model_path || model_path[0] == '\0') return NULL;
 
+  whisper_log_set(vw_whisper_log_callback, NULL);
   struct whisper_context_params cparams = whisper_context_default_params();
   cparams.use_gpu = (backend != VW_WORKER_BACKEND_CPU);
   // Clamps negative gpu_device to 0 (CLI rejects <0, this guards direct API callers).
   cparams.gpu_device = (gpu_device >= 0) ? gpu_device : 0;
-  struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
+  struct whisper_context* ctx;
+#ifdef _WIN32
+  ctx = vw_whisper_init_utf8_path(model_path, cparams);
+#else
+  ctx = whisper_init_from_file_with_params(model_path, cparams);
+#endif
   if (!ctx) {
     return NULL;
   }
@@ -24,6 +98,8 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   // CPU while still returning a valid context). Re-derive that decision so STATUS can report the
   // backend actually used instead of the one requested. Must run AFTER whisper init: backend
   // registration happens during library init, so a pre-init probe would see no devices.
+  // Additionally verify the device can actually be initialized (not just enumerated), so a
+  // present but unloadable Vulkan driver correctly reports CPU fallback.
   bool gpu_active = false;
   if (cparams.use_gpu) {
     int remaining = cparams.gpu_device;
@@ -32,7 +108,15 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
       enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
       if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
         if (remaining == 0) {
-          gpu_active = true;
+          // Verify backend can actually be initialized; enumeration alone can be stale
+          // (e.g., Vulkan present but loader/driver missing at runtime).
+          ggml_backend_t be = ggml_backend_dev_init(dev, NULL);
+          if (be) {
+            ggml_backend_free(be);
+            gpu_active = true;
+          } else {
+            gpu_active = false;
+          }
           break;
         }
         remaining--;
@@ -43,7 +127,6 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
                cparams.use_gpu ? (gpu_active ? "inference backend: gpu"
                                              : "inference backend: gpu REQUESTED but no usable device; running cpu")
                                : "inference backend: cpu");
-
   vw_whisper_engine_t* eng = (vw_whisper_engine_t*)calloc(1, sizeof(vw_whisper_engine_t));
   if (!eng) {
     whisper_free(ctx);
@@ -83,6 +166,7 @@ bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* lan
   if (!engine || !language || language[0] == '\0') return false;
   if (strcmp(language, "auto") == 0) return false;
   if (strlen(language) >= sizeof(engine->language)) return false;
+  if (whisper_lang_id(language) < 0) return false;
   snprintf(engine->language, sizeof(engine->language), "%s", language);
   return true;
 }
@@ -134,7 +218,17 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   wparams.print_progress = false;
   wparams.print_realtime = false;
   wparams.print_timestamps = false;
-  if (whisper_full(engine->ctx, wparams, pcm32, (int)sample_count) != 0) {
+  int64_t inference_started_us = vw_platform_get_monotonic_time_us();
+  int inference_result = whisper_full(engine->ctx, wparams, pcm32, (int)sample_count);
+  int64_t inference_elapsed_us = vw_platform_get_monotonic_time_us() - inference_started_us;
+  if (inference_elapsed_us < 0) inference_elapsed_us = 0;
+  engine->last_inference_us = (uint64_t)inference_elapsed_us;
+  if (UINT64_MAX - engine->total_inference_us < (uint64_t)inference_elapsed_us) {
+    engine->total_inference_us = UINT64_MAX;
+  } else {
+    engine->total_inference_us += (uint64_t)inference_elapsed_us;
+  }
+  if (inference_result != 0) {
     return false;
   }
 
@@ -176,6 +270,10 @@ int vw_whisper_engine_get_segment_count(const vw_whisper_engine_t* engine) {
     return 0;
   }
   return whisper_full_n_segments(engine->ctx);
+}
+
+uint64_t vw_whisper_engine_get_total_inference_us(const vw_whisper_engine_t* engine) {
+  return engine ? engine->total_inference_us : 0;
 }
 
 bool vw_whisper_engine_get_segment(const vw_whisper_engine_t* engine, int index, vw_whisper_segment_t* out_seg) {

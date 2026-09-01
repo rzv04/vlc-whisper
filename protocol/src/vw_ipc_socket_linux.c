@@ -1,4 +1,7 @@
 #if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+#if defined(__linux__)
+#define _GNU_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <poll.h>
@@ -6,36 +9,51 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/types.h>
+#endif
 
 #include "vw_ipc_transport.h"
 
 vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
+  if (!endpoint_name || endpoint_name[0] == '\0') return NULL;
+  // Reject overlong endpoint names that cannot fit sun_path without truncation.
+  // Truncation would bind a truncated path while unlink uses the original, causing
+  // connection/cleanup mismatch. sun_path capacity is sizeof(addr.sun_path); a
+  // name that needs truncation (len >= sizeof) must fail closed.
+  if (strlen(endpoint_name) >= sizeof(((struct sockaddr_un*)0)->sun_path)) return NULL;
   int server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
   if (server_fd < 0) return NULL;
 
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, endpoint_name, sizeof(addr.sun_path) - 1);
-
-  // Unlink the socket file if it already exists to avoid bind errors
-  unlink(endpoint_name);
+  // Safe after length check: fits with NUL terminator.
+  memcpy(addr.sun_path, endpoint_name, strlen(endpoint_name) + 1);
 
   if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     close(server_fd);
     return NULL;
   }
+  if (chmod(endpoint_name, S_IRUSR | S_IWUSR) != 0) {
+    unlink(endpoint_name);
+    close(server_fd);
+    return NULL;
+  }
 
   if (listen(server_fd, 1) < 0) {
+    unlink(endpoint_name);
     close(server_fd);
     return NULL;
   }
 
   struct pollfd pfd = {.fd = server_fd, .events = POLLIN};
   if (poll(&pfd, 1, 10000) <= 0) {
+    unlink(endpoint_name);
     close(server_fd);
     return NULL;
   }
@@ -43,8 +61,22 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
   int client_fd = accept(server_fd, NULL, NULL);
   close(server_fd);  // We only accept one connection
   if (client_fd < 0) {
+    unlink(endpoint_name);
     return NULL;
   }
+
+#if defined(__linux__)
+  struct ucred peer;
+  socklen_t peer_size = sizeof(peer);
+  if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &peer, &peer_size) != 0 || peer.uid != geteuid()) {
+    close(client_fd);
+    unlink(endpoint_name);
+    return NULL;
+  }
+#endif
+  // The pathname is no longer needed once the connection is accepted. Removing it
+  // prevents stale endpoint reuse while keeping this handle independent of filesystem state.
+  unlink(endpoint_name);
 
   struct timeval tv;
   tv.tv_sec = 3;
@@ -63,13 +95,15 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
 }
 
 vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
+  if (!endpoint_name || endpoint_name[0] == '\0') return NULL;
+  if (strlen(endpoint_name) >= sizeof(((struct sockaddr_un*)0)->sun_path)) return NULL;
   int client_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
   if (client_fd < 0) return NULL;
 
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, endpoint_name, sizeof(addr.sun_path) - 1);
+  memcpy(addr.sun_path, endpoint_name, strlen(endpoint_name) + 1);
 
   if (connect(client_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     close(client_fd);

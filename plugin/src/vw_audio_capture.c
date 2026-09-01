@@ -13,45 +13,43 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
     return false;
   }
 
-  // Calculate total output frames needed at 16kHz with fractional sample remainder accumulation
-  uint64_t total_samples_acc = ((uint64_t)input->frame_count * VW_AUDIO_TARGET_RATE) + cap->sample_remainder;
-  size_t output_frames = (size_t)(total_samples_acc / input->sample_rate);
-  cap->sample_remainder = (uint32_t)(total_samples_acc % input->sample_rate);
-
-  if (output_frames == 0) {
-    return true;  // Nothing to generate
+  uint32_t target_rate = cap->target_sample_rate ? cap->target_sample_rate : VW_AUDIO_TARGET_RATE;
+  if (target_rate == 0) {
+    return false;
   }
 
+  // Callback-side reset requested by sender (discontinuity/seek). No cross-thread field writes.
+  if (cap->reset_pending && atomic_load(cap->reset_pending)) {
+    cap->resample_acc = 0;
+    cap->sample_remainder = 0;
+    cap->total_input_frames = 0;
+    cap->resample_source_rate = 0;
+    cap->last_pts_us = 0;
+    atomic_store(cap->reset_pending, false);
+  }
+
+  // A source-rate change starts a new rational conversion phase.
+  if (cap->resample_source_rate != input->sample_rate) {
+    cap->resample_source_rate = input->sample_rate;
+    cap->resample_acc = input->sample_rate > target_rate ? input->sample_rate - target_rate : 0;
+  }
+
+  uint64_t acc = cap->resample_acc;
   const size_t max_out_frames_per_chunk = VW_AUDIO_CHUNK_MAX_PCM_BYTES / sizeof(int16_t);
-  size_t output_frames_generated = 0;
+  size_t total_emitted = 0;
   int64_t current_pts_us = input->pts_us;
 
-  while (output_frames_generated < output_frames) {
-    size_t chunk_frames = output_frames - output_frames_generated;
-    if (chunk_frames > max_out_frames_per_chunk) {
-      chunk_frames = max_out_frames_per_chunk;
-    }
+  vw_audio_chunk_t chunk = {0};
+  chunk.start_pts_us = current_pts_us;
+  chunk.sample_rate = target_rate;
+  chunk.channels = 1;
+  int16_t* out_pcm = (int16_t*)chunk.pcm_data;
+  size_t chunk_frames = 0;
 
-    vw_audio_chunk_t chunk = {0};
-    chunk.start_pts_us = current_pts_us;
-    // Derive duration from the byte count so the worker's strict validation holds exactly:
-    // vw_protocol_validate_payload requires pcm_bytes == trunc(duration_us * 32 / 1000).
-    // duration_us = bytes * 1000 / 32 = bytes * 31.25 must be rounded UP, otherwise odd byte
-    // counts (odd frame counts) truncate to 2f-1 and fail validation by one byte.
-    chunk.duration_us = ((int64_t)chunk_frames * 125 + 1) / 2;  // ceil(frames * 62.5)
-    chunk.sample_rate = VW_AUDIO_TARGET_RATE;
-    chunk.channels = 1;
-    chunk.bytes = (uint32_t)(chunk_frames * sizeof(int16_t));
-
-    int16_t* out_pcm = (int16_t*)chunk.pcm_data;
-
-    // Resample / downmix input block into 16kHz Mono int16_t chunk
-    for (size_t i = 0; i < chunk_frames; i++) {
-      // Linear mapping of target index i back into input sample index
-      size_t in_idx = (size_t)(((double)(output_frames_generated + i) * input->sample_rate) / VW_AUDIO_TARGET_RATE);
-      if (in_idx >= input->frame_count) {
-        in_idx = input->frame_count - 1;
-      }
+  for (size_t in_idx = 0; in_idx < input->frame_count; ++in_idx) {
+    acc += target_rate;
+    while (acc >= input->sample_rate) {
+      acc -= input->sample_rate;
 
       int32_t sum = 0;
       for (uint32_t ch = 0; ch < input->channels; ch++) {
@@ -72,18 +70,34 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
       int32_t mono_sample = sum / (int32_t)input->channels;
       if (mono_sample > 32767) mono_sample = 32767;
       if (mono_sample < -32768) mono_sample = -32768;
-      out_pcm[i] = (int16_t)mono_sample;
+      out_pcm[chunk_frames++] = (int16_t)mono_sample;
+      total_emitted++;
+
+      if (chunk_frames == max_out_frames_per_chunk) {
+        chunk.bytes = (uint32_t)(chunk_frames * sizeof(int16_t));
+        chunk.duration_us = ((int64_t)chunk_frames * 1000000LL + target_rate - 1) / target_rate;
+        vw_spsc_queue_push(cap->queue, &chunk);
+        current_pts_us += chunk.duration_us;
+        chunk.start_pts_us = current_pts_us;
+        chunk.sample_rate = target_rate;
+        chunk.channels = 1;
+        chunk_frames = 0;
+      }
     }
+  }
 
-    // Enqueue chunk into SPSC ring buffer (non-blocking push)
+  if (chunk_frames > 0) {
+    chunk.bytes = (uint32_t)(chunk_frames * sizeof(int16_t));
+    chunk.duration_us = ((int64_t)chunk_frames * 1000000LL + target_rate - 1) / target_rate;
     vw_spsc_queue_push(cap->queue, &chunk);
-
-    output_frames_generated += chunk_frames;
     current_pts_us += chunk.duration_us;
   }
 
+  cap->resample_acc = (uint32_t)acc;
+  cap->sample_remainder = (uint32_t)acc;
+  cap->total_input_frames += input->frame_count;
   cap->last_pts_us = current_pts_us;
-  cap->total_samples_processed += output_frames;
+  cap->total_samples_processed += total_emitted;
 
   return true;
 }

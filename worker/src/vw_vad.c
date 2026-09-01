@@ -1,6 +1,57 @@
 #include "vw_vad.h"
 
-#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#include <stdio.h>
+#include <windows.h>
+
+typedef struct {
+  FILE* file;
+} vw_vad_file_loader_t;
+
+static size_t vw_vad_file_read(void* context, void* output, size_t read_size) {
+  vw_vad_file_loader_t* loader = (vw_vad_file_loader_t*)context;
+  return loader && loader->file ? fread(output, 1, read_size, loader->file) : 0;
+}
+
+static bool vw_vad_file_eof(void* context) {
+  vw_vad_file_loader_t* loader = (vw_vad_file_loader_t*)context;
+  return !loader || !loader->file || feof(loader->file) != 0;
+}
+
+static void vw_vad_file_close(void* context) {
+  vw_vad_file_loader_t* loader = (vw_vad_file_loader_t*)context;
+  if (!loader) return;
+  if (loader->file) fclose(loader->file);
+  free(loader);
+}
+
+static struct whisper_vad_context* vw_vad_init_utf8_path(const char* path_model,
+                                                         struct whisper_vad_context_params params) {
+  int wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_model, -1, NULL, 0);
+  if (wide_length <= 0) return NULL;
+  wchar_t* wide_path = (wchar_t*)calloc((size_t)wide_length, sizeof(wchar_t));
+  if (!wide_path) return NULL;
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_model, -1, wide_path, wide_length) <= 0) {
+    free(wide_path);
+    return NULL;
+  }
+  vw_vad_file_loader_t* context = (vw_vad_file_loader_t*)calloc(1, sizeof(*context));
+  if (context) context->file = _wfopen(wide_path, L"rb");
+  free(wide_path);
+  if (!context || !context->file) {
+    free(context);
+    return NULL;
+  }
+  struct whisper_model_loader loader = {context, vw_vad_file_read, vw_vad_file_eof, vw_vad_file_close};
+  struct whisper_vad_context* vad = whisper_vad_init_with_params(&loader, params);
+  // The VAD loader API consumes synchronously but does not invoke close().
+  vw_vad_file_close(context);
+  return vad;
+}
+#endif
 
 struct whisper_vad_context* vw_vad_init_default(const char* path_model) {
   if (path_model == NULL || path_model[0] == '\0') {
@@ -8,7 +59,16 @@ struct whisper_vad_context* vw_vad_init_default(const char* path_model) {
   }
 
   struct whisper_vad_context_params vad_params = whisper_vad_default_context_params();
-  struct whisper_vad_context* vctx = whisper_vad_init_from_file_with_params(path_model, vad_params);
+  const char* force_cpu = getenv("VW_FORCE_CPU");
+  if (force_cpu && strcmp(force_cpu, "1") == 0) {
+    vad_params.use_gpu = false;
+  }
+  struct whisper_vad_context* vctx;
+#ifdef _WIN32
+  vctx = vw_vad_init_utf8_path(path_model, vad_params);
+#else
+  vctx = whisper_vad_init_from_file_with_params(path_model, vad_params);
+#endif
   if (vctx != NULL) {
     whisper_vad_reset_state(vctx);
   }

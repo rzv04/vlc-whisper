@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(vlc_whisper VERSION 0.3.0 LANGUAGES C CXX)
+project(vlc_whisper VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -10,6 +10,11 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # Option to toggle building unit/integration tests
 option(BUILD_TESTING "Build unit and integration tests" ON)
+
+if(NOT WIN32)
+    find_program(VW_CURL_EXECUTABLE NAMES curl REQUIRED)
+    add_compile_definitions(VW_CURL_EXECUTABLE="${VW_CURL_EXECUTABLE}")
+endif()
 
 # Option to enable code coverage instrumentation
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
@@ -37,10 +42,24 @@ add_subdirectory(plugin)
 
 # Automated unit & integration tests
 if(BUILD_TESTING)
-    set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=all")
+    find_program(VALGRIND_PROGRAM valgrind)
+    if(VALGRIND_PROGRAM)
+        set(MEMORYCHECK_COMMAND "${VALGRIND_PROGRAM}" CACHE FILEPATH "Valgrind command" FORCE)
+        set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=definite --error-exitcode=1 --errors-for-leak-kinds=definite --suppressions=${CMAKE_SOURCE_DIR}/cmake/valgrind.supp" CACHE STRING "" FORCE)
+        set(MEMORYCHECK_SUPPRESSIONS_FILE "${CMAKE_SOURCE_DIR}/cmake/valgrind.supp" CACHE FILEPATH "" FORCE)
+    endif()
     include(CTest)
     enable_testing()
     add_subdirectory(tests)
+
+
+    if(VALGRIND_PROGRAM)
+        add_custom_target(vw_memcheck_gate
+            COMMAND ${CMAKE_COMMAND}
+                    -DCTEST_BUILD_DIR=${CMAKE_BINARY_DIR}
+                    -P ${CMAKE_SOURCE_DIR}/cmake/vw_memcheck_gate.cmake
+            USES_TERMINAL)
+    endif()
 endif()
 
 # Separate sample snippet targets (marked EXCLUDE_FROM_ALL)

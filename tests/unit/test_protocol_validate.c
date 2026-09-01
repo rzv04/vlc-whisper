@@ -141,6 +141,47 @@ int main(void) {
   seg.text_bytes = 4;
   EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
 
+  seg.translation_attempted = true;
+  seg.translation_latency_us = 800000;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+  seg.translation_attempted = false;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+  seg.translation_attempted = true;
+  seg.translation_latency_us = 100000;
+  seg.translation_tier = 4;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+  seg.translation_tier = 0;
+
+  // Translated text validation tests
+  seg.translated_text_bytes = 4;
+  seg.translated_text_utf8 = (char*)"    ";  // whitespace only translated text
+  seg.translation_tier = 1;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+
+  seg.translated_text_utf8 = (char*)"hola";
+  EXPECT(vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+
+  seg.translated_text_bytes = 0;
+  seg.translated_text_utf8 = (char*)"hola";  // non-null pointer with 0 bytes
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+
+  seg.translated_text_utf8 = NULL;
+  seg.translation_tier = 1;  // tier without translated bytes
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, &seg));
+  seg.translation_tier = 0;
+
+  vw_msg_translate_ctrl_t translate = {.enabled = 1, .mode = 1};
+  strcpy(translate.source_lang, "auto");
+  strcpy(translate.target_lang, "ro");
+  EXPECT(vw_protocol_validate_payload(VW_MSG_TRANSLATE_CTRL, &translate));
+  strcpy(translate.source_lang, "pt-BR");
+  EXPECT(vw_protocol_validate_payload(VW_MSG_TRANSLATE_CTRL, &translate));
+  strcpy(translate.source_lang, "en&tl=de");
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_TRANSLATE_CTRL, &translate));
+  strcpy(translate.source_lang, "en");
+  strcpy(translate.target_lang, "auto");
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_TRANSLATE_CTRL, &translate));
+
   // POSITION validation
   vw_msg_position_t pos = {.current_pts_us = 1000000LL, .input_time_us = 1000000LL, .playback_rate = 1.0f, .flags = 0};
   EXPECT(vw_protocol_validate_payload(VW_MSG_POSITION, &pos));

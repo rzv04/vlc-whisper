@@ -29,17 +29,36 @@ int64_t vw_platform_get_time_us(void) {
 }
 
 int64_t vw_platform_get_monotonic_time_us(void) {
-  static LARGE_INTEGER freq = {0};
-  if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
+  static volatile LONGLONG frequency = 0;
+  LONGLONG freq = InterlockedCompareExchange64(&frequency, 0, 0);
+  if (freq <= 0) {
+    LARGE_INTEGER discovered;
+    if (!QueryPerformanceFrequency(&discovered) || discovered.QuadPart <= 0) return -1;
+    LONGLONG previous = InterlockedCompareExchange64(&frequency, discovered.QuadPart, 0);
+    freq = previous > 0 ? previous : discovered.QuadPart;
+  }
   LARGE_INTEGER counter;
-  QueryPerformanceCounter(&counter);
-  LONGLONG sec = counter.QuadPart / freq.QuadPart;
-  LONGLONG rem = counter.QuadPart % freq.QuadPart;
-  return sec * 1000000LL + (rem * 1000000LL) / freq.QuadPart;
+  if (!QueryPerformanceCounter(&counter)) return -1;
+  LONGLONG sec = counter.QuadPart / freq;
+  LONGLONG rem = counter.QuadPart % freq;
+  return sec * 1000000LL + (rem * 1000000LL) / freq;
 }
 
 bool vw_platform_spawn_process(const char* executable_path, const char* const argv[], vw_process_t* out_process) {
   if (!executable_path || !argv) return false;
+#ifdef _WIN32
+  // Windows: require an absolute trusted path — bare names would resolve via CWD/PATH hijack.
+  bool is_absolute = false;
+  if (executable_path[0] == '\\' && executable_path[1] == '\\')
+    is_absolute = true;  // UNC
+  else if (executable_path[0] == '/' || executable_path[0] == '\\')
+    is_absolute = true;
+  else if (((executable_path[0] >= 'A' && executable_path[0] <= 'Z') ||
+            (executable_path[0] >= 'a' && executable_path[0] <= 'z')) &&
+           executable_path[1] == ':' && (executable_path[2] == '\\' || executable_path[2] == '/'))
+    is_absolute = true;
+  if (!is_absolute) return false;
+#endif
 
   size_t cmd_len = strlen(executable_path) * 2 + 10;
   for (size_t i = 1; argv[i] != NULL; i++) cmd_len += strlen(argv[i]) * 2 + 10;
@@ -79,15 +98,31 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
     cmd[pos++] = '"';
   }
   cmd[pos] = '\0';
-
+  int wapp_len = MultiByteToWideChar(CP_UTF8, 0, executable_path, -1, NULL, 0);
+  wchar_t* wapp = NULL;
+  if (wapp_len > 0) {
+    wapp = (wchar_t*)malloc((size_t)wapp_len * sizeof(wchar_t));
+    if (wapp) {
+      if (MultiByteToWideChar(CP_UTF8, 0, executable_path, -1, wapp, wapp_len) <= 0) {
+        free(wapp);
+        wapp = NULL;
+      }
+    }
+  }
+  if (!wapp) {
+    free(cmd);
+    return false;
+  }
   int wlen = MultiByteToWideChar(CP_UTF8, 0, cmd, -1, NULL, 0);
   if (wlen <= 0) {
     free(cmd);
+    free(wapp);
     return false;
   }
   wchar_t* wcmd = (wchar_t*)malloc((size_t)wlen * sizeof(wchar_t));
   if (!wcmd) {
     free(cmd);
+    free(wapp);
     return false;
   }
   MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wcmd, wlen);
@@ -99,12 +134,19 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   six.StartupInfo.cb = sizeof(six);
   ZeroMemory(&pi, sizeof(pi));
 
+  // The worker is a console executable, but it is an implementation detail of the VLC filter.
+  // Keep both console-subsystem and GUI-subsystem builds out of the user's taskbar/window list.
+  bool hide_worker_window = strstr(executable_path, "vlc-whisper-worker") != NULL;
+  if (hide_worker_window) {
+    six.StartupInfo.dwFlags |= STARTF_USESHOWWINDOW;
+    six.StartupInfo.wShowWindow = SW_HIDE;
+  }
+
   HANDLE hLog = INVALID_HANDLE_VALUE;
   HANDLE hStdin = INVALID_HANDLE_VALUE;
   LPPROC_THREAD_ATTRIBUTE_LIST attr_list = NULL;
   BOOL inherit = FALSE;
-  DWORD creation_flags = CREATE_NO_WINDOW;
-
+  DWORD creation_flags = hide_worker_window ? CREATE_NO_WINDOW : 0;
   if (strstr(executable_path, "vlc-whisper-worker") != NULL) {
     char tmp_dir[MAX_PATH];
     if (GetTempPathA(MAX_PATH, tmp_dir) > 0) {
@@ -141,7 +183,7 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
     }
   }
 
-  BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, inherit, creation_flags, NULL, NULL, &six.StartupInfo, &pi);
+  BOOL success = CreateProcessW(wapp, wcmd, NULL, NULL, inherit, creation_flags, NULL, NULL, &six.StartupInfo, &pi);
 
   if (attr_list) {
     if (six.lpAttributeList) DeleteProcThreadAttributeList(attr_list);
@@ -149,8 +191,8 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   }
   if (hStdin != INVALID_HANDLE_VALUE) CloseHandle(hStdin);
   if (hLog != INVALID_HANDLE_VALUE) CloseHandle(hLog);
+  free(wapp);
   free(wcmd);
-
   if (!success) return false;
 
   CloseHandle(pi.hThread);

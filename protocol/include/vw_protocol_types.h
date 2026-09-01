@@ -10,7 +10,7 @@
 //   Offset  4: uint16_t major           = protocol major version
 //   Offset  6: uint16_t type            = vw_message_type_t (determines payload struct)
 //   Offset  8: uint32_t payload_length  = byte count of payload that follows
-//   Offset 12: uint64_t sequence        = monotonic per-session counter
+//   Offset 12: uint64_t sequence        = strictly increasing per transport direction
 //   Offset 20: uint8_t payload[payload_length]  ← serialized vw_msg_xxx_t fields
 //
 // header.type selects which struct serializes/deserializes the payload bytes.
@@ -23,10 +23,10 @@
 
 #define VW_PROTOCOL_MAGIC 0x564C4357U  // 'VLCW'
 #define VW_PROTOCOL_VERSION_MAJOR 1U
-#define VW_PROTOCOL_VERSION_MINOR 4U
-#define VW_CLIENT_VERSION "1.4.0"
+#define VW_PROTOCOL_VERSION_MINOR 6U
+#define VW_CLIENT_VERSION "1.6.0"
 #define VW_CLIENT_VERSION_LENGTH 5U
-#define VW_WORKER_VERSION "1.4.0"
+#define VW_WORKER_VERSION "1.6.0"
 #define VW_WORKER_VERSION_LENGTH 5U
 #define VW_MAX_PAYLOAD_BYTES (1048576U)  // 1 MB max frame payload
 #define VW_MAX_ERROR_MSG_BYTES 256U      // Safe error message & version string limit
@@ -44,11 +44,13 @@
 #define VW_PATH_MAX_BYTES 4096U
 #endif
 
-// Capability flags (bitfield)
+// Capability flags (bitfield). Optional minor-version features MUST be gated by a capability before a newer peer sends
+// their message types to an older same-major peer.
 #define VW_CAPABILITY_PCM_S16LE_16K_MONO (1U << 0)
 #define VW_CAPABILITY_PARTIAL_SEGMENTS (1U << 1)
 #define VW_CAPABILITY_SEEK_RESET (1U << 2)
 #define VW_CAPABILITY_SOURCE_MODE (1U << 3)
+#define VW_CAPABILITY_TRANSLATION (1U << 4)
 
 // Source kind enum
 typedef enum vw_source_kind { VW_SOURCE_LIVE_AUDIO = 0, VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
@@ -81,11 +83,12 @@ typedef enum vw_message_type {
   VW_MSG_CAPTION_SEGMENT = 8,
   VW_MSG_STATUS = 9,
   VW_MSG_ERROR = 10,
-  VW_MSG_SHUTDOWN = 11,       // zero-payload: instruct worker to exit
-  VW_MSG_STARTED = 12,        // worker confirms session started; carries uint8_t source_active
-  VW_MSG_POSITION = 13,       // plugin sends media playback position and pacing updates
-  VW_MSG_MODEL_CTRL = 14,     // plugin requests model download or abort by catalog id
-  VW_MSG_MODEL_PROGRESS = 15  // worker reports model download progress and stage
+  VW_MSG_SHUTDOWN = 11,        // zero-payload: instruct worker to exit
+  VW_MSG_STARTED = 12,         // worker confirms session ID and source activation state
+  VW_MSG_POSITION = 13,        // plugin sends media playback position and pacing updates
+  VW_MSG_MODEL_CTRL = 14,      // plugin requests model download or abort by catalog id
+  VW_MSG_MODEL_PROGRESS = 15,  // worker reports model download progress and stage
+  VW_MSG_TRANSLATE_CTRL = 16   // plugin configures real-time subtitle translation parameters (capability-gated)
 } vw_message_type_t;
 
 typedef struct vw_frame_header {
@@ -93,7 +96,7 @@ typedef struct vw_frame_header {
   uint16_t major;           // VW_PROTOCOL_VERSION_MAJOR
   uint16_t type;            // vw_message_type_t, default to 2 bytes instead of enum 4
   uint32_t payload_length;  // payload byte count
-  uint64_t sequence;        // monotonic sequence counter per session
+  uint64_t sequence;        // strictly increasing per transport direction
 } vw_frame_header_t;
 #pragma pack(pop)
 
@@ -135,6 +138,7 @@ typedef struct vw_msg_start {
 } vw_msg_start_t;
 
 typedef struct vw_msg_started {
+  vw_session_id_t session_id;
   uint8_t source_active;  // 1 if source file lookahead mode active; 0 if live streaming mode
 } vw_msg_started_t;
 
@@ -142,7 +146,7 @@ typedef struct vw_msg_started {
 #define VW_SOURCE_ACTIVE_INACTIVE 0U
 #define VW_SOURCE_ACTIVE_ACTIVE 1U
 
-#define VW_MSG_STARTED_PAYLOAD_BYTES 1U
+#define VW_MSG_STARTED_PAYLOAD_BYTES (VW_SESSION_ID_BYTES + 1U)
 
 // Position update flags (bitfield)
 #define VW_POSITION_FLAG_SEEK (1U << 0)
@@ -222,6 +226,19 @@ typedef struct vw_msg_model_progress {
   char model_id[32];
 } vw_msg_model_progress_t;
 
+// VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES defines the exact wire size of fixed-field translation control frames.
+#define VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES 50U
+
+// Plugin-to-worker translation configuration update specifying enabled state, source/target languages, and display
+// mode.
+typedef struct vw_msg_translate_ctrl {
+  vw_session_id_t session_id;
+  uint8_t enabled;
+  char source_lang[16];
+  char target_lang[16];
+  uint8_t mode;  // 0: translation only, 1: dual line (source + translation)
+} vw_msg_translate_ctrl_t;
+
 typedef struct vw_msg_error {
   vw_session_id_t session_id;
   uint32_t error_code;
@@ -229,7 +246,7 @@ typedef struct vw_msg_error {
   char message[VW_MAX_ERROR_MSG_BYTES];
 } vw_msg_error_t;
 
-// Segment structure containing start/end timestamps and text
+// Segment structure containing start/end timestamps, transcribed text, and optional translated subtitle payload.
 typedef struct vw_caption_segment {  // worker to plugin
   vw_session_id_t session_id;
   uint64_t segment_id;
@@ -238,6 +255,11 @@ typedef struct vw_caption_segment {  // worker to plugin
   bool is_final;
   char* text_utf8;
   uint16_t text_bytes;
+  char* translated_text_utf8;
+  uint16_t translated_text_bytes;
+  bool translation_attempted;
+  uint32_t translation_latency_us;
+  uint8_t translation_tier;
 } vw_caption_segment_t;
 
 // Wire size of vw_caption_segment_t's fixed fields (session 16 + id 8 + start 8 + end 8 + is_final 1 + text_bytes 2),

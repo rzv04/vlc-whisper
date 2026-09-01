@@ -116,6 +116,7 @@ Comprehensive parameters block passed to `whisper_full()`. Return default via `w
 | `prompt_n_tokens` | `int` | `0` | Number of prompt tokens |
 | `language` | `const char*` | `"auto"` | Language code or `"auto"` for detection |
 | `detect_language` | `bool` | `false` | Auto-detect language |
+
 | `suppress_blank` | `bool` | `true` | Suppress blank tokens |
 | `suppress_nst` | `bool` | `true` | Suppress non-speech tokens |
 | `temperature` | `float` | `0.0` | Initial decoding temperature |
@@ -140,6 +141,9 @@ Comprehensive parameters block passed to `whisper_full()`. Return default via `w
 | `vad` | `bool` | `false` | Enable built-in VAD |
 | `vad_model_path` | `const char*` | `NULL` | Path to VAD model |
 | `vad_params` | `struct` | — | VAD parameters |
+
+VLC-Whisper requires a concrete supported language at worker startup: `vw_worker_config` rejects `auto`, and
+`vw_whisper_engine_set_language` validates the code with `whisper_lang_id()` before the session becomes available.
 
 ### `struct whisper_vad_params`
 

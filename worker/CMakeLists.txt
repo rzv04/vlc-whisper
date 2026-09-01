@@ -15,14 +15,15 @@ if(WIN32)
     set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 endif()
 
-# GPU whisper (Vulkan) acceleration — roadmap step 17a, default ON. When the Vulkan SDK (with
-# glslc) is present, ggml-vulkan is enabled and the exe links the Vulkan loader at link time
-# (imports vulkan-1.dll/libvulkan.so at runtime; the CPU fallback only runs when the loader is
-# present). VW_WITH_VULKAN=OFF builds a fully portable CPU-only worker (output name -cpu) for
-# loader-less/old targets. Build-memory note: compiling ggml-vulkan shaders (glslc +
-# vulkan-shaders-gen ExternalProject) is RAM-hungry — on 8GB hosts keep build parallelism modest
-# (ninja -j2/-j4) to avoid OOM/swap thrash (see milestone3 postmortem).
+# GPU whisper (Vulkan) acceleration — roadmap step 17a, default ON. Development builds may
+# transparently degrade to CPU when the Vulkan SDK is unavailable. Official GPU release presets
+# set VW_REQUIRE_VULKAN=ON so a missing SDK/glslc is a configuration error instead of silently
+# producing a CPU-only artifact under the canonical release preset name.
 option(VW_WITH_VULKAN "worker: build whisper.cpp with ggml-vulkan GPU backend" ON)
+option(VW_REQUIRE_VULKAN "worker: fail configure when Vulkan was requested but cannot be enabled" OFF)
+if(VW_REQUIRE_VULKAN AND NOT VW_WITH_VULKAN)
+    message(FATAL_ERROR "VW_REQUIRE_VULKAN=ON requires VW_WITH_VULKAN=ON")
+endif()
 
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 if(VW_WITH_VULKAN)
@@ -36,12 +37,15 @@ if(VW_WITH_VULKAN)
         set(Vulkan_INCLUDE_DIR "$ENV{VW_VULKAN_SDK}/mingw/include" CACHE PATH "" FORCE)
         message(STATUS "VW: using Vulkan SDK root '$ENV{VW_VULKAN_SDK}' for cross find path")
     endif()
-    # Probe for the SDK + glslc (same COMPONENTS ggml-vulkan will require). Non-required here so a
-    # missing SDK degrades to a CPU-only build with a warning instead of a hard configure failure.
+    # Probe for the SDK + glslc (same COMPONENTS ggml-vulkan will require).
     find_package(Vulkan COMPONENTS glslc)
     if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
         message(STATUS "VW: Vulkan SDK found — enabling ggml-vulkan GPU backend")
         set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    elseif(VW_REQUIRE_VULKAN)
+        message(FATAL_ERROR
+            "VW: Vulkan GPU build is required for this preset, but Vulkan SDK/glslc was not found. "
+            "Provide VW_VULKAN_SDK (for MinGW cross builds) or use an explicit *-cpu preset.")
     else()
         message(WARNING "VW: VW_WITH_VULKAN=ON but no Vulkan SDK/glslc found — building CPU-only worker")
     endif()
@@ -87,6 +91,8 @@ add_executable(vlc-whisper-worker
     src/vw_worker_queue.c
     src/vw_sha256.c
     src/vw_model_download.c
+    src/vw_translate.c
+    src/vw_translate_async.c
     ${VW_SOURCE_DECODER_SRCS}
     ../plugin/src/vw_platform_linux.c
     ../plugin/src/vw_platform_win32.c
@@ -127,8 +133,9 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 )
 
 if(WIN32)
-    # Windows Media Foundation and BCrypt libraries
-    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp)
+    # Windows Media Foundation, Crypto, and ACL/SID APIs plus WinHTTP model/translation transport.
+    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp advapi32
+                                                       shell32)
 endif()
 
 if(OpenMP_CXX_FOUND AND NOT WIN32)

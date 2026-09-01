@@ -180,6 +180,7 @@ worker/third_party/vlc*/
 .obsidian/
 
 .copilot/
+copilot/
 
 .trash/
 
@@ -201,3 +202,7 @@ graphify-out/
 # Packaging artifacts
 _CPack_Packages/
 *.zip
+
+# Local spikes / scratch files not for commit
+samples/snippets/*.as
+samples/snippets/*.png
