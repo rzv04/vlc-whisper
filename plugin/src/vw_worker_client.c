@@ -66,6 +66,8 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
   }
 }
 
+static bool send_control_frame(vw_worker_client_t* client, vw_message_type_t type, uint16_t reason);
+
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
@@ -346,6 +348,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
         client->worker_source_active = false;
       }
       client->session_active = true;
+      snprintf(client->active_model_id, sizeof(client->active_model_id), "%s", start.model_id);
+      snprintf(client->active_source_url, sizeof(client->active_source_url), "%s", start.source_url);
       return true;
     } else if (resp_hdr.type == VW_MSG_ERROR) {
       if (resp_hdr.payload_length > 0) {
@@ -403,10 +407,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   return false;
 }
 
-bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
-                                    float playback_rate, uint32_t flags) {
-  if (!client || !client->pipe_handle || !client->session_active) return false;
-
+static bool vw_worker_client_send_position_frame(vw_worker_client_t* client, int64_t current_pts_us,
+                                                 int64_t input_time_us, float playback_rate, uint32_t flags) {
   vw_msg_position_t pos = {.current_pts_us = current_pts_us,
                            .input_time_us = input_time_us,
                            .playback_rate = playback_rate > 0.0f ? playback_rate : 1.0f,
@@ -431,6 +433,53 @@ bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_
     return false;
   }
   return true;
+}
+
+bool vw_worker_client_send_position(vw_worker_client_t* client, int64_t current_pts_us, int64_t input_time_us,
+                                    float playback_rate, uint32_t flags) {
+  if (!client || !client->pipe_handle || !client->session_active) return false;
+
+  if ((flags & VW_POSITION_FLAG_SEEK) != 0 && client->worker_source_active && client->active_source_url[0] != '\0') {
+    char model_id[VW_MAX_MODEL_ID_BYTES];
+    char source_url[VW_MAX_SOURCE_URL_BYTES];
+    snprintf(model_id, sizeof(model_id), "%s", client->active_model_id);
+    snprintf(source_url, sizeof(source_url), "%s", client->active_source_url);
+
+    bool translation_configured = client->translation_configured;
+    bool translate_enabled = client->translate_enabled;
+    char translate_source_lang[sizeof(client->translate_source_lang)];
+    char translate_target_lang[sizeof(client->translate_target_lang)];
+    snprintf(translate_source_lang, sizeof(translate_source_lang), "%s", client->translate_source_lang);
+    snprintf(translate_target_lang, sizeof(translate_target_lang), "%s", client->translate_target_lang);
+    uint8_t translate_mode = client->translate_mode;
+
+    if (!send_control_frame(client, VW_MSG_STOP_SESSION, VW_CTRL_REASON_SEEK_DISCONTINUITY)) return false;
+    client->session_active = false;
+    client->worker_source_active = false;
+
+    if (!vw_worker_client_start_session(client, current_pts_us, model_id[0] ? model_id : NULL, source_url)) {
+      return false;
+    }
+    if (!client->worker_source_active) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_SOURCE_EPOCH",
+                   "source seek restart did not re-enter source mode; dropping transport for supervisor recovery");
+      vw_worker_client_drop_transport(client);
+      return false;
+    }
+
+    if (translation_configured && (client->worker_capabilities & VW_CAPABILITY_TRANSLATION) != 0 &&
+        !vw_worker_client_send_translate_ctrl(client, translate_enabled, translate_source_lang, translate_target_lang,
+                                              translate_mode)) {
+      return false;
+    }
+
+    vw_log_event(VW_LOG_LEVEL_DEBUG, "CLIENT_SOURCE_EPOCH",
+                 "source seek restarted caption epoch at %lldus before pacing update", (long long)current_pts_us);
+    return vw_worker_client_send_position_frame(client, current_pts_us, input_time_us, playback_rate,
+                                                flags & ~VW_POSITION_FLAG_SEEK);
+  }
+
+  return vw_worker_client_send_position_frame(client, current_pts_us, input_time_us, playback_rate, flags);
 }
 
 bool vw_worker_client_send_audio(vw_worker_client_t* client, const vw_audio_chunk_t* chunk) {
@@ -503,6 +552,15 @@ bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabl
   if ((client->worker_capabilities & VW_CAPABILITY_TRANSLATION) == 0) {
     // Same-major older workers remain usable when translation is disabled. Enabling an unsupported optional feature
     // fails locally without sending an unknown message that would desynchronize/terminate the older worker.
+    if (!enabled) {
+      client->translation_configured = true;
+      client->translate_enabled = false;
+      snprintf(client->translate_source_lang, sizeof(client->translate_source_lang), "%s",
+               source_lang ? source_lang : "auto");
+      snprintf(client->translate_target_lang, sizeof(client->translate_target_lang), "%s",
+               target_lang ? target_lang : "en");
+      client->translate_mode = mode;
+    }
     return !enabled;
   }
   vw_msg_translate_ctrl_t ctrl;
@@ -517,7 +575,6 @@ bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabl
   size_t payload_len = 0;
   if (!vw_protocol_encode_payload(VW_MSG_TRANSLATE_CTRL, &ctrl, payload_buf, sizeof(payload_buf), &payload_len))
     return false;
-
   vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
                            .major = VW_PROTOCOL_VERSION_MAJOR,
                            .type = VW_MSG_TRANSLATE_CTRL,
@@ -530,6 +587,11 @@ bool vw_worker_client_send_translate_ctrl(vw_worker_client_t* client, bool enabl
     vw_worker_client_drop_transport(client);
     return false;
   }
+  client->translation_configured = true;
+  client->translate_enabled = enabled;
+  snprintf(client->translate_source_lang, sizeof(client->translate_source_lang), "%s", ctrl.source_lang);
+  snprintf(client->translate_target_lang, sizeof(client->translate_target_lang), "%s", ctrl.target_lang);
+  client->translate_mode = mode;
   return true;
 }
 
@@ -675,6 +737,12 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
         vw_caption_segment_t* seg = &out->segment;
         if (vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, payload, hdr.payload_length, seg) &&
             vw_protocol_validate_payload(VW_MSG_CAPTION_SEGMENT, seg)) {
+          if (!client->session_active ||
+              memcmp(seg->session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0) {
+            vw_log_event(VW_LOG_LEVEL_DEBUG, "CLIENT_STALE_SEGMENT",
+                         "discarding caption from stale session before presenter dispatch");
+            break;
+          }
           // Copy segment text into owned storage so the caller's zero-heap path never aliases
           // the freed wire payload.
           uint16_t n = seg->text_bytes;
