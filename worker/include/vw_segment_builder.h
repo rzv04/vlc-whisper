@@ -11,10 +11,12 @@
 #define VW_SEGMENT_HISTORY_CAPACITY 16          // 16 committed caption segments in deduplication history
 #define VW_SEGMENT_BUILDER_MAX_TEXT_BYTES 1024  // 1 KB max text length
 #define VW_AUDIO_SAMPLE_RATE 16000              // 16kHz sample rate
-#define VW_HOP_DURATION_US 2000000              // 2s hop length for segmenting audio
-#define VW_WINDOW_DURATION_US 8000000           // 8s max window length
-#define VW_WINDOW_SAMPLES 128000                // 8s window sample count (128,000 samples at 16kHz)
-#define VW_HOP_SAMPLES 32000                    // 2s hop sample count (32,000 samples at 16kHz)
+#define VW_LIVE_STARTUP_DURATION_US 2000000     // 2s live PCM before the first progressive inference
+#define VW_HOP_DURATION_US 1000000              // 1s steady-state live inference hop
+#define VW_WINDOW_DURATION_US 8000000           // 8s max live analysis window length
+#define VW_LIVE_STARTUP_SAMPLES 32000           // 2s startup sample count (32,000 samples at 16kHz)
+#define VW_WINDOW_SAMPLES 128000                // 8s max window sample count (128,000 samples at 16kHz)
+#define VW_HOP_SAMPLES 16000                    // 1s hop sample count (16,000 samples at 16kHz)
 #define VW_DEDUP_TIME_TOLERANCE_US 500000LL     // 500ms timestamp tolerance for hop deduplication
 
 // Record of a previously committed phrase retained for sliding-window deduplication across hops.
