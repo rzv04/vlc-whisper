@@ -837,8 +837,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
                           if (seg_info.no_speech_prob >= 0.60f) {
                             continue;
                           }
-                          if (growing_live_window &&
-                              seg_info.t1_us > read_duration_us - VW_LIVE_EDGE_HOLDBACK_US) {
+                          if (growing_live_window && seg_info.t1_us > read_duration_us - VW_LIVE_EDGE_HOLDBACK_US) {
                             vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
                                          "holding progressive trailing segment end=%lldus frontier=%lldus",
                                          (long long)seg_info.t1_us, (long long)read_duration_us);
@@ -867,8 +866,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
               }
 
               live_next_inference_samples = VW_WINDOW_SAMPLES;
-              size_t drain_samples =
-                  live_progressive_mode ? VW_LIVE_HOP_SAMPLES : VW_LOCAL_FALLBACK_HOP_SAMPLES;
+              size_t drain_samples = live_progressive_mode ? VW_LIVE_HOP_SAMPLES : VW_LOCAL_FALLBACK_HOP_SAMPLES;
               vw_audio_buffer_drain(audio_buf, drain_samples);
             }
           }
