@@ -25,6 +25,16 @@ int main(void) {
   legacy.worker_capabilities |= VW_CAPABILITY_TRANSLATION;
   assert((legacy.worker_capabilities & VW_CAPABILITY_TRANSLATION) != 0);
 
+  // Oversized source URLs are rejected before any transport write. The deliberately invalid handle proves the
+  // validation cannot silently truncate and continue into IPC.
+  vw_worker_client_t bounded;
+  memset(&bounded, 0, sizeof(bounded));
+  bounded.pipe_handle = (void*)(uintptr_t)1;
+  char oversized_url[VW_MAX_SOURCE_URL_BYTES + 1U];
+  memset(oversized_url, 'x', sizeof(oversized_url));
+  oversized_url[sizeof(oversized_url) - 1U] = '\0';
+  assert(!vw_worker_client_start_session(&bounded, 0, "tiny", oversized_url));
+
   printf("test_worker_client_compat PASSED.\n");
   return 0;
 }

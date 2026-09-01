@@ -9,6 +9,50 @@
 #include "vw_platform.h"
 #include "whisper.h"
 
+#ifdef _WIN32
+#include <windows.h>
+typedef struct {
+  FILE* file;
+} vw_whisper_file_loader_t;
+
+static size_t vw_whisper_file_read(void* context, void* output, size_t read_size) {
+  vw_whisper_file_loader_t* loader = (vw_whisper_file_loader_t*)context;
+  return loader && loader->file ? fread(output, 1, read_size, loader->file) : 0;
+}
+
+static bool vw_whisper_file_eof(void* context) {
+  vw_whisper_file_loader_t* loader = (vw_whisper_file_loader_t*)context;
+  return !loader || !loader->file || feof(loader->file) != 0;
+}
+
+static void vw_whisper_file_close(void* context) {
+  vw_whisper_file_loader_t* loader = (vw_whisper_file_loader_t*)context;
+  if (!loader) return;
+  if (loader->file) fclose(loader->file);
+  free(loader);
+}
+
+static struct whisper_context* vw_whisper_init_utf8_path(const char* model_path, struct whisper_context_params params) {
+  int wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model_path, -1, NULL, 0);
+  if (wide_length <= 0) return NULL;
+  wchar_t* wide_path = (wchar_t*)calloc((size_t)wide_length, sizeof(wchar_t));
+  if (!wide_path) return NULL;
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model_path, -1, wide_path, wide_length) <= 0) {
+    free(wide_path);
+    return NULL;
+  }
+  vw_whisper_file_loader_t* context = (vw_whisper_file_loader_t*)calloc(1, sizeof(*context));
+  if (context) context->file = _wfopen(wide_path, L"rb");
+  free(wide_path);
+  if (!context || !context->file) {
+    free(context);
+    return NULL;
+  }
+  struct whisper_model_loader loader = {context, vw_whisper_file_read, vw_whisper_file_eof, vw_whisper_file_close};
+  return whisper_init_with_params(&loader, params);
+}
+#endif
+
 static void vw_whisper_log_callback(enum ggml_log_level level, const char* text, void* user_data) {
   (void)user_data;
   vw_log_level_t mapped;
@@ -40,7 +84,12 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
   cparams.use_gpu = (backend != VW_WORKER_BACKEND_CPU);
   // Clamps negative gpu_device to 0 (CLI rejects <0, this guards direct API callers).
   cparams.gpu_device = (gpu_device >= 0) ? gpu_device : 0;
-  struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
+  struct whisper_context* ctx;
+#ifdef _WIN32
+  ctx = vw_whisper_init_utf8_path(model_path, cparams);
+#else
+  ctx = whisper_init_from_file_with_params(model_path, cparams);
+#endif
   if (!ctx) {
     return NULL;
   }

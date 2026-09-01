@@ -261,7 +261,7 @@ cmake --build --preset windows-x64-release --target provision_models
 # plus the exact tiny and Silero VAD hashes before invoking NSIS.
 cmake --build --preset windows-x64-release --target installer
 
-# Package the portable ZIP archive after the installer target has staged all artifacts.
+# Package the portable ZIP archive; the package target builds the CPU fallback dependency.
 # CPack uses an explicit model allowlist; extra gitignored models in models/ are excluded.
 cpack --config build/windows-x64-release/CPackConfig.cmake
 ```

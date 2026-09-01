@@ -136,19 +136,26 @@ int main(void) {
 
   // STARTED
   vw_msg_started_t started = {.source_active = VW_SOURCE_ACTIVE_ACTIVE};
+  for (size_t i = 0; i < VW_SESSION_ID_BYTES; i++) started.session_id.bytes[i] = (uint8_t)(i + 1U);
   EXPECT(vw_protocol_encode_payload(VW_MSG_STARTED, &started, buffer, sizeof(buffer), &written));
-  EXPECT(written == 1);
+  EXPECT(written == VW_MSG_STARTED_PAYLOAD_BYTES);
   vw_msg_started_t decoded_started = {0};
   EXPECT(vw_protocol_decode_payload(VW_MSG_STARTED, buffer, written, &decoded_started));
+  EXPECT(decoded_started.source_active == VW_SOURCE_ACTIVE_ACTIVE);
+  EXPECT(memcmp(decoded_started.session_id.bytes, started.session_id.bytes, VW_SESSION_ID_BYTES) == 0);
+
+  // Legacy v1.2-v1.5 STARTED remains decodable for negotiated older peers.
+  buffer[0] = VW_SOURCE_ACTIVE_ACTIVE;
+  EXPECT(vw_protocol_decode_payload(VW_MSG_STARTED, buffer, 1U, &decoded_started));
   EXPECT(decoded_started.source_active == VW_SOURCE_ACTIVE_ACTIVE);
 
   // SHUTDOWN
   EXPECT(vw_protocol_encode_payload(VW_MSG_SHUTDOWN, NULL, buffer, sizeof(buffer), &written));
   EXPECT(written == 0);
 
-  // ---- v1.5 PROTOCOL VERSION ----
-  _Static_assert(VW_PROTOCOL_VERSION_MINOR == 5U, "protocol v1.5 minor must be 5");
-  EXPECT(VW_PROTOCOL_VERSION_MINOR == 5U);
+  // ---- v1.6 PROTOCOL VERSION ----
+  _Static_assert(VW_PROTOCOL_VERSION_MINOR == 6U, "protocol v1.6 minor must be 6");
+  EXPECT(VW_PROTOCOL_VERSION_MINOR == 6U);
   EXPECT(VW_MSG_MODEL_CTRL_PAYLOAD_BYTES == 49U);
   EXPECT(VW_MSG_MODEL_PROGRESS_PAYLOAD_BYTES == 66U);
   EXPECT(VW_MSG_TRANSLATE_CTRL_PAYLOAD_BYTES == 50U);

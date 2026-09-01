@@ -26,7 +26,7 @@ int main(void) {
   // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
   strncpy(config.pipe_name, "\\\\.\\pipe\\test_ipc_socket", sizeof(config.pipe_name) - 1);
 #else
-  strncpy(config.pipe_name, "test_ipc_socket", sizeof(config.pipe_name) - 1);
+  snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-ipc-%ld.sock", (long)getpid());
 #endif
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
 

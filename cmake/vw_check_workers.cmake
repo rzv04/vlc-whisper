@@ -3,6 +3,12 @@
 if(NOT DEFINED WORKER_DIR)
   message(FATAL_ERROR "WORKER_DIR not defined")
 endif()
+if(NOT DEFINED STAGE_DIR)
+  message(FATAL_ERROR "STAGE_DIR not defined")
+endif()
+if(NOT DEFINED SOURCE_ROOT)
+  message(FATAL_ERROR "SOURCE_ROOT not defined")
+endif()
 set(_gpu "${WORKER_DIR}/vlc-whisper-worker.exe")
 set(_cpu "${WORKER_DIR}/vlc-whisper-worker-cpu.exe")
 
@@ -43,7 +49,29 @@ function(vw_verify_release_model model_path expected_sha256 label)
   message(STATUS "Verified ${label} model: ${model_path}")
 endfunction()
 
-vw_verify_release_model("${WHISPER_MODEL_PATH}" "${WHISPER_MODEL_SHA256}" "Whisper tiny")
-vw_verify_release_model("${VAD_MODEL_PATH}" "${VAD_MODEL_SHA256}" "Silero VAD")
+# Copy every input into a build-owned staging directory, then verify the exact
+# model snapshots consumed by NSIS. Validation never authorizes a later copy of
+# a mutable source path.
+file(REMOVE_RECURSE "${STAGE_DIR}")
+file(MAKE_DIRECTORY "${STAGE_DIR}/models")
+if(EXISTS "${_gpu}")
+  file(COPY "${_gpu}" DESTINATION "${STAGE_DIR}")
+endif()
+if(EXISTS "${_cpu}")
+  file(COPY "${_cpu}" DESTINATION "${STAGE_DIR}")
+endif()
+file(COPY "${PLUGIN_PATH}" DESTINATION "${STAGE_DIR}")
+file(COPY "${WHISPER_MODEL_PATH}" DESTINATION "${STAGE_DIR}/models")
+file(COPY "${VAD_MODEL_PATH}" DESTINATION "${STAGE_DIR}/models")
+file(COPY "${SOURCE_ROOT}/models/manifest.json" DESTINATION "${STAGE_DIR}/models")
+file(COPY "${SOURCE_ROOT}/lua" DESTINATION "${STAGE_DIR}")
+file(COPY "${SOURCE_ROOT}/LICENSE" DESTINATION "${STAGE_DIR}")
+file(COPY "${SOURCE_ROOT}/THIRD_PARTY_NOTICES.md" DESTINATION "${STAGE_DIR}")
+
+get_filename_component(_whisper_model_name "${WHISPER_MODEL_PATH}" NAME)
+get_filename_component(_vad_model_name "${VAD_MODEL_PATH}" NAME)
+vw_verify_release_model("${STAGE_DIR}/models/${_whisper_model_name}" "${WHISPER_MODEL_SHA256}"
+                        "staged Whisper tiny")
+vw_verify_release_model("${STAGE_DIR}/models/${_vad_model_name}" "${VAD_MODEL_SHA256}" "staged Silero VAD")
 
 message(STATUS "Release inputs validated: gpu=${_gpu} cpu=${_cpu} plugin=${PLUGIN_PATH}")

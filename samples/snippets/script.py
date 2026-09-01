@@ -182,7 +182,7 @@ def main() -> int:
             print(f"[{method}] {result}")
         except TranslationError as exc:
             print(f"Error: translation failed: {exc}", file=sys.stderr)
-    
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

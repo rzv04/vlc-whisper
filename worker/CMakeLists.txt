@@ -134,7 +134,8 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 
 if(WIN32)
     # Windows Media Foundation, Crypto, and ACL/SID APIs plus WinHTTP model/translation transport.
-    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp advapi32)
+    target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp advapi32
+                                                       shell32)
 endif()
 
 if(OpenMP_CXX_FOUND AND NOT WIN32)

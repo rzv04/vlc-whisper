@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "vw_ipc_transport.h"
 #include "vw_platform.h"
@@ -29,8 +32,10 @@ static bool vw_test_receive_frame(vw_ipc_handle_t* server, vw_frame_header_t* he
   return true;
 }
 
-static bool vw_test_send_started(vw_ipc_handle_t* server, uint64_t* worker_sequence) {
+static bool vw_test_send_started(vw_ipc_handle_t* server, uint64_t* worker_sequence,
+                                 const uint8_t session_id[VW_SESSION_ID_BYTES]) {
   vw_msg_started_t started = {.source_active = VW_SOURCE_ACTIVE_ACTIVE};
+  memcpy(started.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
   uint8_t payload[VW_MSG_STARTED_PAYLOAD_BYTES];
   size_t payload_length = 0;
   if (!vw_protocol_encode_payload(VW_MSG_STARTED, &started, payload, sizeof(payload), &payload_length)) return false;
@@ -56,8 +61,7 @@ static bool vw_test_send_caption(vw_ipc_handle_t* server, uint64_t* worker_seque
                                   .text_utf8 = source_text,
                                   .text_bytes = (uint16_t)strlen(source_text),
                                   .translated_text_utf8 = (char*)translated_text,
-                                  .translated_text_bytes =
-                                      translated_text ? (uint16_t)strlen(translated_text) : 0,
+                                  .translated_text_bytes = translated_text ? (uint16_t)strlen(translated_text) : 0,
                                   .translation_attempted = translated_text != NULL,
                                   .translation_latency_us = translated_text ? 1000U : 0U,
                                   .translation_tier = translated_text ? 1U : 0U};
@@ -147,10 +151,10 @@ static void* vw_test_seek_epoch_server(void* opaque) {
     return (void*)(intptr_t)2;
   }
 
-  vw_msg_hello_ack_t ack = {.selected_major = VW_PROTOCOL_VERSION_MAJOR,
-                            .selected_minor = VW_PROTOCOL_VERSION_MINOR,
-                            .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE |
-                                                VW_CAPABILITY_TRANSLATION};
+  vw_msg_hello_ack_t ack = {
+      .selected_major = VW_PROTOCOL_VERSION_MAJOR,
+      .selected_minor = VW_PROTOCOL_VERSION_MINOR,
+      .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO | VW_CAPABILITY_SOURCE_MODE | VW_CAPABILITY_TRANSLATION};
   size_t ack_length = 0;
   if (!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &ack, payload, sizeof(payload), &ack_length)) {
     vw_ipc_close(server);
@@ -182,7 +186,8 @@ static void* vw_test_seek_epoch_server(void* opaque) {
     return (void*)(intptr_t)6;
   }
   memcpy(session_a, initial_start.session_id.bytes, VW_SESSION_ID_BYTES);
-  if (!vw_test_send_started(server, &worker_sequence) || !vw_test_expect_translate(server, session_a, false)) {
+  if (!vw_test_send_started(server, &worker_sequence, session_a) ||
+      !vw_test_expect_translate(server, session_a, false)) {
     vw_ipc_close(server);
     return (void*)(intptr_t)7;
   }
@@ -190,7 +195,8 @@ static void* vw_test_seek_epoch_server(void* opaque) {
   uint8_t session_b[VW_SESSION_ID_BYTES];
   if (!vw_test_expect_stop(server, session_a) ||
       !vw_test_expect_start(server, VW_TEST_BACKWARD_PTS_US, session_a, session_b) ||
-      !vw_test_send_started(server, &worker_sequence) || !vw_test_expect_translate(server, session_b, false) ||
+      !vw_test_send_started(server, &worker_sequence, session_b) ||
+      !vw_test_expect_translate(server, session_b, false) ||
       !vw_test_expect_position(server, session_b, VW_TEST_BACKWARD_PTS_US)) {
     vw_ipc_close(server);
     return (void*)(intptr_t)8;
@@ -210,7 +216,8 @@ static void* vw_test_seek_epoch_server(void* opaque) {
   uint8_t session_c[VW_SESSION_ID_BYTES];
   if (!vw_test_expect_stop(server, session_b) ||
       !vw_test_expect_start(server, VW_TEST_FORWARD_PTS_US, session_b, session_c) ||
-      !vw_test_send_started(server, &worker_sequence) || !vw_test_expect_translate(server, session_c, true) ||
+      !vw_test_send_started(server, &worker_sequence, session_c) ||
+      !vw_test_expect_translate(server, session_c, true) ||
       !vw_test_expect_position(server, session_c, VW_TEST_FORWARD_PTS_US)) {
     vw_ipc_close(server);
     return (void*)(intptr_t)11;
@@ -241,10 +248,14 @@ static void vw_test_assert_stale_segment(const vw_worker_recv_t* received,
 }
 
 int main(void) {
+#ifndef _WIN32
+  char endpoint_name[256];
+  snprintf(endpoint_name, sizeof(endpoint_name), "/tmp/vlc-whisper-seek-epoch-%ld.sock", (long)getpid());
+#endif
 #ifdef _WIN32
   const char* endpoint = "\\\\.\\pipe\\test_worker_client_seek_epoch";
 #else
-  const char* endpoint = "test_worker_client_seek_epoch";
+  const char* endpoint = endpoint_name;
 #endif
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES] = {0};
 

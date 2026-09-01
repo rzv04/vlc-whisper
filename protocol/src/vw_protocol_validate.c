@@ -15,7 +15,8 @@ bool vw_protocol_validate_header(const vw_frame_header_t* header) {
 #include <string.h>
 
 static bool is_valid_language_code(const char code[16], bool allow_auto) {
-  size_t length = strnlen(code, 16U);
+  size_t length = 0;
+  while (length < 16U && code[length] != '\0') length++;
   if (length == 0 || length >= 16U) return false;
   if (allow_auto && strcmp(code, "auto") == 0) return true;
 

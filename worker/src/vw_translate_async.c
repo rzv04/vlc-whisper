@@ -328,63 +328,25 @@ bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_
 bool vw_translate_async_try_deliver(vw_translate_async_t* async, vw_translate_async_delivery_fn deliver,
                                     void* user_data) {
   if (!async || !deliver) return false;
-  // Snapshot epoch and result under lock, unlock before blocking IPC, revalidate before commit (VW-015).
-  // This prevents seek/invalidate from blocking on congested IPC and avoids stale commits.
   pthread_mutex_lock(&async->mutex);
   size_t completion_index = 0;
   if (!vw_translate_async_find_next_result_locked(async, &completion_index)) {
     pthread_mutex_unlock(&async->mutex);
     return false;
   }
-  uint64_t snapshot_epoch = async->epoch;
-  uint64_t snapshot_ordinal = async->next_result_ordinal;
   vw_translate_async_result_t result = async->results[completion_index].result;
-  // Validate result epoch matches current epoch under lock before unlocking; stale results are discarded.
-  if (result.epoch != snapshot_epoch) {
+  if (result.epoch != async->epoch) {
     vw_translate_async_remove_result_locked(async, completion_index);
     pthread_mutex_unlock(&async->mutex);
     return false;
   }
-  pthread_mutex_unlock(&async->mutex);
-
-  // Revalidate epoch before blocking send: if epoch changed after snapshot, discard without delivering.
-  pthread_mutex_lock(&async->mutex);
-  if (async->epoch != snapshot_epoch || async->next_result_ordinal != snapshot_ordinal) {
-    // Epoch advanced (seek/invalidate) while we were unlocked; result is stale.
-    // Find and remove if still queued, otherwise it was already invalidated.
-    size_t idx = 0;
-    if (vw_translate_async_find_next_result_locked(async, &idx)) {
-      // If the found ordinal matches snapshot, it's still the stale entry; remove it.
-      if (async->results[idx].ordinal == snapshot_ordinal) {
-        vw_translate_async_remove_result_locked(async, idx);
-      }
-    }
-    pthread_mutex_unlock(&async->mutex);
-    return false;
-  }
+  // Delivery and invalidating controls have one owner in the worker main loop. Remove the immutable completion before
+  // releasing the translator mutex, then perform potentially blocking IPC without allowing ordinal reuse to target a
+  // new epoch's result. Background translation threads may continue to submit completions concurrently.
+  vw_translate_async_remove_result_locked(async, completion_index);
   pthread_mutex_unlock(&async->mutex);
 
   vw_translate_async_bind_result_text(&result);
   deliver(&result, user_data);
-
-  // Commit removal after successful IPC, revalidating epoch to ensure stale delivery not committed.
-  pthread_mutex_lock(&async->mutex);
-  if (async->epoch != snapshot_epoch) {
-    // Epoch changed during IPC; stale send already occurred but we must not commit removal of a newer entry.
-    // The stale result was already removed above or invalidated; do not advance ordinal for wrong epoch.
-    pthread_mutex_unlock(&async->mutex);
-    return true;
-  }
-  size_t commit_index = 0;
-  if (!vw_translate_async_find_next_result_locked(async, &commit_index)) {
-    pthread_mutex_unlock(&async->mutex);
-    return true;
-  }
-  if (async->results[commit_index].ordinal != snapshot_ordinal) {
-    pthread_mutex_unlock(&async->mutex);
-    return true;
-  }
-  vw_translate_async_remove_result_locked(async, commit_index);
-  pthread_mutex_unlock(&async->mutex);
   return true;
 }

@@ -3,6 +3,7 @@
 
 #include "vw_worker_client.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,7 @@ static int receive_all(vw_ipc_handle_t* ipc, uint8_t* buf, size_t len, int64_t d
   size_t got = 0;
   while (got < len) {
     int64_t now_us = vw_platform_get_monotonic_time_us();
+    if (now_us < 0) return VW_IPC_RECV_FATAL;
     if (now_us >= deadline_us) return (got == 0) ? VW_IPC_RECV_TIMEOUT : VW_IPC_RECV_FATAL;
     uint32_t remaining_us = (uint32_t)(deadline_us - now_us);
     uint32_t timeout_us = (remaining_us < 3000000U) ? remaining_us : 3000000U;
@@ -51,6 +53,15 @@ static void token_to_hex(const uint8_t tok[VW_AUTH_TOKEN_BYTES], char out[VW_AUT
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
     snprintf(out + i * 2, 3, "%02x", tok[i]);
   }
+}
+
+// Computes a bounded monotonic deadline; a clock failure or signed overflow fails closed instead of spinning forever.
+static bool vw_worker_client_make_deadline(int64_t duration_us, int64_t* out_deadline_us) {
+  if (!out_deadline_us || duration_us < 0) return false;
+  int64_t now_us = vw_platform_get_monotonic_time_us();
+  if (now_us < 0 || duration_us > INT64_MAX - now_us) return false;
+  *out_deadline_us = now_us + duration_us;
+  return true;
 }
 
 // A frame send that fails part-way leaves the byte stream dead or desynced
@@ -161,6 +172,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   client->pipe_handle = ipc;
   client->worker_process = worker_process;
   client->sequence = 1;
+  snprintf(client->language, sizeof(client->language), "%s", (language && language[0]) ? language : "en");
 
   // --- HELLO handshake ---
   vw_msg_hello_t hello = {.min_major = VW_PROTOCOL_VERSION_MAJOR,
@@ -190,7 +202,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
 
   // Total budget for the HELLO/HELLO_ACK reads: a silently-dead worker must not
   // hang module open forever (each vw_ipc_receive can block up to 3s on timeout).
-  const int64_t handshake_deadline_us = vw_platform_get_monotonic_time_us() + VW_HANDSHAKE_TIMEOUT_US;
+  int64_t handshake_deadline_us = 0;
+  if (!vw_worker_client_make_deadline(VW_HANDSHAKE_TIMEOUT_US, &handshake_deadline_us)) goto fail;
 
   // Wait for HELLO_ACK (header, then payload)
   uint8_t ack_hdr_buf[sizeof(vw_frame_header_t)];
@@ -214,6 +227,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   }
   if (ack_ok) {
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
+    if (ack.selected_minor > VW_PROTOCOL_VERSION_MINOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
   if (ack_ok) {
@@ -274,12 +288,13 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
                           .source_kind = source_url ? VW_SOURCE_LOCAL_FILE : VW_SOURCE_LIVE_AUDIO};
   memcpy(start.session_id.bytes, client->session_id, 16);
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);
-  strncpy(start.language, "en", sizeof(start.language) - 1);
+  snprintf(start.language, sizeof(start.language), "%s", client->language[0] ? client->language : "en");
   if (source_url) {
     size_t url_len = strlen(source_url);
     if (url_len >= sizeof(start.source_url)) {
-      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_START_URL", "source_url too long (%zu >= %zu); truncating", url_len,
+      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_START_URL", "source_url too long (%zu >= %zu); rejecting", url_len,
                    sizeof(start.source_url));
+      return false;
     }
     strncpy(start.source_url, source_url, sizeof(start.source_url) - 1);
     start.source_url[sizeof(start.source_url) - 1] = '\0';
@@ -305,8 +320,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     return false;
   }
 
-  const int64_t deadline_us =
-      vw_platform_get_monotonic_time_us() + 5000000;  // 5s total budget for the STARTED/ERROR confirmation wait
+  int64_t deadline_us = 0;
+  if (!vw_worker_client_make_deadline(5000000, &deadline_us)) return false;
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t resp_hdr_buf[sizeof(vw_frame_header_t)];
     if (receive_all(client->pipe_handle, resp_hdr_buf, sizeof(resp_hdr_buf), deadline_us) != VW_IPC_RECV_OK) {
@@ -326,6 +341,16 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
     }
 
     if (resp_hdr.type == VW_MSG_STARTED) {
+      if (client->worker_sequence_valid && resp_hdr.sequence <= client->last_worker_sequence) {
+        vw_worker_client_drop_transport(client);
+        return false;
+      }
+      client->last_worker_sequence = resp_hdr.sequence;
+      client->worker_sequence_valid = true;
+      if (client->worker_protocol_minor >= 6U && resp_hdr.payload_length != VW_MSG_STARTED_PAYLOAD_BYTES) {
+        vw_worker_client_drop_transport(client);
+        return false;
+      }
       if (resp_hdr.payload_length > 0) {
         uint8_t* resp_payload = (uint8_t*)malloc(resp_hdr.payload_length);
         if (!resp_payload) {
@@ -338,11 +363,19 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
           return false;
         }
         vw_msg_started_t started_msg = {0};
-        if (vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, resp_hdr.payload_length, &started_msg)) {
-          client->worker_source_active = (started_msg.source_active == VW_SOURCE_ACTIVE_ACTIVE);
-        } else {
-          client->worker_source_active = false;
+        bool started_ok =
+            vw_protocol_decode_payload(VW_MSG_STARTED, resp_payload, resp_hdr.payload_length, &started_msg);
+        if (started_ok && resp_hdr.payload_length != VW_MSG_STARTED_PAYLOAD_BYTES && resp_hdr.payload_length != 1U)
+          started_ok = false;
+        if (started_ok && resp_hdr.payload_length == VW_MSG_STARTED_PAYLOAD_BYTES &&
+            memcmp(started_msg.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0)
+          started_ok = false;
+        if (!started_ok) {
+          free(resp_payload);
+          vw_worker_client_drop_transport(client);
+          return false;
         }
+        client->worker_source_active = (started_msg.source_active == VW_SOURCE_ACTIVE_ACTIVE);
         free(resp_payload);
       } else {
         client->worker_source_active = false;
@@ -665,7 +698,8 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
   // mid-frame — finish it with the transport's own receive bound (3 s) so a transient delay
   // between the header and payload messages cannot desync the stream. Any payload failure (timeout
   // or fatal) still drops: the header is gone, so a later call would read the payload as a header.
-  const int64_t deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)timeout_us;
+  int64_t deadline_us = 0;
+  if (!vw_worker_client_make_deadline((int64_t)timeout_us, &deadline_us)) return VW_IPC_RECV_FATAL;
 
   while (vw_platform_get_monotonic_time_us() < deadline_us) {
     uint8_t hdr_buf[sizeof(vw_frame_header_t)];
@@ -698,7 +732,12 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
       if (hdr.payload_length > 0) {
         uint8_t* tmp = (uint8_t*)malloc(hdr.payload_length);
         if (tmp) {
-          const int64_t drain_deadline = vw_platform_get_monotonic_time_us() + 3000000;
+          int64_t drain_deadline = 0;
+          if (!vw_worker_client_make_deadline(3000000, &drain_deadline)) {
+            free(tmp);
+            vw_worker_client_drop_transport(client);
+            return VW_IPC_RECV_FATAL;
+          }
           if (receive_all(client->pipe_handle, tmp, hdr.payload_length, drain_deadline) != VW_IPC_RECV_OK) {
             free(tmp);
             vw_worker_client_drop_transport(client);
@@ -715,7 +754,11 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
     client->last_worker_sequence = hdr.sequence;
     client->worker_sequence_valid = true;
 
-    const int64_t payload_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
+    int64_t payload_deadline_us = 0;
+    if (!vw_worker_client_make_deadline(3000000, &payload_deadline_us)) {
+      vw_worker_client_drop_transport(client);
+      return VW_IPC_RECV_FATAL;
+    }
     uint8_t* payload = NULL;
     if (hdr.payload_length > 0) {
       payload = (uint8_t*)malloc(hdr.payload_length);

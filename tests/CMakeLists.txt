@@ -13,6 +13,10 @@ macro(add_vw_test test_name)
     )
     target_link_libraries(${test_name} PRIVATE vw_protocol Threads::Threads)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
+    # Test assertions contain the checks and side effects; never compile them away in release builds.
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${test_name} PRIVATE -UNDEBUG)
+    endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endmacro()
 
@@ -118,6 +122,9 @@ endif()
 
 add_executable(test_plugin_load integration/test_plugin_load.c)
 target_compile_options(test_plugin_load PRIVATE -Wall -Wextra -Wpedantic)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_plugin_load PRIVATE -UNDEBUG)
+endif()
 target_link_libraries(test_plugin_load PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME test_plugin_load COMMAND test_plugin_load $<TARGET_FILE:vlc_whisper_plugin>)
 

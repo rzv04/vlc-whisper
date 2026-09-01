@@ -75,7 +75,7 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 - `tests/unit/test_source_decoder.c` (17c): Media Foundation (`vw_source_decoder_mf.c`) and FFmpeg (`vw_source_decoder_ffmpeg.c`) native audio demuxer tests: container format detection, 16kHz mono S16LE extraction, stream timestamp calculation, seeking (`IMFSourceReader::SetCurrentPosition` / `av_seek_frame`), and EOF handling.
 - `tests/unit/test_caption_presenter.c` (17c): Look-ahead future timestamp SPU scheduling maps future segment media PTS relative to `input_time_us` into the future OSD date domain (`mdate() + lead_us`), including valid media position zero; live-network regression coverage verifies that an inference-late system-date cue starts immediately at `mdate()` and queues caption-channel flush before replacement, while source look-ahead rendering never flushes its future cue queue.
 - `tests/unit/test_protocol_util.c` (17d): 64-bit saturating addition and subtraction (`vw_saturating_add_i64` / `vw_saturating_sub_i64`) boundary verification across `INT64_MAX`, `INT64_MIN`, overflow/underflow clamping, and sign permutations.
-- `tests/unit/test_protocol_codec.c` & `test_protocol_validate.c` (17d): Protocol v1.2 serialization and schema validation: 1-byte `source_active` payload in `VW_MSG_STARTED`, legal media-range validation for `VW_MSG_POSITION` (`current_pts_us` and `input_time_us` bounded in `[-10s, 10 years]`), finite positive playback rate (`isfinite` and in `(0, 16]`), and strict position flag bitmask validation (`VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED`).
+- `tests/unit/test_protocol_codec.c` & `test_protocol_validate.c`: Protocol v1.6 serialization and schema validation: correlated 16-byte session ID plus `source_active` in `VW_MSG_STARTED` (with legacy one-byte decode), legal media-range validation for `VW_MSG_POSITION` (`current_pts_us` and `input_time_us` bounded in `[-10s, 10 years]`), finite positive playback rate (`isfinite` and in `(0, 16]`), and strict position flag bitmask validation (`VW_POSITION_FLAG_SEEK | VW_POSITION_FLAG_PAUSED`).
 - `tests/unit/test_caption_presenter.c` (17d): SPU subpicture channel persistence across repeated blanking flushes, rate-scaled lead clamping, and pause transition blanking.
 - `tests/unit/test_caption_presenter.c`: model-download progress uses a separate wall-clock SPU channel, survives caption blanking, and flushes explicitly on abort/teardown.
 - `tests/unit/test_model_download.c`: local-file verified download, SHA-256 vectors, catalog lookup, progress math, abort cleanup, and same-destination interprocess single-flight locking.
@@ -117,3 +117,9 @@ Every merge: format check, C compilation with warnings-as-errors, unit/protocol 
 Release requires all gates green, manual local-file acceptance on clean Windows, documented known failures, protocol/version manifest, model hash verification, and review of diagnostics to ensure no PCM/transcript/path leakage.
 
 **Validation note for this change:** `test_worker_client_seek_epoch` is wired into CTest and release packaging now fails closed on worker/model composition. The branch's final format/build/CTest/Valgrind run and Windows installer/VM smoke remain separate release-validation steps rather than being claimed by this documentation update.
+# Test harness safety
+
+Unix-domain integration tests use unique absolute paths under `/tmp`, derived from the process ID. This prevents a
+test listener from unlinking its own executable when the build's test working directory is used as the socket path.
+Release test binaries are compiled with `NDEBUG` removed because assertions contain executable checks and cleanup
+side effects that are part of the test harness contract.

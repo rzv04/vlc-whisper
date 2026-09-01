@@ -38,6 +38,7 @@ if(WIN32)
     # Configure the NSIS template.
     set(NSIS_SCRIPT_IN "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_installer.nsi.in")
     set(NSIS_SCRIPT_OUT "${CMAKE_CURRENT_BINARY_DIR}/vw_installer.nsi")
+    set(VW_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/installer-stage")
     configure_file(${NSIS_SCRIPT_IN} ${NSIS_SCRIPT_OUT} @ONLY)
 
     # Zero-network default: both release models MUST already be provisioned unless
@@ -59,6 +60,7 @@ if(WIN32)
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_provision_model.cmake
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "Verifying/provisioning pinned Whisper tiny and Silero VAD release models..."
+      VERBATIM
     )
 
     # GPU package must bundle CPU fallback for Vulkan loader-less systems.
@@ -122,11 +124,14 @@ if(WIN32)
               -DWHISPER_MODEL_SHA256=${VW_MODEL_TINY_SHA256}
               -DVAD_MODEL_PATH=${VW_MODEL_VAD}
               -DVAD_MODEL_SHA256=${VW_MODEL_VAD_SHA256}
+              -DSTAGE_DIR=${VW_STAGE_DIR}
+              -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_check_workers.cmake
       COMMAND ${MAKENSIS_EXECUTABLE} ${NSIS_SCRIPT_OUT}
       DEPENDS vlc_whisper_plugin vlc-whisper-worker ${VW_CPU_FALLBACK_TARGET}
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
       COMMENT "Compiling standalone Windows setup installer with verified workers and models..."
+      VERBATIM
     )
   else()
     message(STATUS "makensis not found: NSIS installer target will not be registered.")
@@ -174,4 +179,9 @@ if(WIN32)
   )
 
   include(CPack)
+  # CPack's `package` target is otherwise independent of the generated CPU
+  # fallback, so a direct `cmake --build . --target package` could omit it.
+  if(TARGET package AND TARGET vw_cpu_worker_fallback)
+    add_dependencies(package vw_cpu_worker_fallback)
+  endif()
 endif()

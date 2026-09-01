@@ -1,8 +1,8 @@
 # Known Issues
 
-This ledger records the pre-MVP audit of branch `gemini/milestone-4-mvp-release` at commit `b59214a`
-(2026-08-30). Three independent read-only reviews covered core concurrency and protocol behavior, caption and
-translation timing, and Windows runtime and packaging paths.
+This ledger records the pre-MVP audits of `gemini/milestone-4-mvp-release` and PR #36, followed by the remediation
+verification on branch `fix/mvp-final-release-gates` (2026-09-01). Independent reviews covered core concurrency and
+protocol behavior, caption and translation timing, Windows runtime, and packaging paths.
 
 The findings below are source-confirmed unless explicitly marked as requiring Windows runtime validation. No issue is
 considered fixed merely because a roadmap or release checklist marks the corresponding feature complete.
@@ -401,6 +401,237 @@ considered fixed merely because a roadmap or release checklist marks the corresp
 - **Required fix**: Apply hidden-window startup flags only to the worker process while preserving redirected diagnostics.
 - **Missing coverage**: Windows VLC playback confirms no worker console/taskbar window appears.
 
+## PR #36 Follow-up Audit (`b0117ee`, remediated 2026-09-01)
+
+The PR head was fetched from `refs/pull/36/head` and reviewed before remediation. Every finding below is fixed in the
+current branch and covered by the verification evidence at the end of this ledger.
+
+### VW-038 — Seek-epoch regression test destroys its own executable
+
+- **Priority**: P1
+- **Status**: Fixed in source — unique absolute temporary endpoints and repeated execution verified
+- **Affected**: `tests/unit/test_worker_client_seek_epoch.c:245`, `protocol/src/vw_ipc_socket_linux.c:32`
+- **Trigger**: Run `test_worker_client_seek_epoch` from CTest's `build/.../tests` working directory.
+- **Impact**: The test binds the relative endpoint `test_worker_client_seek_epoch`; `vw_ipc_listen()` unlinks that path
+  before `bind()`, replacing the executable with a Unix socket. The first run passes, but subsequent CTest or Valgrind
+  runs report `BAD_COMMAND`/permission denied until the target is rebuilt.
+- **Required fix**: Use a unique endpoint under a temporary directory (and clean it up), never a path equal to the test binary.
+
+### VW-039 — Translation invalidation can emit stale captions after the epoch changes
+
+- **Priority**: P1
+- **Status**: Fixed in source — control invalidation and delivery are serialized by the worker main loop
+- **Affected**: `worker/src/vw_translate_async.c:348-389`
+- **Trigger**: A translation result passes the second epoch check, then the reader thread invalidates the translator
+  during the unlock-to-`deliver()` window (especially on `TRANSLATE_CTRL`, which preserves the session ID).
+- **Impact**: The old translated caption is still written to IPC after invalidation. The post-send check cannot retract
+  a frame already visible to the plugin.
+- **Required fix**: Serialize invalidation and delivery through a cancellation-safe handoff, or attach and validate a
+  generation at the actual send boundary so invalidated results cannot be emitted.
+
+### VW-040 — Translation invalidation may delete the first result of the new epoch
+
+- **Priority**: P1
+- **Status**: Fixed in source — completion removal uses immutable epoch-qualified identity
+- **Affected**: `worker/src/vw_translate_async.c:350-360`
+- **Trigger**: An old delivery snapshots ordinal `1`; invalidation advances the epoch and a new result is queued with
+  ordinal `1` before the old delivery reacquires the mutex.
+- **Impact**: The stale-delivery cleanup searches by ordinal only and removes the new epoch's result, losing the first
+  caption after a seek or translation-config change.
+- **Required fix**: Match the queued result by both epoch and ordinal (or retain an immutable completion identity).
+
+### VW-041 — Audio callback performs logging and can enter I/O
+
+- **Priority**: P1
+- **Status**: Fixed in source — callback logging removed
+- **Affected**: `plugin/src/vw_whisper_module.c:1491-1500`, `protocol/src/vw_log.c`
+- **Trigger**: Valid PTS resumes after an invalid PTS interval while diagnostic logging is enabled.
+- **Impact**: The realtime VLC audio callback calls `vw_log_event()`, which can format text, lock/log, write, and flush
+  a file. This violates the callback's no-blocking/no-I/O/no-allocation contract and can cause audio glitches.
+- **Required fix**: Store an atomic event flag in the callback and log it from the sender thread.
+
+### VW-042 — Failed source seek keeps a stale decoder anchor
+
+- **Priority**: P2
+- **Status**: Fixed in source — timeline anchors update only after a successful decoder seek
+- **Affected**: `worker/src/vw_worker.c:764-818`
+- **Trigger**: A source-mode `vw_source_decoder_seek()` fails for a new `POSITION` target.
+- **Impact**: `current_playback_pts_us` and `last_playback_pts_us` advance to the requested target while
+  `decoded_pts_us`/decoder data remain at the old position. Look-ahead can then emit old audio with new timeline pacing,
+  producing captions with incorrect PTS.
+- **Required fix**: Keep the old playback anchor on failure, or reset/terminate source mode and report an explicit
+  recoverable failure instead of mixing the two timelines.
+
+### VW-043 — Monotonic-clock failure can make IPC deadlines infinite
+
+- **Priority**: P2
+- **Status**: Fixed in source — negative and overflowing monotonic deadlines fail closed
+- **Affected**: `plugin/src/vw_platform_linux.c:126-137`, `plugin/src/vw_platform_win32.c:31-45`,
+  `plugin/src/vw_worker_client.c:27-46,193-197,308-407`
+- **Trigger**: The monotonic clock API returns its documented `-1` error sentinel.
+- **Impact**: Callers compute deadlines from `-1` and repeatedly compare later `-1` readings, so handshake/frame loops
+  can retry forever instead of failing closed.
+- **Required fix**: Treat a negative clock result as fatal and use a bounded fallback timeout path.
+
+### VW-044 — Linux IPC endpoint remains predictable and is not cleaned up
+
+- **Priority**: P2
+- **Status**: Fixed in source — random private endpoints, peer credentials, permissions, and cleanup integrated
+- **Affected**: `plugin/src/vw_whisper_module.c:1617`, `protocol/src/vw_ipc_socket_linux.c:32,105-111`
+- **Trigger**: Any Linux plugin session uses `/tmp/vlc-whisper-<pid>.sock`.
+- **Impact**: A local process can predict/connect first and consume the worker's single listener, causing a denial of
+  service; default socket permissions and lack of peer-credential checks widen the attack surface. `vw_ipc_close()`
+  never unlinks the path, leaving stale filesystem entries for the next startup to unlink.
+- **Required fix**: Use a per-session random endpoint in a private runtime directory, set restrictive permissions, verify
+  peer credentials, and unlink only an owned socket during teardown.
+
+### VW-045 — Windows Unicode paths still use ANSI discovery/file APIs
+
+- **Priority**: P1
+- **Status**: Fixed in source — UTF-8 internals now cross wide Win32 discovery, launch, and model-loading boundaries
+- **Affected**: `worker/src/vw_worker_config.c:23-29,69-71`,
+  `plugin/src/vw_whisper_module.c:73-88,146-153,258-266`
+- **Trigger**: VLC, the user profile, or the install directory contains characters outside the active ANSI code page.
+- **Impact**: Worker/model/VAD discovery and file existence checks fail or produce malformed paths even though the
+  downloader uses wide APIs. A Unicode Windows installation can therefore report a successful install but leave captions
+  unavailable.
+- **Required fix**: Carry UTF-8 internally and use `GetModuleFileNameW`, `GetFileAttributesW`, wide registry/environment
+  access, and a wide-safe model-load path; add a Unicode-path Windows test.
+
+### VW-046 — Direct CPack packaging does not depend on CPU fallback staging
+
+- **Priority**: P2
+- **Status**: Fixed and verified — direct GPU CPack builds the CPU fallback and emits a complete ZIP
+- **Affected**: `cmake/vw_packaging.cmake:64-102,154-157`
+- **Trigger**: Run CPack/install directly after a clean GPU configure instead of the `installer` target.
+- **Impact**: The install rule references `vlc-whisper-worker-cpu.exe`, but only the NSIS `installer` target depends on
+  `vw_cpu_worker_fallback`. CPack can fail for a missing file or produce an incomplete package.
+- **Required fix**: Make the package/install target depend on CPU fallback staging, or stage and verify both workers in a
+  shared packaging prerequisite.
+
+### VW-047 — Media Foundation can discard oversized sample remainders
+
+- **Priority**: P2
+- **Status**: Fixed in source — leftover storage grows with checked bounds and preserves the complete sample
+- **Affected**: `worker/src/vw_source_decoder_mf.c:269-285`
+- **Trigger**: A decoded MF sample contains more than the requested output buffer plus the 4096-sample leftover ring.
+- **Impact**: The remainder is clipped instead of retained, dropping source audio and shifting later caption timing.
+- **Required fix**: Preserve arbitrary remainder length (or drain the sample incrementally) rather than truncating at the
+  fixed 4096-sample buffer.
+
+### VW-048 — Windows model-download abort races WinHTTP handle use
+
+- **Priority**: P2
+- **Status**: Fixed in source — the download thread exclusively owns WinHTTP handles and polls bounded cancellation
+- **Affected**: `worker/src/vw_model_download.c:351-363,412-483,699-713`
+- **Trigger**: Abort/free closes `hRequest` while the download thread is in `WinHttpReadData()` or another WinHTTP call.
+- **Impact**: The handle is cleared under the mutex but used from an unlocked local copy, allowing cancellation-time
+  use-after-close or undefined WinHTTP behavior.
+- **Required fix**: Serialize WinHTTP calls and handle closure, or use a documented cancellation mechanism and stress test
+  abort during each request phase.
+
+### VW-049 — START handshake accepts an uncorrelated STARTED frame
+
+- **Priority**: P2
+- **Status**: Fixed in protocol 1.6 — STARTED carries the session ID with legacy-minor decode compatibility
+- **Affected**: `plugin/src/vw_worker_client.c:308-353`
+- **Trigger**: A stale/malformed `STARTED` frame arrives during a new start handshake on an authenticated transport.
+- **Impact**: The client accepts the first `STARTED` without checking its worker sequence or a session correlation (the
+  `STARTED` payload has no session ID), then marks the new session active.
+- **Required fix**: Validate the handshake sequence against the HELLO_ACK baseline and include/check the requested
+  session ID in the start confirmation.
+
+### VW-050 — Worker error/model-progress send failures are ignored
+
+- **Priority**: P2
+- **Status**: Fixed in source — header/payload failures terminate the worker transport loop
+- **Affected**: `worker/src/vw_worker.c:67-124,1146-1151`
+- **Trigger**: IPC closes or a write partially fails while sending `ERROR` or `MODEL_PROGRESS`.
+- **Impact**: The worker reports success and continues, leaving the peer potentially mid-frame/desynchronized; the plugin
+  can miss the only diagnostic or terminal download state.
+- **Required fix**: Propagate both header and payload write results and drop/terminate the transport on failure.
+
+### VW-051 — Windows installer accepts unsupported VLC versions
+
+- **Priority**: P2
+- **Status**: Fixed in source — installer requires a 64-bit VLC 3 executable
+- **Affected**: `cmake/vw_installer.nsi.in:97-104`
+- **Trigger**: The user selects any existing 64-bit `vlc.exe`, including an unsupported VLC major/version.
+- **Impact**: The installer reports success while placing a module built for the vendored VLC 3.0.23 ABI into a VLC
+  version that may reject or fail to load it.
+- **Required fix**: Validate the supported VLC major/version (or make compatibility explicit) before installation.
+
+### VW-052 — Windows installer command lines are not VERBATIM-safe for spaces
+
+- **Priority**: P2
+- **Status**: Fixed and verified — custom commands are VERBATIM and a space-containing build produced an installer
+- **Affected**: `cmake/vw_packaging.cmake:104-130`
+- **Trigger**: Checkout/build/model paths contain spaces.
+- **Impact**: The outer `installer` custom target omits `VERBATIM`; generated `-D...` arguments or the NSIS script path
+  can split and make packaging fail or validate the wrong path.
+- **Required fix**: Add `VERBATIM` and test a space-containing source/build path.
+
+### VW-053 — Packaging verification and copy have a TOCTOU window
+
+- **Priority**: P2
+- **Status**: Fixed in source — workers, plugin, and verified model snapshots are packaged from a staging directory
+- **Affected**: `cmake/vw_packaging.cmake:117-126`, `cmake/vw_check_workers.cmake`
+- **Trigger**: A local process replaces a worker, plugin, or model after validation but before `makensis`/CPack reads it.
+- **Impact**: The produced artifact can contain bytes different from the hash/existence checks that authorized it.
+- **Required fix**: Stage immutable verified copies and package those, or hash/verify the final archive/installer inputs
+  immediately before emission.
+
+### VW-054 — Uninstaller removes an unowned English model
+
+- **Priority**: P2
+- **Status**: Fixed in source — uninstaller removes only the model shipped by this installer
+- **Affected**: `cmake/vw_installer.nsi.in:456-460`
+- **Trigger**: A user or older installation has manually placed `models\\ggml-tiny.en.bin` under the VLC directory.
+- **Impact**: Uninstall deletes a model this installer never installed and can destroy user data.
+- **Required fix**: Delete only files recorded as installer-owned, or leave pre-existing model files untouched.
+
+### VW-055 — Oversized source URLs are silently truncated
+
+- **Priority**: P2
+- **Status**: Fixed and tested — oversized URLs fail before START is sent
+- **Affected**: `plugin/src/vw_worker_client.c:279-286`
+- **Trigger**: A local source URL reaches the fixed protocol field limit.
+- **Impact**: The client logs a warning but starts with a truncated URL, which may resolve to a different path or silently
+  force live fallback.
+- **Required fix**: Reject the session before sending `START` when the URL does not fit.
+
+### VW-056 — Release tests compile assertions and test actions out with `NDEBUG`
+
+- **Priority**: P1
+- **Status**: Fixed in source — project tests undefine `NDEBUG` on supported GNU/Clang release builds
+- **Affected**: `tests/unit/*.c`, `tests/integration/*.c`, release CMake presets
+- **Trigger**: Build the Windows CPU/GPU release presets, which define `NDEBUG` while `BUILD_TESTING=ON`.
+- **Impact**: Tests use side-effectful `assert(call())`; Release removes the calls, so the suite can report false passes
+  and the seek-epoch test reaches `pthread_join()` with an uninitialized thread. The MinGW release build emitted unused
+  variables/functions for exactly this reason.
+- **Required fix**: Use an always-on test assertion macro (or compile tests with `-UNDEBUG`) and run the release test
+  binaries in an appropriate Windows environment.
+
+### VW-057 — Current PR still fails format/diff hygiene checks
+
+- **Priority**: P3
+- **Status**: Fixed and verified — clang-format and git diff whitespace gates pass
+- **Affected**: `tests/unit/test_translate_async.c:157-158`, `tests/unit/test_worker_client_seek_epoch.c:59,150-152`,
+  `docs/decisions.md:490`, `samples/snippets/script.py:185`
+- **Trigger**: Run `clang-format --dry-run --Werror` over changed C/H files or `git diff --check origin/main...HEAD`.
+- **Impact**: The required verification gates fail despite the previous ledger marking VW-033 fixed.
+- **Required fix**: Format the reported test files and remove the trailing whitespace/extra EOF blank line.
+
+### VW-058 — Follow-up documentation metadata is stale
+
+- **Priority**: P3
+- **Status**: Fixed — this ledger records the 26-test suite and current remediation evidence
+- **Affected**: `docs/issues.md:1-4,456-462`
+- **Trigger**: Read the issue ledger on PR head `b0117ee`.
+- **Impact**: The header still identifies the old `b59214a` audit, and the summary says a 25-test suite passed while the
+  current suite has 26 tests. This can mislead release sign-off and makes the status claims hard to audit.
+- **Required fix**: Record the current commit, test count, exact memcheck result, and open follow-up findings.
+
 ## Documentation and Release-Gate Drift
 
 ### VW-032 — Release documentation marks unimplemented or stale behavior complete
@@ -453,10 +684,12 @@ considered fixed merely because a roadmap or release checklist marks the corresp
   FFmpeg subtracts the stream start offset. Test a Windows fixture with a nonzero presentation start.
 - Signed timeline arithmetic should receive sanitizer and extreme-PTS coverage even though ordinary protocol position
   bounds keep normal inputs in range.
-- The dependency graph was generated from commit `13aeea64`, not audited HEAD `b59214a`; all findings above were checked
+- The dependency graph was generated from commit `13aeea64`, not the remediation branch; every finding was checked
   against current source rather than accepted from the stale graph.
-- Source fixes for VW-001 through VW-031, VW-033, and VW-034 are integrated. Native debug configure/build and the complete
-  25-test CTest suite pass. The required Valgrind memcheck pass completes with 24 tests run successfully and the
-  model-heavy Whisper engine test skipped by its documented Valgrind policy; the strict `vw_memcheck_gate` also passes.
-  The Windows CPU cross-build, package input checker, NSIS syntax check, and CPU installer target pass. A clean Windows
-  VM installer run, Media Foundation fixture validation, and Windows timeout/cancellation stress test remain pending.
+- Source fixes for VW-001 through VW-058 are integrated. The native debug configure/build and complete 26-test CTest
+  suite pass. Valgrind executes 25 tests successfully, skips only the model-heavy Whisper engine test by documented
+  policy, reports no defects, and the strict gate confirms all 26 MemoryChecker logs are clean.
+- Windows CPU and GPU release cross-builds pass. CPU and GPU NSIS installers pass with staged input/hash validation;
+  direct GPU CPack emits a ZIP with its CPU fallback dependency; a CPU-only installer also builds from a path containing
+  spaces. A clean Windows VM installer/VLC run, Media Foundation fixture validation, Unicode-profile smoke test, and
+  Windows timeout/cancellation stress test remain native acceptance limitations rather than source-known defects.

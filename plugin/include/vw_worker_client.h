@@ -25,6 +25,7 @@ typedef struct vw_worker_client {
   uint16_t worker_protocol_minor;
   char active_model_id[VW_MAX_MODEL_ID_BYTES];
   char active_source_url[VW_MAX_SOURCE_URL_BYTES];
+  char language[16];
   bool translation_configured;
   bool translate_enabled;
   char translate_source_lang[16];
