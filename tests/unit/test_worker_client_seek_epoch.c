@@ -91,7 +91,8 @@ static bool vw_test_expect_stop(vw_ipc_handle_t* server, const uint8_t expected_
 }
 
 static bool vw_test_expect_start(vw_ipc_handle_t* server, int64_t expected_origin_us,
-                                 const uint8_t previous_session[VW_SESSION_ID_BYTES], uint8_t new_session[VW_SESSION_ID_BYTES]) {
+                                 const uint8_t previous_session[VW_SESSION_ID_BYTES],
+                                 uint8_t new_session[VW_SESSION_ID_BYTES]) {
   vw_frame_header_t header;
   uint8_t payload[2048];
   if (!vw_test_receive_frame(server, &header, payload, sizeof(payload)) || header.type != VW_MSG_START_SESSION) {
@@ -230,6 +231,15 @@ static void* vw_test_seek_epoch_server(void* opaque) {
   return (void*)(intptr_t)0;
 }
 
+static void vw_test_assert_stale_segment(const vw_worker_recv_t* received,
+                                         const uint8_t previous_session[VW_SESSION_ID_BYTES],
+                                         const uint8_t current_session[VW_SESSION_ID_BYTES], uint64_t segment_id) {
+  assert(received->type == VW_MSG_CAPTION_SEGMENT);
+  assert(received->segment.segment_id == segment_id);
+  assert(memcmp(received->segment.session_id.bytes, previous_session, VW_SESSION_ID_BYTES) == 0);
+  assert(memcmp(received->segment.session_id.bytes, current_session, VW_SESSION_ID_BYTES) != 0);
+}
+
 int main(void) {
 #ifdef _WIN32
   const char* endpoint = "\\\\.\\pipe\\test_worker_client_seek_epoch";
@@ -257,8 +267,13 @@ int main(void) {
   vw_worker_recv_t received;
   memset(&received, 0, sizeof(received));
   assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
+  vw_test_assert_stale_segment(&received, session_a, client->session_id, 1U);
+
+  memset(&received, 0, sizeof(received));
+  assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
   assert(received.type == VW_MSG_CAPTION_SEGMENT);
   assert(received.segment.segment_id == 2U);
+  assert(memcmp(received.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0);
   assert(received.segment.start_pts_us == 31000000LL);
   assert(received.segment.translated_text_utf8 == NULL);
 
@@ -271,8 +286,15 @@ int main(void) {
 
   memset(&received, 0, sizeof(received));
   assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
+  vw_test_assert_stale_segment(&received, session_b, client->session_id, 3U);
+  assert(received.segment.translated_text_utf8 != NULL);
+  assert(strcmp(received.segment.translated_text_utf8, "vechi") == 0);
+
+  memset(&received, 0, sizeof(received));
+  assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
   assert(received.type == VW_MSG_CAPTION_SEGMENT);
   assert(received.segment.segment_id == 4U);
+  assert(memcmp(received.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0);
   assert(received.segment.start_pts_us == 41000000LL);
   assert(received.segment.translated_text_utf8 != NULL);
   assert(strcmp(received.segment.translated_text_utf8, "nou") == 0);
