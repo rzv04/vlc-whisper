@@ -388,7 +388,10 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   float rate = vw_caption_presenter_get_rate(presenter);
   int64_t min_media_floor_us = (int64_t)((double)VW_CAPTION_MIN_DISPLAY_DURATION_US * (double)rate);
 
-  // If a preceding cue was buffered, dispatch it now with duration clipped to the incoming segment's start PTS
+  // If a preceding cue was buffered, dispatch it now with duration clipped to the incoming segment's start PTS,
+  // but never below the one-second readability floor. Use the existing presenter timing model (rate-scaled floor)
+  // rather than speculative overlap: if the successor starts <1s after the pending start, extend (allow overlap)
+  // to preserve the floor instead of creating an unreadable flash.
   if (presenter->has_pending) {
     int64_t raw_duration_us = presenter->pending_segment.end_pts_us - presenter->pending_segment.start_pts_us;
     int64_t target_dur_us = (raw_duration_us <= 0)                   ? 2000000LL
@@ -396,15 +399,22 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
                                                                      : raw_duration_us;
     int64_t target_end_us = presenter->pending_segment.start_pts_us + target_dur_us;
 
-    // Clip target_end_us to incoming segment start if incoming cue starts after pending cue's start
-    int64_t clipped_end_us =
-        (segment->start_pts_us > presenter->pending_segment.start_pts_us && target_end_us > segment->start_pts_us)
-            ? segment->start_pts_us
-            : target_end_us;
+    int64_t clipped_end_us = target_end_us;
+    if (segment->start_pts_us > presenter->pending_segment.start_pts_us && target_end_us > segment->start_pts_us) {
+      int64_t gap_us = segment->start_pts_us - presenter->pending_segment.start_pts_us;
+      // Only clip when the gap preserves the floor; otherwise keep floor (overlap is preferable to flash).
+      if (gap_us >= min_media_floor_us) {
+        clipped_end_us = segment->start_pts_us;
+      } else {
+        clipped_end_us = presenter->pending_segment.start_pts_us + min_media_floor_us;
+      }
+    }
     int64_t duration_us = clipped_end_us - presenter->pending_segment.start_pts_us;
     if (duration_us <= 0) {
       duration_us = (raw_duration_us > 0) ? raw_duration_us : 2000000LL;
+      if (duration_us < min_media_floor_us) duration_us = min_media_floor_us;
     }
+    if (duration_us < min_media_floor_us) duration_us = min_media_floor_us;
 
     vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us,
                                          media_timeline);

@@ -16,7 +16,9 @@ typedef struct vw_worker_client {
   void* pipe_handle;
   vw_process_t worker_process;
   uint8_t session_id[16];
-  uint32_t sequence;
+  uint64_t sequence;
+  uint64_t last_worker_sequence;  // monotonic per-direction sequence from worker
+  bool worker_sequence_valid;
   bool session_active;
   bool worker_source_active;
   uint32_t worker_capabilities;

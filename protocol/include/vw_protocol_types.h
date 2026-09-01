@@ -10,7 +10,7 @@
 //   Offset  4: uint16_t major           = protocol major version
 //   Offset  6: uint16_t type            = vw_message_type_t (determines payload struct)
 //   Offset  8: uint32_t payload_length  = byte count of payload that follows
-//   Offset 12: uint64_t sequence        = monotonic per-session counter
+//   Offset 12: uint64_t sequence        = strictly increasing per transport direction
 //   Offset 20: uint8_t payload[payload_length]  ← serialized vw_msg_xxx_t fields
 //
 // header.type selects which struct serializes/deserializes the payload bytes.
@@ -96,7 +96,7 @@ typedef struct vw_frame_header {
   uint16_t major;           // VW_PROTOCOL_VERSION_MAJOR
   uint16_t type;            // vw_message_type_t, default to 2 bytes instead of enum 4
   uint32_t payload_length;  // payload byte count
-  uint64_t sequence;        // monotonic sequence counter per session
+  uint64_t sequence;        // strictly increasing per transport direction
 } vw_frame_header_t;
 #pragma pack(pop)
 

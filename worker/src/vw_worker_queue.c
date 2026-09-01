@@ -87,14 +87,16 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
 
   // Full: evict the oldest AUDIO frame so the incoming frame (possibly a control frame) fits.
   // Control frames are never evicted; the queue is full of audio in practice, so this finds a slot.
-  size_t evict = q->capacity;  // sentinel: not found
+  size_t evict = 0;
+  bool evict_found = false;
   for (size_t i = q->tail; i < q->head; i++) {
     if (q->slots[i % q->capacity].type == VW_MSG_AUDIO_PCM) {
       evict = i;
+      evict_found = true;
       break;
     }
   }
-  if (evict != q->capacity) {
+  if (evict_found) {
     vw_worker_frame_t* victim = &q->slots[evict % q->capacity];
     atomic_fetch_add_explicit(&q->dropped_audio_us,
                               vw_worker_queue_audio_duration_us(victim->payload, victim->payload_len),
@@ -135,31 +137,33 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   // (START/STOP) — the oldest non-SHUTDOWN control, since the newest session directive supersedes
   // the oldest. A queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming. A required incoming
   // is dropped only when every queued control is SHUTDOWN (the worker is exiting anyway, so the
-  // incoming session directive is moot); a soft incoming may also be dropped when nothing is
-  // evictable — never sacrifice a queued required transition for it.
-  size_t evict_ctrl = q->capacity;  // sentinel: not found
+  size_t evict_ctrl = 0;
+  bool evict_ctrl_found = false;
   if (type == VW_MSG_SHUTDOWN) {
     evict_ctrl = q->tail;
+    evict_ctrl_found = true;
   } else {
     bool required = (type == VW_MSG_START_SESSION || type == VW_MSG_STOP_SESSION);
     for (size_t i = q->tail; i < q->head; i++) {
       uint16_t queued = q->slots[i % q->capacity].type;
       if (queued == VW_MSG_PAUSE || queued == VW_MSG_RESUME || queued == type) {
         evict_ctrl = i;
+        evict_ctrl_found = true;
         break;
       }
     }
-    if (evict_ctrl == q->capacity && required) {
+    if (!evict_ctrl_found && required) {
       // Newest required directive supersedes the oldest non-SHUTDOWN one; never a queued SHUTDOWN.
       for (size_t i = q->tail; i < q->head; i++) {
         if (q->slots[i % q->capacity].type != VW_MSG_SHUTDOWN) {
           evict_ctrl = i;
+          evict_ctrl_found = true;
           break;
         }
       }
     }
   }
-  if (evict_ctrl == q->capacity) {
+  if (!evict_ctrl_found) {
     // Reachable only when nothing evictable exists: a soft incoming with no soft/same-type queued
     // (dropping PAUSE/RESUME is harmless), or a required incoming into an all-SHUTDOWN queue (the
     // worker is exiting, so the directive is moot). Never sacrifice a queued required transition.

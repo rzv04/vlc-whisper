@@ -2,8 +2,7 @@
 
 Wired Lua extension dialog for VLC 3.0.23 that reads/writes the plugin config namespace
 and submits worker commands through the plugin’s ~2 s config bridge. Lua never waits, sleeps, polls download state,
-or performs network I/O. No translation.
-
+or performs network I/O. Translation is handled by the worker's bounded async engine (21b) via TRANSLATE_CTRL.
 ## Files
 
 - `lua/extensions/vlc_whisper_settings.lua` — the extension (descriptor `VLC-Whisper Settings`, dialog with Engine/Model/Language/Threads (CPU engine), diagnostic-logging checkbox, and Detected-backend status label).
@@ -123,10 +122,8 @@ Selection allowed even if file absent; `E_MODEL_MISSING` disables captions until
 
 - No `auto` language option (automatic language selection is a later UI step).
 - No second settings dialog; model download actions remain in this single Lua extension.
-- No translation (21b).
+- Translation is available via worker's opt-in 3-tier engine (21b); this dialog triggers translation via TRANSLATE_CTRL after session start.
 - Settings do NOT persist across VLC restart unless VLC exits cleanly (`vlcrc` save happens on clean exit).
-
-## Syntax check
 
 ```sh
 luac -p lua/extensions/vlc_whisper_settings.lua && echo "syntax OK"

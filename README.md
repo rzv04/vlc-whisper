@@ -69,7 +69,7 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 | **Validated Languages**      | **English, Romanian**                        | Fully tested end-to-end. Other languages supported by the bundled Whisper models may work but have not yet been validated by VLC-Whisper. |
 | **Subtitle Translation**     | **Opt-in (Keyless Google Translate Engine)** | 3-tier fallback (Web RPC, GTX, Mobile scrape). Off by default.                                                                            |
 
----
+> **Validation limits on this branch (b59214a):** Linux unit suite passes; Windows installer packaging validates GPU+CPU worker pair pre-NSIS but has not yet had a clean Windows VM smoke run; Valgrind memcheck requires `VW_FORCE_CPU=1` to suppress Vulkan loader false positives (VW-034). See `docs/issues.md` and `docs/test-strategy.md`.
 
 ## Key Features
 
@@ -128,7 +128,7 @@ Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Sett
 <details>
 <summary><b>How do I uninstall VLC-Whisper?</b></summary>
 
-Run `uninstall-vlc-whisper.exe` from your VLC installation directory, or use Windows **Settings > Apps > Installed apps > VLC-Whisper AI Subtitle Plugin > Uninstall**. Alternatively, go to **Control Panel > Programs > Uninstall a program** and uninstall **VLC-Whisper AI Subtitle Plugin**. The uninstaller removes all plugin binaries, worker executables, shortcuts, per-user model caches and registry keys.
+Run `uninstall-vlc-whisper.exe` from your VLC installation directory, or use Windows **Settings > Apps > Installed apps > VLC-Whisper AI Subtitle Plugin > Uninstall**. Alternatively, go to **Control Panel > Programs > Uninstall a program** and uninstall **VLC-Whisper AI Subtitle Plugin**. The uninstaller removes the project-owned plugin binaries, worker executables, shortcuts, registry keys, and the model cache recorded for the installing user; it does not remove another user's cache or VLC root notice files.
 
 </details>
 
@@ -245,18 +245,15 @@ cmake --build --preset windows-x64-release-cpu -j4
 #### 3. Building the Windows Installer (.exe & .zip)
 
 ```bash
-# Build CPU fallback binary
-cmake --preset windows-x64-release-cpu && cmake --build --preset windows-x64-release-cpu -j4
-cp build/windows-x64-release-cpu/worker/vlc-whisper-worker-cpu.exe build/windows-x64-release/worker/ 2>/dev/null || true
-
-# Build release binaries and NSIS installer
+# Build the GPU release. The installer target automatically builds and stages the CPU
+# fallback in an isolated VW_WITH_VULKAN=OFF sub-build, then validates both workers.
 cmake --preset windows-x64-release
 cmake --build --preset windows-x64-release --target installer
 
-# Package portable ZIP archive
+# Package the portable ZIP archive after the installer target has staged all artifacts.
 cpack --config build/windows-x64-release/CPackConfig.cmake
-```
 
+```
 ---
 
 ### Testing & Quality Assurance
@@ -270,9 +267,7 @@ ctest --preset linux-x64-debug --output-on-failure
 #### Valgrind Memory Leak Verification
 
 ```bash
-ctest --test-dir build/linux-x64-debug -T memcheck --output-on-failure \
-  --extra-memcheck-options=--leak-check=full \
-  --extra-memcheck-options=--error-exitcode=1
+cmake --build --preset linux-x64-debug --target vw_memcheck_gate
 ```
 
 #### Code Coverage

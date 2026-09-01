@@ -34,11 +34,11 @@ struct vlcw_frame_header {
   uint16_t major;          // 1
   vw_message_type_t type;
   uint32_t payload_length; // <= 1,048,576
-  uint64_t sequence;       // starts at 1, rises per sender/session
+  uint64_t sequence;       // starts at 1 and increases strictly per transport direction
 };
 ```
 
-`payload_length` is checked before allocation. The receiver reads exactly one complete message from the message-oriented transport, checks header and payload schema, then acts. No JSON: binary avoids encoding ambiguity and makes PCM transfer efficient; a human-readable protocol trace tool can decode frames for development.
+`payload_length` is checked before allocation. The receiver reads exactly one complete message from the message-oriented transport, checks header and payload schema, then acts. No JSON: binary avoids encoding ambiguity and makes PCM transfer efficient; a human-readable protocol trace tool can decode frames for development. Each receiver rejects duplicate or decreasing `sequence` values on its transport direction.
 
 ## Common fields
 
@@ -60,11 +60,11 @@ Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample
 
 ### POSITION (v1.1)
 
-Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown. Arrival of an explicit `SEEK` invalidates all queued/in-flight translation work from the previous playback epoch before that old work can become visible.
+Plugin to worker. Payload: session ID, `i64 current_pts_us`, `i64 input_time_us`, `float playback_rate`, `u32 flags` (`VW_POSITION_FLAG_SEEK = 1`, `VW_POSITION_FLAG_PAUSED = 2`). Paces worker look-ahead decoding (30s horizon) and handles seeks without session teardown. Arrival of an explicit `SEEK` invalidates all queued/in-flight translation work from the previous playback epoch before that old work can become visible. If a native source decoder rejects a seek, the worker retains its previous decoded anchor; an initial source seek failure disables source mode and the `STARTED` reply advertises live PCM.
 
 ### AUDIO
 
-Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal `duration_us * 16000 / 1_000_000 * 2`, subject only to explicitly documented whole-sample rounding: the receiver accepts ±1 byte of the computed value (half a sample at 16 kHz S16LE = 1 byte), since producers may round the duration up or down for odd-length partial blocks. The worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
+Plugin to worker. Payload: session ID, `i64 start_pts_us`, `i64 duration_us`, `u32 pcm_bytes`, then PCM. `pcm_bytes` must equal the whole-sample relation `duration_us * 16000 / 1_000_000 * 2` after integer truncation. Invalid PTS or duration values are rejected before inference, and the worker must not infer from audio whose PTS overlaps an acknowledged discontinuity.
 
 ### SEGMENT (v1.5)
 
@@ -72,7 +72,7 @@ Worker to plugin. Payload: session ID, `u64 segment_id`, `i64 start_pts_us`, `i6
 
 - **Phrase-by-Phrase Timing (`ADR-017`)**: Segment timing is derived from internal Whisper sub-segment boundaries ($t_0, t_1$ in centiseconds scaled by `10000LL` to microsecond PTS), rather than coarse 8-second window spans.
 - **`is_final` Invariant**: `is_final == true` denotes an immutable, committed subtitle cue to be rendered on screen via SPU (`vout_PutSubpicture`). Uncommitted/in-flight hypotheses are held until their window onset is finalized or drained.
-- **Real-Time Translation Fields (v1.5)**: When translation is enabled and available, finalized cues are copied to a dedicated bounded translation thread (maximum four pending jobs). The main worker inference/control loop never performs network I/O. The three fallback tiers share one absolute **800 ms total cue deadline**; the budget is not reset per tier. On success, `translated_text_utf8` carries the translated text, `translation_latency_us` carries total translation elapsed time in microseconds, and `translation_tier` reports the resolving tier (`1 = Web RPC`, `2 = GTX`, `3 = Mobile scrape`). On failure/deadline/queue unavailability, the source caption is emitted without translated text. Seek/session/config invalidation drops results from an older translation epoch.
+- **Real-Time Translation Fields (v1.5)**: When translation is enabled and available, finalized cues are copied to a dedicated bounded translation thread (maximum four pending jobs). The main worker inference/control loop never performs network I/O. The three fallback tiers share one absolute **800 ms total cue deadline**; the budget is not reset per tier. On success, `translated_text_utf8` carries the translated text, `translation_latency_us` carries total translation elapsed time in microseconds, and `translation_tier` reports the resolving tier (`1 = Web RPC`, `2 = GTX`, `3 = Mobile scrape`). On failure/deadline/queue unavailability, the source caption is emitted without translated text. Seek/session/config invalidation drops results from an older translation epoch, and delivery releases the cancellation mutex before blocking IPC.
 - **Silence Screen Blanking**: Non-contiguous phrases (e.g. 0.6s pause between speakers) generate distinct non-overlapping subpictures, naturally blanking the screen during conversational pauses.
 
 Example semantic value, shown as JSON only for readability:
@@ -95,7 +95,7 @@ Example semantic value, shown as JSON only for readability:
 
 Plugin to worker. Payload 50 bytes: session ID (`16 bytes`), `u8 enabled` (0=disabled, 1=enabled), `char source_lang[16]` (NUL-padded language code or `"auto"`), `char target_lang[16]` (NUL-padded destination language code e.g. `"ro"` / `"en"`), `u8 mode` (0=translation only, 1=dual line).
 
-- Semantics: dynamically synchronizes translation preferences to the active worker mid-stream without requiring worker process restart or playback disruption. It is optional-minor-version functionality and is sent only when `HELLO_ACK.capability_flags` includes `VW_CAPABILITY_TRANSLATION`.
+- Semantics: dynamically synchronizes translation preferences to the active worker mid-stream without requiring worker process restart or playback disruption. This control carries the active `session_id`; stale or mismatched controls are ignored. It is optional-minor-version functionality and is sent only when `HELLO_ACK.capability_flags` includes `VW_CAPABILITY_TRANSLATION`.
 - Privacy/realtime: this control carries configuration only. Subtitle text egress occurs only inside the worker's asynchronous translator after the user enables translation. The VLC Lua extension performs no translation HTTP requests.
 
 ### STARTED (v1.2)
@@ -106,9 +106,9 @@ Worker to plugin. Payload: `u8 source_active` (`VW_SOURCE_ACTIVE_ACTIVE = 1` if 
 
 Plugin to worker. Payload: session ID, `u16 reason`.
 
-- `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); asynchronous translation work from the pre-pause epoch is invalidated. Reason codes: `USER_PAUSE=1`.
-- `RESUME`: Resumes active transcription processing after pause. Reason codes: `USER_RESUME=1`.
-- `STOP`: Terminates active captioning session, clears buffers, resets VAD state, and invalidates pending translation work. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` multiple times or on an idle session is a safe no-op.
+- `PAUSE`: Suspends active transcription processing and clears the in-flight analysis window (a fresh window starts on `RESUME`); asynchronous translation work from the pre-pause epoch is invalidated. A control with a stale or mismatched session ID is ignored.
+- `RESUME`: Resumes active transcription processing after pause. A control with a stale or mismatched session ID is ignored. Reason codes: `USER_RESUME=1`.
+- `STOP`: Terminates active captioning session, clears buffers, resets VAD state, and invalidates pending translation work. A stale or mismatched session ID is ignored. Reason codes: `USER_STOP=1`, `SEEK_DISCONTINUITY=2` (`VW_CTRL_REASON_SEEK_DISCONTINUITY`, sent on seek/discontinuity before a fresh `START` epoch), `MEDIA_END=3`. **Idempotent**: Calling `STOP` with the current session ID multiple times or on an idle session is a safe no-op.
 
 ### SHUTDOWN
 
@@ -141,8 +141,12 @@ Worker to plugin. Payload 66 bytes: session ID, `u8 stage` (`IDLE=0`, `DOWNLOADI
 
 ### Model storage and worker network policy
 
-Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models` (`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to `<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` / `rename`). Each destination is protected by an OS-level interprocess lock for the transfer lifetime; worker startup never deletes another worker's partial file. Resolve order: explicit `model-path` config → install `models/` directory → per-user directory. At worker startup, an existing configured path wins; when a relative configured path is absent, its filename is also tried under `--model-dir`, allowing a downloaded catalog model to load after a worker restart. VAD resolution occurs after model resolution: explicit `--vad-model`, a sibling of the effective model, `--model-dir`, the worker executable's adjacent `models/` directory (for example, `<VLC>\models` on Windows), then legacy working-directory candidates. The executable-directory probe uses the process image path rather than the launcher's current directory, so IPTVnator or another launcher cannot hide the bundled VAD by changing CWD.
-
+Models are stored per-user: `%LOCALAPPDATA%\vlc-whisper\models` on Windows, `$XDG_DATA_HOME/vlc-whisper/models`
+(`$HOME/.local/share/vlc-whisper/models` fallback) on Linux; `--model-dir` overrides. Downloads write to
+`<dest>/<filename>.part` with streaming sha256 and are atomically renamed on verified success (`MoveFileExW` /
+`rename`). Each destination is protected by an OS-level interprocess lock for the transfer lifetime; worker startup
+uses an existing configured model path first, then tries its filename under `--model-dir`, then the worker executable's
+adjacent `models/` directory, so installer-bundled models do not depend on the launcher's current working directory.
 Network policy is worker-confined. ADR-023 governs explicit, pinned, SHA-256-verified model downloads. ADR-024 governs opt-in subtitle translation: only finalized text is sent to the configured Google web endpoints over HTTPS; PCM/audio is never sent. Translation is disabled by default and the Lua settings callback itself performs no HTTP.
 
 Diagnostic logging is disabled by default. When enabled by the `whisper-logging` config key, the worker records diagnostics in `%TEMP%\vlc-whisper-worker.log` on Windows (or the platform temp directory), and the plugin emits events through VLC Messages. Diagnostics may include bounded local paths, segment IDs, byte counters, tier/outcome, and latency, but never auth tokens, PCM, source transcript bodies, translated subtitle bodies, or network credentials.

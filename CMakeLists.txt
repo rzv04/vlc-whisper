@@ -42,10 +42,24 @@ add_subdirectory(plugin)
 
 # Automated unit & integration tests
 if(BUILD_TESTING)
-    set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=all")
+    find_program(VALGRIND_PROGRAM valgrind)
+    if(VALGRIND_PROGRAM)
+        set(MEMORYCHECK_COMMAND "${VALGRIND_PROGRAM}" CACHE FILEPATH "Valgrind command" FORCE)
+        set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=definite --error-exitcode=1 --errors-for-leak-kinds=definite --suppressions=${CMAKE_SOURCE_DIR}/cmake/valgrind.supp" CACHE STRING "" FORCE)
+        set(MEMORYCHECK_SUPPRESSIONS_FILE "${CMAKE_SOURCE_DIR}/cmake/valgrind.supp" CACHE FILEPATH "" FORCE)
+    endif()
     include(CTest)
     enable_testing()
     add_subdirectory(tests)
+
+
+    if(VALGRIND_PROGRAM)
+        add_custom_target(vw_memcheck_gate
+            COMMAND ${CMAKE_COMMAND}
+                    -DCTEST_BUILD_DIR=${CMAKE_BINARY_DIR}
+                    -P ${CMAKE_SOURCE_DIR}/cmake/vw_memcheck_gate.cmake
+            USES_TERMINAL)
+    endif()
 endif()
 
 # Separate sample snippet targets (marked EXCLUDE_FROM_ALL)

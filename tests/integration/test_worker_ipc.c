@@ -97,13 +97,13 @@ int main(void) {
   EXPECT(vw_protocol_decode_payload(VW_MSG_ERROR, rpayload, reply_hdr.payload_length, &dec));
   EXPECT(dec.error.error_code == E_AUDIO_FORMAT);
 
-  // Send a valid SHUTDOWN message
+  // Send a valid SHUTDOWN message after HELLO (sequence 1) and START (sequence 2).
   vw_frame_header_t hdr;
   hdr.magic = VW_PROTOCOL_MAGIC;
   hdr.major = VW_PROTOCOL_VERSION_MAJOR;
   hdr.type = VW_MSG_SHUTDOWN;
   hdr.payload_length = 0;
-  hdr.sequence = 1;
+  hdr.sequence = 3;
 
   uint8_t hdr_buf[20];
   EXPECT(vw_protocol_encode_header(&hdr, hdr_buf, 20));

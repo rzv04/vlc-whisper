@@ -13,13 +13,20 @@
 #include "vw_ipc_transport.h"
 
 vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
+  if (!endpoint_name || endpoint_name[0] == '\0') return NULL;
+  // Reject overlong endpoint names that cannot fit sun_path without truncation.
+  // Truncation would bind a truncated path while unlink uses the original, causing
+  // connection/cleanup mismatch. sun_path capacity is sizeof(addr.sun_path); a
+  // name that needs truncation (len >= sizeof) must fail closed.
+  if (strlen(endpoint_name) >= sizeof(((struct sockaddr_un*)0)->sun_path)) return NULL;
   int server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
   if (server_fd < 0) return NULL;
 
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, endpoint_name, sizeof(addr.sun_path) - 1);
+  // Safe after length check: fits with NUL terminator.
+  memcpy(addr.sun_path, endpoint_name, strlen(endpoint_name) + 1);
 
   // Unlink the socket file if it already exists to avoid bind errors
   unlink(endpoint_name);
@@ -63,13 +70,15 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
 }
 
 vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
+  if (!endpoint_name || endpoint_name[0] == '\0') return NULL;
+  if (strlen(endpoint_name) >= sizeof(((struct sockaddr_un*)0)->sun_path)) return NULL;
   int client_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
   if (client_fd < 0) return NULL;
 
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, endpoint_name, sizeof(addr.sun_path) - 1);
+  memcpy(addr.sun_path, endpoint_name, strlen(endpoint_name) + 1);
 
   if (connect(client_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     close(client_fd);

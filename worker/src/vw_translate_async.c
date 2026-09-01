@@ -28,10 +28,10 @@ typedef struct vw_translate_async_completion {
 } vw_translate_async_completion_t;
 
 struct vw_translate_async {
-  pthread_t thread;
+  pthread_t threads[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET];
   pthread_mutex_t mutex;
   pthread_cond_t cond;
-  bool thread_started;
+  size_t thread_count;
   bool stopping;
   uint64_t epoch;
   uint64_t next_submit_ordinal;
@@ -172,13 +172,23 @@ vw_translate_async_t* vw_translate_async_create(void) {
     free(async);
     return NULL;
   }
-  if (pthread_create(&async->thread, NULL, vw_translate_async_thread_main, async) != 0) {
-    pthread_cond_destroy(&async->cond);
-    pthread_mutex_destroy(&async->mutex);
-    free(async);
-    return NULL;
+
+  for (size_t i = 0; i < VW_TRANSLATE_ASYNC_ACTIVE_BUDGET; i++) {
+    if (pthread_create(&async->threads[i], NULL, vw_translate_async_thread_main, async) != 0) {
+      pthread_mutex_lock(&async->mutex);
+      async->stopping = true;
+      pthread_cond_broadcast(&async->cond);
+      pthread_mutex_unlock(&async->mutex);
+      for (size_t started = 0; started < async->thread_count; started++) {
+        pthread_join(async->threads[started], NULL);
+      }
+      pthread_cond_destroy(&async->cond);
+      pthread_mutex_destroy(&async->mutex);
+      free(async);
+      return NULL;
+    }
+    async->thread_count++;
   }
-  async->thread_started = true;
   return async;
 }
 
@@ -195,7 +205,7 @@ void vw_translate_async_destroy(vw_translate_async_t* async) {
   async->result_count = 0;
   pthread_cond_broadcast(&async->cond);
   pthread_mutex_unlock(&async->mutex);
-  if (async->thread_started) pthread_join(async->thread, NULL);
+  for (size_t i = 0; i < async->thread_count; i++) pthread_join(async->threads[i], NULL);
   pthread_cond_destroy(&async->cond);
   pthread_mutex_destroy(&async->mutex);
   free(async);
@@ -229,8 +239,8 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
     return false;
   }
 
-  // Bound every accepted cue, including completed cues not yet consumed and the one network request currently
-  // in flight. Rejection drops only the newest input cue; it never exposes a newer caption ahead of older work.
+  // Bound every accepted cue, including completed cues not yet consumed and worker requests currently in flight.
+  // Rejection drops only the newest input cue; it never exposes a newer caption ahead of older work.
   if (async->job_count + async->inflight_count + async->result_count >= VW_TRANSLATE_ASYNC_RESULT_CAPACITY) {
     pthread_mutex_unlock(&async->mutex);
     return false;
@@ -318,17 +328,63 @@ bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_
 bool vw_translate_async_try_deliver(vw_translate_async_t* async, vw_translate_async_delivery_fn deliver,
                                     void* user_data) {
   if (!async || !deliver) return false;
+  // Snapshot epoch and result under lock, unlock before blocking IPC, revalidate before commit (VW-015).
+  // This prevents seek/invalidate from blocking on congested IPC and avoids stale commits.
   pthread_mutex_lock(&async->mutex);
   size_t completion_index = 0;
   if (!vw_translate_async_find_next_result_locked(async, &completion_index)) {
     pthread_mutex_unlock(&async->mutex);
     return false;
   }
-
+  uint64_t snapshot_epoch = async->epoch;
+  uint64_t snapshot_ordinal = async->next_result_ordinal;
   vw_translate_async_result_t result = async->results[completion_index].result;
+  // Validate result epoch matches current epoch under lock before unlocking; stale results are discarded.
+  if (result.epoch != snapshot_epoch) {
+    vw_translate_async_remove_result_locked(async, completion_index);
+    pthread_mutex_unlock(&async->mutex);
+    return false;
+  }
+  pthread_mutex_unlock(&async->mutex);
+
+  // Revalidate epoch before blocking send: if epoch changed after snapshot, discard without delivering.
+  pthread_mutex_lock(&async->mutex);
+  if (async->epoch != snapshot_epoch || async->next_result_ordinal != snapshot_ordinal) {
+    // Epoch advanced (seek/invalidate) while we were unlocked; result is stale.
+    // Find and remove if still queued, otherwise it was already invalidated.
+    size_t idx = 0;
+    if (vw_translate_async_find_next_result_locked(async, &idx)) {
+      // If the found ordinal matches snapshot, it's still the stale entry; remove it.
+      if (async->results[idx].ordinal == snapshot_ordinal) {
+        vw_translate_async_remove_result_locked(async, idx);
+      }
+    }
+    pthread_mutex_unlock(&async->mutex);
+    return false;
+  }
+  pthread_mutex_unlock(&async->mutex);
+
   vw_translate_async_bind_result_text(&result);
   deliver(&result, user_data);
-  vw_translate_async_remove_result_locked(async, completion_index);
+
+  // Commit removal after successful IPC, revalidating epoch to ensure stale delivery not committed.
+  pthread_mutex_lock(&async->mutex);
+  if (async->epoch != snapshot_epoch) {
+    // Epoch changed during IPC; stale send already occurred but we must not commit removal of a newer entry.
+    // The stale result was already removed above or invalidated; do not advance ordinal for wrong epoch.
+    pthread_mutex_unlock(&async->mutex);
+    return true;
+  }
+  size_t commit_index = 0;
+  if (!vw_translate_async_find_next_result_locked(async, &commit_index)) {
+    pthread_mutex_unlock(&async->mutex);
+    return true;
+  }
+  if (async->results[commit_index].ordinal != snapshot_ordinal) {
+    pthread_mutex_unlock(&async->mutex);
+    return true;
+  }
+  vw_translate_async_remove_result_locked(async, commit_index);
   pthread_mutex_unlock(&async->mutex);
   return true;
 }

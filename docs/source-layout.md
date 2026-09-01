@@ -143,11 +143,13 @@ vlc-whisper/
 │   └── snippets/                              # Standalone C17 sample code files
 │       └── vw_sample_whisper_pcm.c            # 16kHz WAV reader, float resampler & Whisper runner
 ├── cmake/                                     # Build system configurations & toolchains
-│   ├── vw_packaging.cmake                     # CPack release archive & NSIS installer target definitions
-│   ├── vw_installer.nsi.in                   # Templated NSIS script for standalone Windows installer
+│   ├── vw_packaging.cmake                     # CPack archive, NSIS installer, and CPU fallback staging target
+│   ├── vw_installer.nsi.in                   # Templated NSIS installer with owned-process and reboot-safe replacement logic
+│   ├── vw_check_workers.cmake                 # Fatal pre-package validation for plugin, model, GPU, and CPU worker inputs
+│   ├── vw_memcheck_gate.cmake                 # CTest/Valgrind defect-summary gate with CPU-only worker execution
+│   ├── valgrind.supp                          # Narrow third-party loader suppressions for the memcheck gate
 │   └── toolchains/
 │       └── windows-x64-mingw.cmake            # MinGW cross-compilation CMake toolchain configuration
-├── docs/                                      # Project specifications, ADRs & architectural design docs
 ├── ai/                                        # Internal AI/agent workspace context & logs
 ├── CMakeLists.txt                             # Root CMake build configuration
 ├── CMakePresets.json                          # Native and cross-compilation build presets

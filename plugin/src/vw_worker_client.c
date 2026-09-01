@@ -351,7 +351,6 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
       if (resp_hdr.payload_length > 0) {
         uint8_t* resp_payload = (uint8_t*)malloc(resp_hdr.payload_length);
         if (!resp_payload) {
-          // Declared payload cannot be drained; framing is lost.
           vw_worker_client_drop_transport(client);
           return false;
         }
@@ -359,8 +358,9 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
             (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) == VW_IPC_RECV_OK);
         vw_msg_error_t err;
         memset(&err, 0, sizeof(err));
+        bool decoded = false;
         if (drained && vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err)) {
-          // Surface the worker's rejection (e.g. E_MODEL_MISSING) so the model-absent path is diagnosable.
+          decoded = true;
           vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_START_ERROR", "code=%u recoverable=%u msg=%.*s", err.error_code,
                        err.recoverable, (int)strnlen(err.message, VW_MAX_ERROR_MSG_BYTES), err.message);
         }
@@ -369,6 +369,14 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
           vw_worker_client_drop_transport(client);
           return false;
         }
+        // Recoverable E_SOURCE_OPEN is not a fatal START failure: the worker will follow with STARTED(source_active=0)
+        // to transparently fall back to live PCM. Treat it as an informational handshake step and continue to STARTED.
+        if (decoded && err.error_code == E_SOURCE_OPEN && err.recoverable) {
+          // Drain and keep waiting for the mandated STARTED within the same deadline.
+          continue;
+        }
+      } else {
+        // Zero-payload ERROR with no info cannot be E_SOURCE_OPEN; treat as fatal.
       }
       return false;
     }
@@ -620,12 +628,32 @@ int vw_worker_client_receive_frame(vw_worker_client_t* client, uint32_t timeout_
       vw_worker_client_drop_transport(client);
       return VW_IPC_RECV_FATAL;
     }
+    // VW-016: Monotonic per-direction sequence validation. Reject duplicate/reordered/replayed frames.
+    if (client->worker_sequence_valid && hdr.sequence <= client->last_worker_sequence) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_SEQUENCE", "stale worker sequence %llu <= %llu type=%u; discarding",
+                   (unsigned long long)hdr.sequence, (unsigned long long)client->last_worker_sequence, hdr.type);
+      // Drain declared payload to keep framing, then discard.
+      if (hdr.payload_length > 0) {
+        uint8_t* tmp = (uint8_t*)malloc(hdr.payload_length);
+        if (tmp) {
+          const int64_t drain_deadline = vw_platform_get_monotonic_time_us() + 3000000;
+          if (receive_all(client->pipe_handle, tmp, hdr.payload_length, drain_deadline) != VW_IPC_RECV_OK) {
+            free(tmp);
+            vw_worker_client_drop_transport(client);
+            return VW_IPC_RECV_FATAL;
+          }
+          free(tmp);
+        } else {
+          vw_worker_client_drop_transport(client);
+          return VW_IPC_RECV_FATAL;
+        }
+      }
+      continue;  // discard stale frame within same deadline, do not desync
+    }
+    client->last_worker_sequence = hdr.sequence;
+    client->worker_sequence_valid = true;
 
     const int64_t payload_deadline_us = vw_platform_get_monotonic_time_us() + 3000000;  // transport bound
-
-    // Read the declared payload, if any. A failure here (timeout OR fatal) is always a desync:
-    // the header message was already consumed, so a subsequent call would read the payload as a
-    // new header and fail validation. Drop the transport rather than return a false timeout.
     uint8_t* payload = NULL;
     if (hdr.payload_length > 0) {
       payload = (uint8_t*)malloc(hdr.payload_length);

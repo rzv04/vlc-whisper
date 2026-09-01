@@ -62,9 +62,19 @@ struct vw_model_download {
 };
 
 static uint64_t vw_file_size(const char* path) {
+#ifdef _WIN32
+  if (!path) return 0;
+  wchar_t wpath[4096];
+  int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, 4096);
+  if (wlen <= 0) return 0;
+  WIN32_FILE_ATTRIBUTE_DATA fad;
+  if (!GetFileAttributesExW(wpath, GetFileExInfoStandard, &fad)) return 0;
+  return ((uint64_t)fad.nFileSizeHigh << 32) | (uint64_t)fad.nFileSizeLow;
+#else
   struct stat st;
   if (!path || stat(path, &st) != 0) return 0;
   return (uint64_t)st.st_size;
+#endif
 }
 
 static bool vw_path_join(char* out, size_t out_size, const char* dir, const char* file) {
@@ -90,6 +100,26 @@ static bool vw_path_join(char* out, size_t out_size, const char* dir, const char
   return written >= 0 && (size_t)written < out_size;
 }
 
+#ifdef _WIN32
+static bool vw_wide_from_utf8(const char* utf8, wchar_t* out, size_t out_chars) {
+  if (!utf8 || !out || out_chars == 0) return false;
+  int r = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out, (int)out_chars);
+  return r > 0;
+}
+static bool vw_mkdir_wide(const wchar_t* wpath) {
+  if (!wpath || wpath[0] == L'\0') return false;
+  if (CreateDirectoryW(wpath, NULL)) return true;
+  DWORD err = GetLastError();
+  return err == ERROR_ALREADY_EXISTS;
+}
+static void vw_unlink_wide_utf8(const char* utf8_path) {
+  if (!utf8_path) return;
+  wchar_t wpath[4096];
+  if (!vw_wide_from_utf8(utf8_path, wpath, 4096)) return;
+  DeleteFileW(wpath);
+}
+#endif
+
 static bool vw_mkdir_p(const char* path) {
   if (!path || !path[0]) return false;
   char tmp[4096];
@@ -102,11 +132,19 @@ static bool vw_mkdir_p(const char* path) {
     if (tmp[i] == '/' || tmp[i] == '\\') {
       char saved = tmp[i];
       tmp[i] = '\0';
-      _mkdir(tmp);
+      wchar_t wtmp[4096];
+      if (vw_wide_from_utf8(tmp, wtmp, 4096)) vw_mkdir_wide(wtmp);
       tmp[i] = saved;
     }
   }
-  _mkdir(tmp);
+  {
+    wchar_t wtmp[4096];
+    if (vw_wide_from_utf8(tmp, wtmp, 4096)) vw_mkdir_wide(wtmp);
+  }
+  wchar_t wfinal[4096];
+  if (!vw_wide_from_utf8(path, wfinal, 4096)) return false;
+  DWORD attr = GetFileAttributesW(wfinal);
+  return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
 #else
   for (size_t i = 1; i < len; i++) {
     if (tmp[i] == '/') {
@@ -117,10 +155,10 @@ static bool vw_mkdir_p(const char* path) {
     }
   }
   mkdir(tmp, 0755);
-#endif
   struct stat st;
   if (stat(path, &st) != 0) return false;
   return S_ISDIR(st.st_mode);
+#endif
 }
 
 static bool vw_hex_equal_ci(const char* a, const char* b) {
@@ -140,7 +178,13 @@ static bool vw_hex_equal_ci(const char* a, const char* b) {
 
 static bool vw_sha256_file(const char* path, uint8_t out[32]) {
   if (!path || !out) return false;
+#ifdef _WIN32
+  wchar_t wpath[4096];
+  if (!vw_wide_from_utf8(path, wpath, 4096)) return false;
+  FILE* f = _wfopen(wpath, L"rb");
+#else
   FILE* f = fopen(path, "rb");
+#endif
   if (!f) return false;
   vw_sha256_context_t ctx;
   vw_sha256_init(&ctx);
@@ -163,8 +207,13 @@ static bool vw_rename_atomic(const char* src, const char* dst) {
 #ifndef _WIN32
   return rename(src, dst) == 0;
 #else
-  if (MoveFileExA(src, dst, MOVEFILE_REPLACE_EXISTING)) return true;
-  if (rename(src, dst) == 0) return true;
+  wchar_t wsrc[4096];
+  wchar_t wdst[4096];
+  if (!vw_wide_from_utf8(src, wsrc, 4096)) return false;
+  if (!vw_wide_from_utf8(dst, wdst, 4096)) return false;
+  if (MoveFileExW(wsrc, wdst, MOVEFILE_REPLACE_EXISTING)) return true;
+  // Fallback via narrow rename is not wide-safe; try _wrename
+  if (_wrename(wsrc, wdst) == 0) return true;
   return false;
 #endif
 }
@@ -192,8 +241,9 @@ static bool vw_model_download_acquire_lock(vw_model_download_t* dl) {
   }
   return true;
 #else
-  dl->lock_handle =
-      CreateFileA(dl->lock_path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  wchar_t wpath[4096];
+  if (!vw_wide_from_utf8(dl->lock_path, wpath, 4096)) return false;
+  dl->lock_handle = CreateFileW(wpath, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
   return dl->lock_handle != INVALID_HANDLE_VALUE;
 #endif
 }
@@ -389,7 +439,13 @@ static bool vw_download_via_winhttp(vw_model_download_t* dl) {
     vw_winhttp_close_stored(dl);
     return false;
   }
-  FILE* out = fopen(dl->part_path, "wb");
+  wchar_t wpart[4096];
+  if (!vw_wide_from_utf8(dl->part_path, wpart, 4096)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot convert part path '%s'", dl->part_path);
+    vw_winhttp_close_stored(dl);
+    return false;
+  }
+  FILE* out = _wfopen(wpart, L"wb");
   if (!out) {
     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot open part file '%s' (%d)", dl->part_path, errno);
     vw_winhttp_close_stored(dl);
@@ -454,9 +510,10 @@ static void* vw_download_thread(void* arg) {
     ok = vw_download_via_winhttp(dl);
 #endif
     if (atomic_load(&dl->abort_requested)) {
+#ifndef _WIN32
       unlink(dl->part_path);
-#ifdef _WIN32
-      DeleteFileA(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
 #endif
       pthread_mutex_lock(&dl->lock);
       dl->progress.stage = VW_MODEL_STAGE_ABORTING;
@@ -471,9 +528,10 @@ static void* vw_download_thread(void* arg) {
     if (!ok) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "download attempt %d failed for model '%s'", attempt + 1,
                    dl->entry.id);
+#ifndef _WIN32
       unlink(dl->part_path);
-#ifdef _WIN32
-      DeleteFileA(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
 #endif
       if (attempt == 0) {
         vw_model_download_reset_for_retry(dl);
@@ -487,9 +545,10 @@ static void* vw_download_thread(void* arg) {
     }
     uint64_t sz = vw_file_size(dl->part_path);
     if (sz > dl->entry.bytes) {
+#ifndef _WIN32
       unlink(dl->part_path);
-#ifdef _WIN32
-      DeleteFileA(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
 #endif
       pthread_mutex_lock(&dl->lock);
       dl->progress.stage = VW_MODEL_STAGE_FAILED;
@@ -504,9 +563,10 @@ static void* vw_download_thread(void* arg) {
     bool hash_ok = vw_sha256_file(dl->part_path, hash);
     if (!hash_ok) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "cannot hash partial model '%s'", dl->part_path);
+#ifndef _WIN32
       unlink(dl->part_path);
-#ifdef _WIN32
-      DeleteFileA(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
 #endif
       if (attempt == 0) {
         vw_model_download_reset_for_retry(dl);
@@ -522,9 +582,10 @@ static void* vw_download_thread(void* arg) {
     if (!vw_hex_equal_ci(hex, dl->entry.sha256_hex)) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "sha256 mismatch for '%s' (got=%s expected=%s)", dl->entry.id,
                    hex, dl->entry.sha256_hex);
+#ifndef _WIN32
       unlink(dl->part_path);
-#ifdef _WIN32
-      DeleteFileA(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
 #endif
       if (attempt == 0) {
         vw_model_download_reset_for_retry(dl);
@@ -538,9 +599,10 @@ static void* vw_download_thread(void* arg) {
     if (!vw_rename_atomic(dl->part_path, dl->final_path)) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "atomic rename failed '%s' -> '%s' (errno=%d)", dl->part_path,
                    dl->final_path, errno);
+#ifndef _WIN32
       unlink(dl->part_path);
-#ifdef _WIN32
-      DeleteFileA(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
 #endif
       pthread_mutex_lock(&dl->lock);
       dl->progress.stage = VW_MODEL_STAGE_FAILED;
@@ -688,16 +750,31 @@ void vw_model_download_free(vw_model_download_t* dl) {
 bool vw_model_download_default_dir(char* out, size_t out_size) {
   if (!out || out_size == 0) return false;
 #ifdef _WIN32
-  const char* base = getenv("LOCALAPPDATA");
-  char tmp[4096];
-  if (base && base[0]) {
-    snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", base);
-  } else {
-    const char* home = getenv("USERPROFILE");
-    if (home && home[0])
-      snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", home);
+  // Use wide environment queries so Unicode profile paths outside the ANSI
+  // code page are correctly represented as UTF-8.
+  wchar_t wbase[4096] = {0};
+  DWORD blen = GetEnvironmentVariableW(L"LOCALAPPDATA", wbase, 4096);
+  char tmp[4096] = {0};
+  if (blen > 0 && blen < 4096) {
+    char utf8_base[4096] = {0};
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, wbase, -1, utf8_base, 4096, NULL, NULL);
+    if (ulen > 0)
+      snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", utf8_base);
     else
       snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+  } else {
+    wchar_t whome[4096] = {0};
+    DWORD hlen = GetEnvironmentVariableW(L"USERPROFILE", whome, 4096);
+    if (hlen > 0 && hlen < 4096) {
+      char utf8_home[4096] = {0};
+      int ulen = WideCharToMultiByte(CP_UTF8, 0, whome, -1, utf8_home, 4096, NULL, NULL);
+      if (ulen > 0)
+        snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", utf8_home);
+      else
+        snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+    } else {
+      snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+    }
   }
   int written = snprintf(out, out_size, "%s", tmp);
   if (written < 0 || (size_t)written >= out_size) return false;
