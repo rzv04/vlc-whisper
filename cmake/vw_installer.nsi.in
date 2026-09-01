@@ -6,6 +6,7 @@
 !include "x64.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+!define VW_PACKAGE_IS_GPU @VW_PACKAGE_IS_GPU@
 
 ; General Configuration
 Name "VLC-Whisper AI Subtitles"
@@ -262,7 +263,8 @@ Section "VLC Plugin & AI Engine" SecCore
 
   SetOutPath "$INSTDIR"
 
-  ; GPU worker is optional for CPU-only package builds, so stage it nonfatally.
+  ; GPU worker is staged when present. The production GPU preset requires it;
+  ; explicit CPU-only packages intentionally have no canonical GPU worker.
   ClearErrors
   Delete "$INSTDIR\vlc-whisper-worker.exe.vw-new"
   File /nonfatal /oname=vlc-whisper-worker.exe.vw-new "@CMAKE_BINARY_DIR@/worker/vlc-whisper-worker.exe"
@@ -291,6 +293,18 @@ Section "VLC Plugin & AI Engine" SecCore
       ${EndIf}
     ${EndIf}
   ${EndIf}
+
+!if ${VW_PACKAGE_IS_GPU} == 0
+  ; Runtime discovery prefers vlc-whisper-worker.exe. A CPU-only upgrade must
+  ; remove any canonical GPU worker left by a previous GPU package so stale
+  ; code can never outrank the freshly installed -cpu worker.
+  ClearErrors
+  Delete "$INSTDIR\vlc-whisper-worker.exe"
+  ${If} ${FileExists} "$INSTDIR\vlc-whisper-worker.exe"
+    Delete /REBOOTOK "$INSTDIR\vlc-whisper-worker.exe"
+    SetRebootFlag true
+  ${EndIf}
+!endif
 
   ; CPU fallback is handled independently so GPU packages retain their
   ; loader-less fallback and CPU-only packages remain valid.
@@ -334,7 +348,7 @@ Section "VLC Plugin & AI Engine" SecCore
   SetOutPath "$INSTDIR\models"
   File "@CMAKE_SOURCE_DIR@/models/manifest.json"
   File "@CMAKE_SOURCE_DIR@/models/ggml-tiny.bin"
-  File /nonfatal "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
+  File "@CMAKE_SOURCE_DIR@/models/ggml-silero-vad.bin"
 
   SetOutPath "$INSTDIR\lua\extensions"
   File "@CMAKE_SOURCE_DIR@/lua/extensions/vlc_whisper_settings.lua"
