@@ -5,6 +5,11 @@ file(GLOB SNIPPET_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/snippets/*.c")
 foreach(SNIPPET_SRC ${SNIPPET_SOURCES})
     # Extract file basename without extension (e.g. whisper_pcm from snippets/whisper_pcm.c)
     get_filename_component(SNIPPET_NAME ${SNIPPET_SRC} NAME_WE)
+
+    if(SNIPPET_NAME STREQUAL "vw_sample_whisper_pcm" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        continue()
+    endif()
+
     set(TARGET_NAME "sample_${SNIPPET_NAME}")
 
     # Define executable target for snippet
