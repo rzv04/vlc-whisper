@@ -1,16 +1,25 @@
 // Copyright 2026 VLC-Whisper Contributors. All rights reserved.
 // Use of this source code is governed by the MIT License that can be found in the LICENSE file.
 //
-// vw_sample_whisper_pcm.c - Sample application demonstrating standalone WAV audio reading,
-// sample rate normalization (resampling to 16kHz), mono downmixing, Whisper engine setup,
-// and microsecond PTS timestamped transcription output.
-
-// Expected WAVE/RIFF format: PCM 16-bit mono at 16kHz
+// vw_sample_whisper_pcm.c - Linux-only sample application demonstrating standalone media-to-WAV
+// conversion, normalized PCM loading, Whisper engine setup, and microsecond PTS timestamped output.
+//
+// Runtime requirement: ffmpeg must be installed and discoverable through PATH. The sample launches
+// ffmpeg directly with fork()/execlp() (no shell) and converts the first audio stream of the input
+// into a temporary 16 kHz mono signed-16-bit PCM WAV file. This lets the same executable accept any
+// media format supported by the installed FFmpeg build, including WAV, MP3, MP4/M4A, MKV/WebM, MOV,
+// FLAC, Ogg/Opus/Vorbis, AAC, MPEG-TS, and similar audio/video containers.
+//
+// Build through the repository's Linux CMake configuration, then run:
+//   ./sample_vw_sample_whisper_pcm <path_to_ggml_model> <path_to_media>
+// Example:
+//   ./sample_vw_sample_whisper_pcm models/ggml-base.en.bin "samples/video/demo clip.mp4"
+//
+// FFmpeg conversion target (RIFF/WAVE): PCM 16-bit mono at 16 kHz
 // Offset  Size  Value / meaning
 // 0       4     "RIFF"
 // 4       4     file_size - 8               (uint32 little-endian)
 // 8       4     "WAVE"
-
 // 12      4     "fmt "
 // 16      4     16                          (fmt chunk size)
 // 20      2     1                           (PCM integer format)
@@ -19,29 +28,95 @@
 // 28      4     32000                       (bytes per second)
 // 32      2     2                           (bytes per sample frame)
 // 34      2     16                          (bits per sample)
+// 36+     ...   optional metadata chunks followed by "data" PCM samples
 
-// 36      4     "data"
-// 40      4     number_of_audio_bytes
-// 44      ...   PCM samples: int16 little-endian
+#define _POSIX_C_SOURCE 200809L
 
-// Usage: ./sample_vw_sample_whisper_pcm <path_to_ggml_model> <path_to_wav_audio>
+#if !defined(__linux__)
+#error "vw_sample_whisper_pcm.c is Linux-only because it uses POSIX process and temporary-file APIs"
+#endif
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <whisper.h>
 
 #include "vw_audio_buffer.h"
 
-// Default file paths for model weights and test audio fixtures
-#define VW_DEFAULT_MODEL_PATH "models/ggml-tiny.en.bin"
-#define VW_DEFAULT_WAV_PATH "samples/audio/output.wav"
-
-// Whisper model input invariants: 16kHz sample rate, 1 channel (mono)
+// Whisper model input invariants: 16 kHz sample rate, 1 channel (mono)
 #define VW_EXPECTED_SAMPLE_RATE WHISPER_SAMPLE_RATE
 #define VW_EXPECTED_NUM_CHANNELS 1
+#define VW_TEMP_WAV_TEMPLATE "/tmp/vw_whisper_pcm_XXXXXX"
+
+// Converts the first audio stream from an arbitrary FFmpeg-supported media file into a normalized
+// temporary WAV file. temp_wav_path must be a writable char array initialized from VW_TEMP_WAV_TEMPLATE.
+static bool vw_convert_media_to_wav(const char* input_path, char* temp_wav_path) {
+  if (input_path == NULL || input_path[0] == '\0' || temp_wav_path == NULL) {
+    return false;
+  }
+
+  int temp_fd = mkstemp(temp_wav_path);
+  if (temp_fd < 0) {
+    fprintf(stderr, "[vw_sample] Error: Failed to create temporary WAV file: %s\n", strerror(errno));
+    return false;
+  }
+
+  if (close(temp_fd) != 0) {
+    fprintf(stderr, "[vw_sample] Error: Failed to close temporary WAV file: %s\n", strerror(errno));
+    unlink(temp_wav_path);
+    return false;
+  }
+
+  pid_t child_pid = fork();
+  if (child_pid < 0) {
+    fprintf(stderr, "[vw_sample] Error: Failed to start ffmpeg process: %s\n", strerror(errno));
+    unlink(temp_wav_path);
+    return false;
+  }
+
+  if (child_pid == 0) {
+    execlp("ffmpeg", "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", input_path,
+           "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f",
+           "wav", temp_wav_path, (char*)NULL);
+
+    fprintf(stderr, "[vw_sample] Error: Failed to execute ffmpeg: %s\n", strerror(errno));
+    _exit(127);
+  }
+
+  int status = 0;
+  for (;;) {
+    pid_t wait_result = waitpid(child_pid, &status, 0);
+    if (wait_result == child_pid) {
+      break;
+    }
+    if (wait_result < 0 && errno == EINTR) {
+      continue;
+    }
+    fprintf(stderr, "[vw_sample] Error: Failed while waiting for ffmpeg: %s\n", strerror(errno));
+    unlink(temp_wav_path);
+    return false;
+  }
+
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (WIFEXITED(status)) {
+      fprintf(stderr, "[vw_sample] Error: ffmpeg conversion failed with exit code %d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+      fprintf(stderr, "[vw_sample] Error: ffmpeg conversion was terminated by signal %d\n", WTERMSIG(status));
+    } else {
+      fprintf(stderr, "[vw_sample] Error: ffmpeg conversion did not complete normally\n");
+    }
+    unlink(temp_wav_path);
+    return false;
+  }
+
+  return true;
+}
 
 // Reads a WAV file (16-bit signed PCM or 32-bit float PCM), downmixes multi-channel audio to mono,
 // and resamples to 16000 Hz if necessary using linear interpolation.
@@ -50,14 +125,12 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     return false;
   }
 
-  // Open WAV binary file for reading
   FILE* file = fopen(file_path, "rb");
   if (file == NULL) {
     fprintf(stderr, "Error: Failed to open WAV file '%s'\n", file_path);
     return false;
   }
 
-  // 1. Read and validate main RIFF/WAVE header
   vw_riff_header_t riff;
   if (fread(&riff, 1, sizeof(riff), file) != sizeof(riff)) {
     fprintf(stderr, "Error: Failed to read RIFF header from '%s'\n", file_path);
@@ -76,7 +149,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
   long data_offset = 0;
   uint32_t data_bytes = 0;
 
-  // 2. Iterate WAV sub-chunks sequentially to locate 'fmt ' and 'data' chunks
   while (!feof(file)) {
     vw_chunk_header_t chunk;
     if (fread(&chunk, 1, sizeof(chunk), file) != sizeof(chunk)) {
@@ -84,7 +156,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     }
 
     if (memcmp(chunk.subchunk_id, "fmt ", 4) == 0) {
-      // Parse format sub-chunk
       if (chunk.subchunk_size < 16) {
         fprintf(stderr, "Error: Invalid fmt chunk size in '%s'\n", file_path);
         fclose(file);
@@ -97,35 +168,42 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
         fclose(file);
         return false;
       }
-      // Skip extended format bytes if present
-      if (chunk.subchunk_size > 16) {
-        fseek(file, chunk.subchunk_size - 16, SEEK_CUR);
+      if (chunk.subchunk_size > 16 && fseek(file, (long)(chunk.subchunk_size - 16), SEEK_CUR) != 0) {
+        fprintf(stderr, "Error: Failed to skip extended fmt data in '%s'\n", file_path);
+        fclose(file);
+        return false;
+      }
+      if ((chunk.subchunk_size & 1u) != 0u && fseek(file, 1, SEEK_CUR) != 0) {
+        fprintf(stderr, "Error: Failed to skip fmt padding byte in '%s'\n", file_path);
+        fclose(file);
+        return false;
       }
       fmt_found = true;
     } else if (memcmp(chunk.subchunk_id, "data", 4) == 0) {
-      // Located audio payload chunk
       data_offset = ftell(file);
       data_bytes = chunk.subchunk_size;
       break;
     } else {
-      // Skip unrecognized metadata or padding chunks (LIST, INFO, etc.)
-      fseek(file, chunk.subchunk_size, SEEK_CUR);
+      long skip_bytes = (long)chunk.subchunk_size + (long)(chunk.subchunk_size & 1u);
+      if (fseek(file, skip_bytes, SEEK_CUR) != 0) {
+        fprintf(stderr, "Error: Failed to skip WAV metadata chunk in '%s'\n", file_path);
+        fclose(file);
+        return false;
+      }
     }
   }
 
-  if (!fmt_found || data_offset == 0) {
+  if (!fmt_found || data_offset <= 0) {
     fprintf(stderr, "Error: Could not locate fmt or data chunk in '%s'\n", file_path);
     fclose(file);
     return false;
   }
 
-  // Warn if source sample rate differs from 16kHz
   if (fmt.sample_rate != VW_EXPECTED_SAMPLE_RATE) {
     fprintf(stderr, "Warning: WAV sample rate is %u Hz (Whisper expects %u Hz)\n", fmt.sample_rate,
             VW_EXPECTED_SAMPLE_RATE);
   }
 
-  // Verify supported encoding (PCM 1 or IEEE Float 3)
   if (fmt.audio_format != 1 && fmt.audio_format != 3) {
     fprintf(stderr, "Error: Unsupported WAV audio format %u (only PCM 1 or float 3 supported)\n", fmt.audio_format);
     fclose(file);
@@ -141,8 +219,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
 
   size_t total_frame_samples = data_bytes / bytes_per_sample;
   size_t frame_count = total_frame_samples / fmt.num_channels;
-
-  // Allocate buffer for output float audio frames
   float* pcm_buffer = (float*)malloc(frame_count * sizeof(float));
   if (pcm_buffer == NULL) {
     fprintf(stderr, "Error: Failed to allocate PCM sample buffer\n");
@@ -150,11 +226,14 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     return false;
   }
 
-  fseek(file, data_offset, SEEK_SET);
+  if (fseek(file, data_offset, SEEK_SET) != 0) {
+    fprintf(stderr, "Error: Failed to seek to WAV data in '%s'\n", file_path);
+    free(pcm_buffer);
+    fclose(file);
+    return false;
+  }
 
-  // 3. Read raw PCM audio samples and downmix channels into mono float buffer
   if (fmt.audio_format == 1 && fmt.bits_per_sample == 16) {
-    // Read 16-bit signed integer PCM
     int16_t* raw_buf = (int16_t*)malloc(data_bytes);
     if (raw_buf == NULL) {
       free(pcm_buffer);
@@ -165,7 +244,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     size_t read_samples = read_bytes / sizeof(int16_t);
     size_t actual_frames = read_samples / fmt.num_channels;
 
-    // Convert int16 samples to float [-1.0f, +1.0f] and average across channels
     for (size_t i = 0; i < actual_frames; ++i) {
       float sum = 0.0f;
       for (uint16_t ch = 0; ch < fmt.num_channels; ++ch) {
@@ -176,7 +254,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     free(raw_buf);
     frame_count = actual_frames;
   } else if (fmt.audio_format == 3 && fmt.bits_per_sample == 32) {
-    // Read 32-bit IEEE float PCM
     float* raw_buf = (float*)malloc(data_bytes);
     if (raw_buf == NULL) {
       free(pcm_buffer);
@@ -188,7 +265,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     size_t read_samples = read_bytes / sizeof(float);
     size_t actual_frames = read_samples / fmt.num_channels;
 
-    // Average float channels into mono output
     for (size_t i = 0; i < actual_frames; ++i) {
       float sum = 0.0f;
       for (uint16_t ch = 0; ch < fmt.num_channels; ++ch) {
@@ -207,7 +283,6 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
 
   fclose(file);
 
-  // 4. Perform linear interpolation resampling to 16000 Hz if source rate differs
   if (fmt.sample_rate != VW_EXPECTED_SAMPLE_RATE && frame_count > 1) {
     printf("[vw_sample] Resampling from %u Hz to %u Hz...\n", fmt.sample_rate, VW_EXPECTED_SAMPLE_RATE);
     size_t target_count = (size_t)((double)frame_count * (double)VW_EXPECTED_SAMPLE_RATE / (double)fmt.sample_rate);
@@ -229,16 +304,15 @@ static bool vw_read_wav_pcm32(const char* file_path, vw_audio_pcm32_t* out_pcm) 
     }
   }
 
-  // Populate output struct
   out_pcm->samples = pcm_buffer;
   out_pcm->count = frame_count;
   out_pcm->sample_rate = VW_EXPECTED_SAMPLE_RATE;
-  out_pcm->channels = 1;
+  out_pcm->channels = VW_EXPECTED_NUM_CHANNELS;
 
   return true;
 }
 
-// Formats microsecond media PTS (int64_t pts_us) into HH:MM:SS.mmm display string
+// Formats microsecond media PTS (int64_t pts_us) into HH:MM:SS.mmm display string.
 static void vw_format_pts_us(int64_t pts_us, char* out_buf, size_t buf_size) {
   if (pts_us < 0) {
     pts_us = 0;
@@ -255,27 +329,40 @@ static void vw_format_pts_us(int64_t pts_us, char* out_buf, size_t buf_size) {
 }
 
 int main(int argc, char** argv) {
-  // Ensure unbuffered stdout/stderr for immediate console output
   setbuf(stdout, NULL);
   setbuf(stderr, NULL);
 
-  // Accept optional command-line arguments for model path and input WAV file path
-  const char* model_path = (argc > 1 && argv[1][0] != '\0') ? argv[1] : VW_DEFAULT_MODEL_PATH;
-  const char* wav_path = (argc > 2 && argv[2][0] != '\0') ? argv[2] : VW_DEFAULT_WAV_PATH;
+  if (argc != 3 || argv[1][0] == '\0' || argv[2][0] == '\0') {
+    fprintf(stderr, "Usage: %s <path_to_ggml_model> <path_to_media>\n", argv[0]);
+    return 2;
+  }
 
-  printf("[vw_sample] Loading model: %s\n", model_path);
-  printf("[vw_sample] Reading WAV audio: %s\n", wav_path);
+  const char* model_path = argv[1];
+  const char* input_path = argv[2];
 
-  // Read and normalize audio samples from WAV file
-  vw_audio_pcm32_t pcm = {0};
-  if (!vw_read_wav_pcm32(wav_path, &pcm)) {
-    fprintf(stderr, "[vw_sample] Error: Failed to load WAV audio from '%s'\n", wav_path);
+  printf("[vw_sample] Loading media: %s\n", input_path);
+  printf("[vw_sample] Converting first audio stream to 16 kHz mono PCM WAV...\n");
+
+  char temp_wav_path[] = VW_TEMP_WAV_TEMPLATE;
+  if (!vw_convert_media_to_wav(input_path, temp_wav_path)) {
     return 1;
   }
 
-  printf("[vw_sample] Audio loaded: %zu samples (%u Hz)\n", pcm.count, pcm.sample_rate);
+  vw_audio_pcm32_t pcm = {0};
+  if (!vw_read_wav_pcm32(temp_wav_path, &pcm)) {
+    fprintf(stderr, "[vw_sample] Error: Failed to load converted WAV audio\n");
+    unlink(temp_wav_path);
+    return 1;
+  }
 
-  // Initialize Whisper context from GGML binary model
+  if (unlink(temp_wav_path) != 0) {
+    fprintf(stderr, "[vw_sample] Warning: Failed to remove temporary WAV '%s': %s\n", temp_wav_path,
+            strerror(errno));
+  }
+
+  printf("[vw_sample] Audio loaded: %zu samples (%u Hz)\n", pcm.count, pcm.sample_rate);
+  printf("[vw_sample] Loading model: %s\n", model_path);
+
   struct whisper_context_params cparams = whisper_context_default_params();
   struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
   if (ctx == NULL) {
@@ -284,7 +371,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Configure inference parameters (greedy sampling, 4 threads, English language)
   struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   wparams.print_realtime = false;
   wparams.print_progress = false;
@@ -301,16 +387,14 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Retrieve transcription text segments and convert timestamps to signed microsecond PTS (int64_t pts_us)
   int n_segments = whisper_full_n_segments(ctx);
   printf("[vw_sample] Transcription complete. Segments found: %d\n", n_segments);
 
   for (int i = 0; i < n_segments; ++i) {
     const char* text = whisper_full_get_segment_text(ctx, i);
-    int64_t t0 = whisper_full_get_segment_t0(ctx, i);  // Timestamp in 10ms units
+    int64_t t0 = whisper_full_get_segment_t0(ctx, i);
     int64_t t1 = whisper_full_get_segment_t1(ctx, i);
 
-    // Convert 10ms units to microsecond media timestamps (pts_us)
     int64_t start_pts_us = t0 * 10000;
     int64_t end_pts_us = t1 * 10000;
 
@@ -322,7 +406,6 @@ int main(int argc, char** argv) {
     printf("[%s -> %s] (pts_us: %ld -> %ld) %s\n", start_str, end_str, (long)start_pts_us, (long)end_pts_us, text);
   }
 
-  // Clean up allocated memory and Whisper context
   whisper_free(ctx);
   free(pcm.samples);
   return 0;
