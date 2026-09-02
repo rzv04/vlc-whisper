@@ -96,18 +96,56 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 
 ---
 
-## Milestone 5: Post-MVP Automation & Platforms (Planned)
+## Milestone 5: Reliability, Quality Gates & Distribution (Planned)
 
-- [ ] 24. **Linux Native Desktop Support**: Transition Linux from a developer build target to an officially supported package (VLC plugin packaging, packaging scripts, and acceptance verification on Ubuntu/Fedora).
-- [ ] 25. **Automated CI/CD Release Pipeline**: Add Windows CI runners and automated GitHub Actions release workflow for signed/hashed multi-artifact release builds.
-- [ ] 26. **Deferred — Regression Benchmark Suite**: Establish a standardized corpus of regression audio/video media across varied acoustic conditions; measure Whisper inference latency across backends (CPU vs Vulkan GPU), Silero GGML VAD evaluation overhead and real-time factor across 6s–24s windows, and track audio queue high-water marks.
+The post-MVP priority is to make transcription changes measurable and releases repeatable before expanding the feature surface. Local-file seeking, live/non-seekable operation, caption stability, and privacy guarantees remain regression constraints rather than optional modes.
 
-**Exit Status:** **PLANNED** — Fully automated multi-platform release pipeline with Linux desktop support.
+- [ ] 24. **Regression Media Corpus & Automated Quality/Latency Gates**: establish a versioned corpus of short audio/video fixtures covering clean and noisy English, accented speech, multilingual speech, music/background noise, sparse speech, rapid speech, seek/pause/rate-change scenarios, and simulated live/non-seekable input. Record ground-truth text and broad timing expectations where practical; automatically track WER/CER, first-caption latency, caption latency percentiles, inference real-time factor, timing error, duplicate/hallucination rate, dropped-audio count, queue high-water marks, and visible caption stability.
+- [ ] 25. **Live/Non-Seekable Latency Completion**: complete and validate progressive live inference so first useful inference starts before the full steady-state context is available, while retaining bounded acoustic context, lower steady-state hop latency, right-edge hypothesis protection, immutable displayed captions, and unchanged seekable/local-media behavior. Any LocalAgreement-, AlignAtt-, or other streaming-policy experiment must be evaluated against the regression corpus before adoption.
+- [ ] 26. **Measured Transcription Quality Pass**: investigate accuracy, hallucination reduction, punctuation, prompt/context policy, VAD interaction, decoding parameters, and long-form behavior across supported languages. Adopt changes only when the corpus shows a net improvement without material regressions to live latency, seek recovery, local-media latency, or caption stability.
+- [ ] 27. **Linux Native Desktop Support**: transition Linux from a developer build target to an officially supported installation path with VLC plugin packaging, worker/model deployment, uninstall behavior, and acceptance verification on at least Ubuntu and Fedora-class environments.
+- [ ] 28. **Automated CI/CD & Clean-Machine Release Validation**: add trustworthy Windows and Linux release jobs, reproducible installer/archive generation, checksums, release-note automation from manually selected release tags, and clean-machine smoke coverage for install/upgrade/uninstall and CPU/GPU fallback behavior.
+
+**Exit Status:** **PLANNED** — Quality and latency changes are corpus-gated, live captioning meets the post-MVP latency target without destabilizing other source modes, and Windows/Linux releases are repeatable from CI with clean-machine acceptance coverage.
 
 ---
 
-## Milestone 6: Transcription Quality & Acoustic Enhancements (Planned)
+## Milestone 6: Caption Workflow & Native Control Plane (Planned)
 
-- [ ] 27. **Transcription Quality Pass**: Comprehensive investigation and optimization pass for transcription accuracy, hallucination reduction, punctuation restoration, acoustic model tuning, and long-form audio handling across diverse languages and recording conditions.
+This milestone turns the current settings surface into a durable application control plane and makes generated captions useful beyond the current playback session.
 
-**Exit Status:** **PLANNED** — Measurably improved WER/CER (at least anecdotally) and robust handling of challenging audio sources.
+- [ ] 29. **Production Native Qt Settings/Control Application**: replace the constrained Lua settings UI with the validated native Qt frontend while preserving the existing configuration keys and safe apply/restart semantics. Treat Qt as the user-facing control plane for model management, backend/language/thread selection, translation configuration, diagnostics, provider configuration, export, and version/update information; bundle all required Qt runtime components so end users do not install Qt separately.
+- [ ] 30. **Subtitle Export (SRT/WebVTT)**: allow explicit user-initiated export of finalized source captions, translated captions, or dual-language captions using the existing media-timestamped segment representation. Transcript persistence remains opt-in and no transcript is written by default.
+- [ ] 31. **Full-Media Transcription to Subtitle File**: for seekable media, provide an explicit offline/batch path that uses the source decoder and existing timing/segmentation stack without playback pacing, producing SRT/WebVTT faster than real time where hardware permits while remaining isolated from the live-caption path.
+- [ ] 32. **Latency/Quality Profiles**: expose user-facing profiles such as `Low latency`, `Balanced`, and `Accuracy` rather than individual streaming-window/VAD/decoder internals. Keep advanced algorithm knobs private or explicitly advanced so implementation details can evolve without permanently binding the settings format.
+- [ ] 33. **Automatic Language Detection with Session Lock**: add an `Auto` language option that detects from an initial speech-rich sample and then locks the resolved language for the session/epoch, avoiding unstable per-window language switching. Preserve explicit-language mode for deterministic operation.
+- [ ] 34. **Existing Subtitle Policy & Translation**: add a policy such as `Prefer existing subtitles`, `Generate if unavailable`, and `Always generate`; when a suitable subtitle track already exists, allow the opt-in translation pipeline to translate that text without unnecessarily running ASR. Keep generated and source subtitle tracks independently selectable and avoid duplicate on-screen captions.
+
+**Exit Status:** **PLANNED** — VLC-Whisper has a native, packaged control plane; users can export or batch-generate subtitle files; common latency/accuracy choices are simple; and existing subtitle tracks can coexist intelligently with generated captions.
+
+---
+
+## Milestone 7: Pluggable Inference & BYOK Providers (Planned)
+
+Local `whisper.cpp` remains the default, offline, no-account transcription backend. Remote inference is an optional extension of the architecture, not a replacement for local transcription.
+
+- [ ] 35. **Provider-Neutral ASR Interface**: define a worker-side transcription-provider boundary that normalizes audio/chunk submission and returns caption segments into the existing media-timestamped segment builder/presenter path. Keep provider-specific SDK/HTTP behavior out of VLC callbacks and out of the caption presenter.
+- [ ] 36. **ASR Capability Negotiation**: model provider capabilities explicitly, including streaming vs chunked input, segment timestamps, word timestamps, partial hypotheses, language detection, maximum input duration, and cancellation semantics. Providers with weaker timing output must degrade gracefully to coarser segment timing instead of weakening the local Whisper path.
+- [ ] 37. **Secure BYOK Credential Persistence**: let users opt into third-party inference by entering their own API key in the native settings application; persist credentials using platform-appropriate protected storage rather than plaintext project configuration wherever feasible, never log keys, never place them in benchmark reports, and redact them from diagnostics.
+- [ ] 38. **First Remote Speech Provider Adapter**: implement and validate the first opt-in third-party transcription provider behind the provider interface, including chunk/frame adaptation, cancellation on seek/session changes, rate/error handling, capability-specific timestamp behavior, and regression coverage against local playback semantics.
+- [ ] 39. **Provider Privacy & Failure UX**: disclose when audio leaves the device, which provider receives it, what data is sent, and which features/timestamps differ from local Whisper. Remote-provider failure must fail closed to a clear status or an explicitly configured local fallback; it must never silently transmit audio or silently change provider.
+
+**Exit Status:** **PLANNED** — Users can choose local Whisper or an explicitly configured BYOK provider through one capability-aware interface, with preserved timeline semantics, secure credential handling, and unambiguous audio-egress disclosure.
+
+---
+
+## Milestone 8: VLC Ecosystem & Upstream Compatibility (Planned)
+
+VLC-Whisper should remain useful for VLC 3 users while being prepared to coexist with VLC 4's native speech-to-text work rather than permanently duplicating it.
+
+- [ ] 40. **VLC 4 Compatibility Validation**: maintain a VLC 4 validation track as its module/API surface stabilizes; document which VLC-Whisper features work unchanged, require compatibility shims, or are superseded by native functionality, without sacrificing the supported VLC 3 path prematurely.
+- [ ] 41. **Native STT Detection & Coexistence Policy**: detect or otherwise account for VLC-native speech-to-text/caption facilities when available so VLC-Whisper does not create duplicate AI subtitle tracks or fight native caption lifecycle behavior. Prefer explicit user choice when both engines are available.
+- [ ] 42. **Upstream Contribution Assessment**: identify self-contained work that may benefit VideoLAN independently—such as worker isolation lessons, seek/session epoch handling, source look-ahead behavior, model provisioning hardening, Windows lifecycle fixes, regression fixtures, or compatibility findings—and upstream only where the architecture and maintainer interest align.
+- [ ] 43. **Platform Expansion Based on Demand**: evaluate macOS and additional Linux packaging formats only after Windows/Linux reliability and VLC 4 compatibility are established. New platforms must meet the same realtime-callback, privacy, lifecycle, and regression-corpus gates rather than shipping as best-effort ports.
+
+**Exit Status:** **PLANNED** — VLC-Whisper remains a dependable VLC 3 captioning solution, has a tested VLC 4 coexistence strategy, and can selectively contribute reusable work upstream without tying the project to duplication of VLC-native STT forever.
