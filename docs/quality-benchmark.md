@@ -16,7 +16,7 @@ The benchmark is separate from `vw_benchmark.c`. Runtime benchmark reports remai
 
 The benchmark is fully headless. It does **not** launch VLC, initialize a VLC GUI, require X11/Wayland, require a Linux desktop environment, or open an audio playback device. It can be run from a plain terminal, SSH session, or other headless environment as long as the normal build/runtime dependencies are present.
 
-Use a developer/test configuration with `BUILD_TESTING=ON` (the supplied debug/coverage presets do this). Those builds include environment-gated benchmark completion hooks in the worker. Release/package workers do not include those hooks and are not valid benchmark workers.
+Configure the worker with `VW_QUALITY_BENCHMARK_HOOKS=ON`. The option is deliberately OFF by default so normal development, release, and package workers do not include benchmark-only link wrappers. A quality run rejects a worker built without these hooks instead of silently scoring an unverified partial result.
 
 The Python orchestration requires Python 3.10+ for the project workflow. Corpus download additionally requires the packages in `tools/quality_benchmark/requirements.txt`. Downloading is the only network-dependent benchmark step.
 
@@ -58,13 +58,13 @@ python tools/quality_benchmark/vw_download_corpus.py --per-language 1
 
 `vw-quality-benchmark` does not initialize VLC and does not open an audio playback device. It launches the project worker through the existing authenticated local worker-client API and captures the same final `CAPTION_SEGMENT` frames that the VLC plugin receives.
 
-The developer/test worker contains two environment-gated benchmark hooks. They are inactive during ordinary worker use and do not change protocol v1.6. During a quality run they expose only temporary completion metadata: the source-decoder EOF boundary and the worker queue's cumulative dropped-audio duration. No PCM or transcript is written by these hooks.
+A worker configured with `VW_QUALITY_BENCHMARK_HOOKS=ON` contains two environment-gated benchmark hooks. They are inactive during ordinary worker use and do not change protocol v1.6. During a quality run they expose only temporary completion metadata: the source-decoder EOF boundary and the worker queue's cumulative dropped-audio duration. No PCM or transcript is written by these hooks.
 
 ### Live mode
 
 The runner starts a `VW_SOURCE_LIVE_AUDIO` session and sends the WAV as 20 ms, 16 kHz mono S16LE `AUDIO` frames. Sending is paced against monotonic wall time at exactly 1x media speed. This exercises the production live path, including progressive 2 -> 8 second analysis, 1 second steady-state hops, VAD, 500 ms right-edge holdback, segment filtering, and committed-caption deduplication.
 
-After the source PCM, the runner supplies one second of silent PCM at the same 1x pace so the existing right-edge policy gets a final opportunity to commit trailing speech. It then sends `SHUTDOWN` after all audio frames and keeps draining worker output until the authenticated IPC pipe reaches EOF and the worker process exits. Because worker input is a FIFO queue, that shutdown is the completion barrier for all earlier accepted audio work. The barrier has a bounded 120 second timeout; timeout or premature worker failure invalidates the sample.
+After the source PCM, the runner supplies **1.5 seconds** of silent PCM at the same 1x pace. The 500 ms portion clears the production right-edge holdback and the additional full 1 second guarantees that even a clip ending immediately after an inference hop crosses the next progressive/steady-state inference frontier. For example, a 2.8 second clip is paced through 4.3 seconds, so the 4.0 second pass can commit speech held at the 3.0 second pass. The runner then sends `SHUTDOWN` after all audio frames and keeps draining worker output until the authenticated IPC pipe reaches EOF and the worker process exits. Because worker input is a FIFO queue, that shutdown is the completion barrier for all earlier accepted audio work. The barrier has a bounded 120 second timeout; timeout or premature worker failure invalidates the sample.
 
 The worker queue hook records the true cumulative dropped-audio counter. Any nonzero drop invalidates the sample, including an audio frame evicted while making room for the final shutdown frame. WER/CER is therefore never reported from a knowingly partial live run.
 
@@ -76,18 +76,20 @@ The runner sends media `POSITION` updates every 100 ms at 1x wall-clock speed. T
 
 After the final playback position, the runner waits for the worker's real source EOF boundary: the same third consecutive zero-length decoder read that causes `vw_worker.c` to enter its EOF flush path. The runner continues receiving caption/status frames while waiting. Once that marker appears, the worker still completes the current synchronous EOF flush and caption emission before it can dequeue the runner's subsequent `SHUTDOWN`. The runner then drains output through IPC EOF and worker exit. Both EOF and shutdown waits are bounded to 120 seconds and fail closed.
 
+The Python parent watchdog is deliberately looser than these C-level barriers. It budgets media pacing, worker/model startup, one 120 second completion phase for live mode, two possible 120 second phases for look-ahead mode, and an additional outer grace interval. This prevents the orchestrator from killing a valid slow CPU run before the C runner can report its own bounded timeout.
+
 ### No sound leakage
 
 Neither benchmark mode sends PCM to an audio output API. Live PCM is written only to authenticated local IPC; look-ahead audio is decoded inside the worker. Running the benchmark therefore produces no audible playback unless unrelated software independently plays the same files.
 
 ## Build
 
-The benchmark target is developer-only and excluded from normal package builds. Use a developer/test build with `BUILD_TESTING=ON`; the supplied debug presets satisfy this requirement and enable the completion hooks used to prove a run is complete.
+The benchmark target is developer-only and excluded from normal package builds. The worker completion hooks are separately opt-in and must be enabled explicitly with `-DVW_QUALITY_BENCHMARK_HOOKS=ON`.
 
 Linux example:
 
 ```bash
-cmake --preset linux-x64-debug
+cmake --preset linux-x64-debug -DVW_QUALITY_BENCHMARK_HOOKS=ON
 cmake --build --preset linux-x64-debug --target vw-quality-benchmark vlc-whisper-worker
 ```
 
@@ -96,11 +98,11 @@ If that preset configures without Vulkan, the worker target may be named `vlc-wh
 Windows example:
 
 ```powershell
-cmake --preset windows-x64-debug
+cmake --preset windows-x64-debug -DVW_QUALITY_BENCHMARK_HOOKS=ON
 cmake --build --preset windows-x64-debug --target vw-quality-benchmark vlc-whisper-worker
 ```
 
-A CPU-only **developer/test** preset is also valid. `vw_benchmark.py` discovers both canonical and `-cpu` worker names. Packaged release workers are intentionally not supported benchmark workers because release builds omit the test-only completion hooks.
+A CPU-only developer/test preset is also valid when configured with the same hook option. `vw_benchmark.py` discovers both canonical and `-cpu` worker names. Normal release/package workers intentionally leave `VW_QUALITY_BENCHMARK_HOOKS` OFF and are not supported benchmark workers.
 
 ## Run
 
