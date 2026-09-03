@@ -222,7 +222,7 @@ cd vlc-whisper
 | `windows-x64-debug`       | Windows x64   | Vulkan GPU (development may fall back to CPU) | `vlc-whisper-worker.exe`     | Windows debug symbols        |
 
 > [!WARNING]
-> About `windows-x64-release`: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset. For the MinGW cross-build, provide a `VW_VULKAN_SDK` environment variable when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
+> About `windows-x64-release`: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset name. For the MinGW cross-build, provide a `VW_VULKAN_SDK` environment variable when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
 
 ---
 
@@ -273,12 +273,12 @@ For an offline release build, omit `-DVW_PROVISION_MODELS=ON` and place the two 
 
 #### Headless EN/RO ASR Quality Benchmark
 
-A developer-only WER/CER regression benchmark lives under `tools/quality_benchmark/`. It is fully headless: it does not launch VLC, play audio, or require X11/Wayland or a Linux desktop environment. Use a developer/test build (`BUILD_TESTING=ON`), download the local FLEURS corpus explicitly, then run the Python orchestrator. The corpus and reports stay git-ignored and no media fixtures are committed.
+A developer-only WER/CER regression benchmark lives under `tools/quality_benchmark/`. It is fully headless: it does not launch VLC, play audio, or require X11/Wayland or a Linux desktop environment. Configure a developer/test build with `VW_QUALITY_BENCHMARK_HOOKS=ON`, download the local FLEURS corpus explicitly, then run the Python orchestrator. The corpus and reports stay git-ignored and no media fixtures are committed.
 
 ```bash
 python -m pip install -r tools/quality_benchmark/requirements.txt
 python tools/quality_benchmark/vw_download_corpus.py
-cmake --preset linux-x64-debug
+cmake --preset linux-x64-debug -DVW_QUALITY_BENCHMARK_HOOKS=ON
 cmake --build --preset linux-x64-debug --target vw-quality-benchmark vlc-whisper-worker
 python tools/quality_benchmark/vw_benchmark.py --build-dir build/linux-x64-debug --model models/ggml-tiny.bin
 ```
