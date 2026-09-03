@@ -240,7 +240,7 @@ static bool vw_quality_prepare_markers(const char* prefix) {
   if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_DROPS_MARKER_SUFFIX)) return false;
   FILE* drops = fopen(path, "wb");
   if (!drops) return false;
-  bool write_ok = fputs("0", drops) >= 0;
+  bool write_ok = fputs("uninitialized", drops) >= 0;
   bool close_ok = fclose(drops) == 0;
   bool ok = write_ok && close_ok;
   if (!ok) remove(path);
@@ -677,7 +677,7 @@ int main(int argc, char** argv) {
 
   int64_t final_dropped_audio_us = 0;
   if (!vw_quality_read_drop_marker(marker_prefix, &final_dropped_audio_us)) {
-    fprintf(stderr, "quality runner: failed reading final worker drop counter\n");
+    fprintf(stderr, "quality runner: invalid benchmark worker; enable VW_QUALITY_BENCHMARK_HOOKS when configuring\n");
     ok = false;
   } else {
     result.dropped_audio_us = final_dropped_audio_us;
