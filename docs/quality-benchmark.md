@@ -8,11 +8,15 @@ It is intentionally an anecdotal regression corpus, not a statistically represen
 
 The benchmark is separate from `vw_benchmark.c`. Runtime benchmark reports remain transcript-free and privacy-safe; this developer tool explicitly handles reference/hypothesis text only inside git-ignored local benchmark storage.
 
-## Platforms
+## Platforms and headless operation
 
-- **Windows 10/11 x64:** supported. The C runner launches the ordinary Windows worker and look-ahead uses Media Foundation source decoding.
-- **Linux x64:** supported. The C runner launches the ordinary Linux worker. Look-ahead requires the build to have FFmpeg source-decoder support (`libavformat`, `libavcodec`, `libswresample`, `libavutil` development packages available when configuring CMake).
+- **Windows 10/11 x64:** supported with a GNU/MinGW developer/test build. Look-ahead uses Media Foundation source decoding.
+- **Linux x64:** supported with a GNU/Clang developer/test build. Look-ahead requires FFmpeg source-decoder support (`libavformat`, `libavcodec`, `libswresample`, and `libavutil` development packages available when configuring CMake).
 - **macOS:** not supported by the project and not claimed by this benchmark.
+
+The benchmark is fully headless. It does **not** launch VLC, initialize a VLC GUI, require X11/Wayland, require a Linux desktop environment, or open an audio playback device. It can be run from a plain terminal, SSH session, or other headless environment as long as the normal build/runtime dependencies are present.
+
+Use a developer/test configuration with `BUILD_TESTING=ON` (the supplied debug/coverage presets do this). Those builds include environment-gated benchmark completion hooks in the worker. Release/package workers do not include those hooks and are not valid benchmark workers.
 
 The Python orchestration requires Python 3.10+ for the project workflow. Corpus download additionally requires the packages in `tools/quality_benchmark/requirements.txt`. Downloading is the only network-dependent benchmark step.
 
@@ -52,13 +56,17 @@ python tools/quality_benchmark/vw_download_corpus.py --per-language 1
 
 ## What the C runner measures
 
-`vw-quality-benchmark` does not initialize VLC and does not open an audio playback device. It launches the normal `vlc-whisper-worker` process through the existing authenticated local worker-client API and captures the same final `CAPTION_SEGMENT` frames that the VLC plugin receives.
+`vw-quality-benchmark` does not initialize VLC and does not open an audio playback device. It launches the project worker through the existing authenticated local worker-client API and captures the same final `CAPTION_SEGMENT` frames that the VLC plugin receives.
+
+The developer/test worker contains two environment-gated benchmark hooks. They are inactive during ordinary worker use and do not change protocol v1.6. During a quality run they expose only temporary completion metadata: the source-decoder EOF boundary and the worker queue's cumulative dropped-audio duration. No PCM or transcript is written by these hooks.
 
 ### Live mode
 
 The runner starts a `VW_SOURCE_LIVE_AUDIO` session and sends the WAV as 20 ms, 16 kHz mono S16LE `AUDIO` frames. Sending is paced against monotonic wall time at exactly 1x media speed. This exercises the production live path, including progressive 2 -> 8 second analysis, 1 second steady-state hops, VAD, 500 ms right-edge holdback, segment filtering, and committed-caption deduplication.
 
-After the source PCM, the runner supplies one second of silent PCM at the same 1x pace so the existing right-edge policy gets a final opportunity to commit trailing speech. It then performs a short receive drain. If the worker reports dropped audio, the sample is rejected instead of silently treating an overloaded run as an algorithmic WER result.
+After the source PCM, the runner supplies one second of silent PCM at the same 1x pace so the existing right-edge policy gets a final opportunity to commit trailing speech. It then sends `SHUTDOWN` after all audio frames and keeps draining worker output until the authenticated IPC pipe reaches EOF and the worker process exits. Because worker input is a FIFO queue, that shutdown is the completion barrier for all earlier accepted audio work. The barrier has a bounded 120 second timeout; timeout or premature worker failure invalidates the sample.
+
+The worker queue hook records the true cumulative dropped-audio counter. Any nonzero drop invalidates the sample, including an audio frame evicted while making room for the final shutdown frame. WER/CER is therefore never reported from a knowingly partial live run.
 
 ### Look-ahead mode
 
@@ -66,13 +74,15 @@ The runner starts the worker with the local WAV path as `VW_SOURCE_LOCAL_FILE` a
 
 The runner sends media `POSITION` updates every 100 ms at 1x wall-clock speed. The worker itself retains its production 30 second ahead-of-playhead decode policy and VAD-guided non-overlapping source chunking. This means the benchmark paces playback realistically while still testing the actual look-ahead algorithm rather than a Python reimplementation.
 
+After the final playback position, the runner waits for the worker's real source EOF boundary: the same third consecutive zero-length decoder read that causes `vw_worker.c` to enter its EOF flush path. The runner continues receiving caption/status frames while waiting. Once that marker appears, the worker still completes the current synchronous EOF flush and caption emission before it can dequeue the runner's subsequent `SHUTDOWN`. The runner then drains output through IPC EOF and worker exit. Both EOF and shutdown waits are bounded to 120 seconds and fail closed.
+
 ### No sound leakage
 
 Neither benchmark mode sends PCM to an audio output API. Live PCM is written only to authenticated local IPC; look-ahead audio is decoded inside the worker. Running the benchmark therefore produces no audible playback unless unrelated software independently plays the same files.
 
 ## Build
 
-The benchmark target is developer-only and excluded from normal package builds.
+The benchmark target is developer-only and excluded from normal package builds. Use a developer/test build with `BUILD_TESTING=ON`; the supplied debug presets satisfy this requirement and enable the completion hooks used to prove a run is complete.
 
 Linux example:
 
@@ -90,7 +100,7 @@ cmake --preset windows-x64-debug
 cmake --build --preset windows-x64-debug --target vw-quality-benchmark vlc-whisper-worker
 ```
 
-A CPU-only preset is also valid. `vw_benchmark.py` discovers both canonical and `-cpu` worker names.
+A CPU-only **developer/test** preset is also valid. `vw_benchmark.py` discovers both canonical and `-cpu` worker names. Packaged release workers are intentionally not supported benchmark workers because release builds omit the test-only completion hooks.
 
 ## Run
 
@@ -124,7 +134,7 @@ Useful options:
 
 `--mode both` is the default. The model directory is forwarded to the worker so a colocated Silero VAD model is discovered the same way as normal development runs.
 
-A default run with roughly 3-4 minutes of corpus speech takes approximately the corpus duration once for live plus once for look-ahead, plus model inference/startup and small per-clip settle overhead. Because both modes are wall-clock paced, a 3.5 minute corpus should normally require roughly 7-10 minutes per model on hardware capable of keeping up in real time.
+A default run with roughly 3-4 minutes of corpus speech takes approximately the corpus duration once for live plus once for look-ahead, plus model inference/startup and bounded completion draining. Because both modes pace the media timeline at 1x, a 3.5 minute corpus should normally require roughly 7-10 minutes per model on hardware capable of keeping up in real time. Slower CPU-only inference can extend the completion phase rather than being truncated into an invalid partial score.
 
 ## WER and CER
 
@@ -163,6 +173,8 @@ tools/quality_benchmark/local/results/
 ```
 
 The report includes references, hypotheses, per-sample WER/CER, worker timing/status fields, requested backend/thread count, model path, dataset revision, and aggregate scores. These reports are intentionally local and ignored by Git.
+
+Temporary worker completion markers contain only EOF state and an integer dropped-audio duration. They are placed in the OS temporary directory, removed by the runner, and contain neither PCM nor transcripts.
 
 For comparisons across commits, keep constant at minimum:
 
