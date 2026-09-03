@@ -139,8 +139,8 @@ static bool vw_quality_load_wav(const char* path, vw_quality_audio_t* out_audio)
     return false;
   }
 
-  const uint64_t max_bytes = (uint64_t)VW_QUALITY_MAX_AUDIO_SECONDS * VW_QUALITY_SAMPLE_RATE *
-                             VW_QUALITY_SAMPLE_WIDTH;
+  const uint64_t max_bytes =
+      (uint64_t)VW_QUALITY_MAX_AUDIO_SECONDS * VW_QUALITY_SAMPLE_RATE * VW_QUALITY_SAMPLE_WIDTH;
   if ((uint64_t)data_bytes > max_bytes) {
     fprintf(stderr, "quality runner: WAV exceeds %u second safety bound\n", VW_QUALITY_MAX_AUDIO_SECONDS);
     fclose(file);
@@ -240,7 +240,9 @@ static bool vw_quality_prepare_markers(const char* prefix) {
   if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_DROPS_MARKER_SUFFIX)) return false;
   FILE* drops = fopen(path, "wb");
   if (!drops) return false;
-  bool ok = fputs("0", drops) >= 0 && fclose(drops) == 0;
+  bool write_ok = fputs("0", drops) >= 0;
+  bool close_ok = fclose(drops) == 0;
+  bool ok = write_ok && close_ok;
   if (!ok) remove(path);
   return ok && vw_quality_set_marker_env(prefix);
 }
@@ -635,7 +637,8 @@ int main(int argc, char** argv) {
   }
 
   char marker_prefix[VW_PATH_MAX_BYTES];
-  if (!vw_quality_make_marker_prefix(marker_prefix, sizeof(marker_prefix)) || !vw_quality_prepare_markers(marker_prefix)) {
+  if (!vw_quality_make_marker_prefix(marker_prefix, sizeof(marker_prefix)) ||
+      !vw_quality_prepare_markers(marker_prefix)) {
     fprintf(stderr, "quality runner: failed preparing worker completion markers\n");
     free(result.segments);
     vw_quality_free_audio(&audio);
