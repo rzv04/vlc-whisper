@@ -65,10 +65,10 @@ dkms.conf
 # KDE directory preferences
 .directory
 
-# Linux trash folder which might appear on any partition or disk
+# Linux trash folder which might appear on any partition
 .Trash-*
 
-# .nfs files are created when an open file is removed but is still being accessed
+# .nfs files
 .nfs*
 
 ### VisualStudioCode ###
@@ -206,3 +206,7 @@ _CPack_Packages/
 # Local spikes / scratch files not for commit
 samples/snippets/*.as
 samples/snippets/*.png
+
+# Developer-only ASR quality corpus, transcripts, hypotheses, and reports
+tools/quality_benchmark/local/
+tools/quality_benchmark/__pycache__/
