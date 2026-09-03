@@ -81,9 +81,9 @@ static bool vw_convert_media_to_wav(const char* input_path, char* temp_wav_path)
   }
 
   if (child_pid == 0) {
-    execlp("ffmpeg", "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", input_path,
-           "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f",
-           "wav", temp_wav_path, (char*)NULL);
+    execlp("ffmpeg", "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", input_path, "-map",
+           "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", temp_wav_path,
+           (char*)NULL);
 
     fprintf(stderr, "[vw_sample] Error: Failed to execute ffmpeg: %s\n", strerror(errno));
     _exit(127);
@@ -356,8 +356,7 @@ int main(int argc, char** argv) {
   }
 
   if (unlink(temp_wav_path) != 0) {
-    fprintf(stderr, "[vw_sample] Warning: Failed to remove temporary WAV '%s': %s\n", temp_wav_path,
-            strerror(errno));
+    fprintf(stderr, "[vw_sample] Warning: Failed to remove temporary WAV '%s': %s\n", temp_wav_path, strerror(errno));
   }
 
   printf("[vw_sample] Audio loaded: %zu samples (%u Hz)\n", pcm.count, pcm.sample_rate);
