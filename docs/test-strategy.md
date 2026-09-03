@@ -14,6 +14,7 @@ The primary invariant is: **captioning must never harm playback**. A transcripti
 | VLC integration    | Module behavior      | Load/unload, PCM capture format, display scheduling, pause/end/stop                     |
 | End-to-end         | Pinned Windows VLC   | Install, local video, visible captions, worker crash, seek rejection, uninstall         |
 | Performance        | Reference machines   | Real-time factor, p50/p95 caption latency, CPU/RAM, queue drops, per-session report      |
+| ASR regression     | Local developer run  | EN/RO FLEURS, 1x live/look-ahead committed captions, corpus-weighted WER/CER            |
 | Security/privacy   | Local boundary       | Pipe ACLs, random name/token, no listener, no remote traffic, log redaction             |
 
 ## Code Coverage
@@ -31,6 +32,18 @@ Keep legal, small, versioned fixtures: synthetic tones/silence, public-domain or
 Golden expected text should tolerate model-version variance only through explicit normalization policy. Pin model hash and whisper.cpp commit for exact regression tests; if either changes, review differences intentionally rather than silently re-baselining.
 
 Step 20 benchmark reports are aggregate, local, and key/value formatted. They include session duration, audio chunks and duration sent, worker frames and captions received, captions sent to the presenter, plugin-filtered captions (paused, stale, or presenter-rejected), segment audio duration/text bytes, cumulative `whisper_full()` time, real-time factor (`inference / input audio`), processing speed ratio (`input audio / inference`), first sent-caption elapsed time, and live-mode utterance latency min/p50/p95/max. Latency is sampled only when live system-date PTS can be mapped to monotonic time; source-mode media timestamps are not mixed with that clock. Speed metrics exclude post-filtering. Reports are created with unique temporary names, flushed during active playback, finalized on normal teardown, and contain no transcript, PCM, URL, token, or telemetry.
+
+## Local ASR regression corpus
+
+The WER/CER benchmark under `tools/quality_benchmark/` is deliberately separate from Step 20 runtime diagnostics. It is a developer-only, headless quality check and may contain reference/hypothesis text in its git-ignored local results.
+
+- Corpus acquisition is explicit and local: `vw_download_corpus.py` downloads a deterministic FLEURS test subset, 10 `en_us` and 10 `ro_ro` clips by default. No corpus audio/video is committed.
+- CI never downloads FLEURS and never runs model WER/CER. CI only builds the C runner and runs the network-free Python helper tests.
+- Real quality runs use a developer/test worker build (`BUILD_TESTING=ON`) and require zero actual worker queue drops.
+- Live mode sends 20 ms PCM frames at 1x, includes the normal progressive 2 -> 8 second/1 second-hop behavior, then uses worker shutdown/IPC EOF as a bounded processing barrier.
+- Look-ahead mode sends playback `POSITION` at 1x while preserving the production 30 second decode lead, waits for the worker's actual source EOF transition, then drains through worker shutdown/IPC EOF.
+- Completion waits are bounded and fail closed. Slow inference may extend the run but must not be truncated into a partial WER/CER result.
+- Scores are corpus-weighted edit counts per `{language, mode}` using the documented language-neutral normalizer; Romanian diacritics are preserved. See `docs/quality-benchmark.md`.
 
 ## Required cases
 
@@ -98,30 +111,4 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 - `tests/unit/test_caption_presenter.c` (17e.2): `VW_CAPTION_MIN_DISPLAY_DURATION_US` (1.0s) display floor enforcement on sub-second cues, wall-clock floor scaling across variable playback rates ($0.5\times$, $1.0\times$, $2.0\times$), long speech duration preservation ($> 1.0\text{s}$), and OSD fallback minimum floor.
 - `tests/unit/test_whisper_engine.c` (17e.2): deterministic greedy decoding verification (identical PCM buffer transcribes to identical segment counts, timestamps, and UTF-8 text on repeat passes) and bounded decoding parameters (`temperature = 0.0f`, `temperature_inc = 0.2f`, `entropy_thold = 2.40f`, `no_context = true`, `suppress_nst = true`).
 - `tests/unit/test_benchmark.c` (20, 21b): bounded metric accounting, negative live look-ahead latency retention, safe ratios, report snapshots/finalization, translation request/success/tier distribution counters, timeout tracking, and aggregate status updates.
-- `tests/unit/test_translate.c` (21b): RFC 3986 percent URL encoding, HTML entity unescaping, Web RPC (`MkEWBc`) envelope response parsing, legacy GTX JSON array parsing, mobile web scrape HTML parsing, timeout budgeting (800ms), and 3-tier fallback tier constant validation.
-- `tests/unit/test_caption_presenter.c` (21b): dual-line translated subtitle formatting (`<source>\n<translated>`) and single-line translation-only presentation via VLC SPU subpicture rendering.
-- `cmake/vw_provision_model.cmake`, `cmake/vw_check_workers.cmake`, `cmake/vw_packaging.cmake` & `cmake/vw_installer.nsi.in`: release packaging requires the exact tiny and Silero VAD SHA-256 values even when those gitignored model files already exist locally; the portable ZIP uses an explicit model allowlist. The production Windows GPU preset fails if Vulkan cannot be enabled and requires both GPU and CPU workers. An explicit CPU-only installer removes or schedules deletion of a stale canonical GPU worker from an earlier GPU installation. Standalone NSIS acceptance still covers 64-bit VLC discovery, process handling, worker staging, reboot-safe replacement, notice ownership, uninstall cleanup, local media, and live network streams.
-
-## Performance contract
-
-Define the reference machine before claiming “real time”: CPU model/core count, RAM, Windows build, VLC build, model hash, worker flags, and fixture. Record:
-
-- Real-time factor = inference processing time divided by audio duration; target steady-state below 1.0 for tiny.en on reference hardware.
-- End-to-caption latency: target p95 below 5 seconds for live/non-seekable media under the 2-second progressive startup, 1-second steady-state hop, and 500 ms growing-window edge holdback, measured from segment end PTS to display scheduling. Seekable local-file PCM fallback keeps the legacy 8-second/2-second cadence and is benchmarked separately from true live mode.
-- No unbounded queue; backlog hard limit 8 seconds (16 × 512 ms chunks); zero intentional playback stalls.
-
-These targets are engineering gates, not a guarantee for every PC or noisy source.
-
-## CI gates
-
-Every merge: format check, C compilation with warnings-as-errors, unit/protocol tests, sanitizer build where target permits, dependency/license scan, and Windows cross-build. Nightly: fuzz corpus, worker integration with pinned model fixture, reproducibility/hash check, and Windows VM VLC smoke test when infrastructure is available.
-
-Release requires all gates green, manual local-file acceptance on clean Windows, documented known failures, protocol/version manifest, model hash verification, and review of diagnostics to ensure no PCM/transcript/path leakage.
-
-**Validation note for this change:** `test_worker_client_seek_epoch` is wired into CTest and release packaging now fails closed on worker/model composition. The branch's final format/build/CTest/Valgrind run and Windows installer/VM smoke remain separate release-validation steps rather than being claimed by this documentation update.
-# Test harness safety
-
-Unix-domain integration tests use unique absolute paths under `/tmp`, derived from the process ID. This prevents a
-test listener from unlinking its own executable when the build's test working directory is used as the socket path.
-Release test binaries are compiled with `NDEBUG` removed because assertions contain executable checks and cleanup
-side effects that are part of the test harness contract.
+- `tools/quality_benchmark/test_vw_quality.py`: network-free coverage for the EN/RO quality tool's normalizer, Romanian compatibility characters, edit distance/aggregation, and manifest/WAV helper behavior. CI builds `vw-quality-benchmark` and runs these helpers but does not download FLEURS or invoke Whisper WER/CER.
