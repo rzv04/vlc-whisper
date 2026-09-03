@@ -9,8 +9,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "vw_platform.h"
 #include "vw_protocol_types.h"
+#include "vw_quality_hook.h"
 #include "vw_worker_client.h"
 
 #define VW_QUALITY_SAMPLE_RATE 16000U
@@ -21,8 +26,9 @@
 #define VW_QUALITY_POSITION_INTERVAL_US 100000LL
 #define VW_QUALITY_MAX_AUDIO_SECONDS 60U
 #define VW_QUALITY_MAX_SEGMENTS 512U
-#define VW_QUALITY_SETTLE_MS 750U
 #define VW_QUALITY_POLL_TIMEOUT_US 1000U
+#define VW_QUALITY_COMPLETION_POLL_US 100000U
+#define VW_QUALITY_COMPLETION_TIMEOUT_US 120000000LL
 
 typedef enum vw_quality_mode { VW_QUALITY_MODE_LIVE = 0, VW_QUALITY_MODE_LOOKAHEAD = 1 } vw_quality_mode_t;
 
@@ -166,20 +172,109 @@ static void vw_quality_free_audio(vw_quality_audio_t* audio) {
   audio->sample_count = 0;
 }
 
+static bool vw_quality_random_hex(char* out, size_t out_size, size_t random_bytes_count) {
+  if (!out || random_bytes_count == 0 || random_bytes_count > 32 || out_size < random_bytes_count * 2U + 1U)
+    return false;
+  uint8_t random_bytes[32];
+  if (!vw_platform_get_random_bytes(random_bytes, random_bytes_count)) return false;
+  for (size_t i = 0; i < random_bytes_count; i++) snprintf(out + i * 2U, 3U, "%02x", random_bytes[i]);
+  out[random_bytes_count * 2U] = '\0';
+  memset(random_bytes, 0, sizeof(random_bytes));
+  return true;
+}
+
 static bool vw_quality_make_endpoint(char* out, size_t out_size) {
-  uint8_t random_bytes[16];
-  if (!out || out_size == 0 || !vw_platform_get_random_bytes(random_bytes, sizeof(random_bytes))) return false;
-  char hex[sizeof(random_bytes) * 2U + 1U];
-  for (size_t i = 0; i < sizeof(random_bytes); i++) snprintf(hex + i * 2U, 3U, "%02x", random_bytes[i]);
-  hex[sizeof(hex) - 1U] = '\0';
+  char hex[33];
+  if (!vw_quality_random_hex(hex, sizeof(hex), 16U)) return false;
 #ifdef _WIN32
   int written = snprintf(out, out_size, "\\\\.\\pipe\\vlc-whisper-quality-%s", hex);
 #else
   int written = snprintf(out, out_size, "/tmp/vlc-whisper-quality-%s.sock", hex);
 #endif
-  memset(random_bytes, 0, sizeof(random_bytes));
   memset(hex, 0, sizeof(hex));
   return written > 0 && (size_t)written < out_size;
+}
+
+static bool vw_quality_marker_path(char* out, size_t out_size, const char* prefix, const char* suffix) {
+  if (!out || out_size == 0 || !prefix || !suffix) return false;
+  int written = snprintf(out, out_size, "%s%s", prefix, suffix);
+  return written > 0 && (size_t)written < out_size;
+}
+
+static bool vw_quality_make_marker_prefix(char* out, size_t out_size) {
+  char hex[33];
+  if (!out || !vw_quality_random_hex(hex, sizeof(hex), 16U)) return false;
+#ifdef _WIN32
+  char temp_dir[MAX_PATH];
+  DWORD temp_len = GetTempPathA((DWORD)sizeof(temp_dir), temp_dir);
+  if (temp_len == 0 || temp_len >= sizeof(temp_dir)) return false;
+  int written = snprintf(out, out_size, "%svlc-whisper-quality-%s", temp_dir, hex);
+#else
+  int written = snprintf(out, out_size, "/tmp/vlc-whisper-quality-%s", hex);
+#endif
+  memset(hex, 0, sizeof(hex));
+  return written > 0 && (size_t)written < out_size;
+}
+
+static bool vw_quality_set_marker_env(const char* prefix) {
+  if (!prefix || prefix[0] == '\0') return false;
+#ifdef _WIN32
+  return SetEnvironmentVariableA(VW_QUALITY_MARKER_ENV, prefix) != 0;
+#else
+  return setenv(VW_QUALITY_MARKER_ENV, prefix, 1) == 0;
+#endif
+}
+
+static void vw_quality_clear_marker_env(void) {
+#ifdef _WIN32
+  SetEnvironmentVariableA(VW_QUALITY_MARKER_ENV, NULL);
+#else
+  unsetenv(VW_QUALITY_MARKER_ENV);
+#endif
+}
+
+static bool vw_quality_prepare_markers(const char* prefix) {
+  char path[VW_PATH_MAX_BYTES];
+  if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_EOF_MARKER_SUFFIX)) return false;
+  remove(path);
+  if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_DROPS_MARKER_SUFFIX)) return false;
+  FILE* drops = fopen(path, "wb");
+  if (!drops) return false;
+  bool ok = fputs("0", drops) >= 0 && fclose(drops) == 0;
+  if (!ok) remove(path);
+  return ok && vw_quality_set_marker_env(prefix);
+}
+
+static void vw_quality_cleanup_markers(const char* prefix) {
+  char path[VW_PATH_MAX_BYTES];
+  vw_quality_clear_marker_env();
+  if (!prefix) return;
+  if (vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_EOF_MARKER_SUFFIX)) remove(path);
+  if (vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_DROPS_MARKER_SUFFIX)) remove(path);
+}
+
+static bool vw_quality_source_eof_seen(const char* prefix) {
+  char path[VW_PATH_MAX_BYTES];
+  if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_EOF_MARKER_SUFFIX)) return false;
+  FILE* file = fopen(path, "rb");
+  if (!file) return false;
+  int marker = fgetc(file);
+  fclose(file);
+  return marker == '1';
+}
+
+static bool vw_quality_read_drop_marker(const char* prefix, int64_t* out_dropped_audio_us) {
+  if (!out_dropped_audio_us) return false;
+  char path[VW_PATH_MAX_BYTES];
+  if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_DROPS_MARKER_SUFFIX)) return false;
+  FILE* file = fopen(path, "rb");
+  if (!file) return false;
+  uint64_t value = 0;
+  int matched = fscanf(file, "%" SCNu64, &value);
+  fclose(file);
+  if (matched != 1 || value > (uint64_t)INT64_MAX) return false;
+  *out_dropped_audio_us = (int64_t)value;
+  return true;
 }
 
 static bool vw_quality_append_segment(vw_quality_result_t* result, const vw_caption_segment_t* segment) {
@@ -196,47 +291,52 @@ static bool vw_quality_append_segment(vw_quality_result_t* result, const vw_capt
   return true;
 }
 
-static bool vw_quality_receive_once(vw_worker_client_t* client, vw_quality_result_t* result, uint32_t timeout_us,
-                                    bool* out_received) {
-  if (out_received) *out_received = false;
-  vw_worker_recv_t recv;
-  int rc = vw_worker_client_receive_frame(client, timeout_us, &recv);
-  if (rc == VW_IPC_RECV_TIMEOUT) return true;
-  if (rc != VW_IPC_RECV_OK) {
-    fprintf(stderr, "quality runner: worker transport failed while receiving\n");
-    return false;
-  }
-  if (out_received) *out_received = true;
-
-  switch (recv.type) {
+static bool vw_quality_consume_received(vw_worker_client_t* client, vw_quality_result_t* result,
+                                        const vw_worker_recv_t* recv) {
+  if (!client || !result || !recv) return false;
+  switch (recv->type) {
     case VW_MSG_CAPTION_SEGMENT:
-      if (memcmp(recv.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0 &&
-          recv.segment.is_final) {
-        return vw_quality_append_segment(result, &recv.segment);
+      if (memcmp(recv->segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0 &&
+          recv->segment.is_final) {
+        return vw_quality_append_segment(result, &recv->segment);
       }
       return true;
     case VW_MSG_STATUS:
-      if (memcmp(recv.status.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0) {
-        result->queued_audio_us = recv.status.queued_audio_us;
-        result->inference_us = recv.status.inference_us;
-        result->dropped_audio_us = recv.status.dropped_audio_us;
-        memcpy(result->resolved_backend, recv.status.resolved_backend, 16U);
+      if (memcmp(recv->status.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0) {
+        result->queued_audio_us = recv->status.queued_audio_us;
+        result->inference_us = recv->status.inference_us;
+        memcpy(result->resolved_backend, recv->status.resolved_backend, 16U);
         result->resolved_backend[16] = '\0';
       }
       return true;
     case VW_MSG_ERROR:
-      fprintf(stderr, "quality runner: worker error code=%u recoverable=%u message=%.*s\n", recv.error.error_code,
-              recv.error.recoverable, (int)strnlen(recv.error.message, VW_MAX_ERROR_MSG_BYTES), recv.error.message);
+      fprintf(stderr, "quality runner: worker error code=%u recoverable=%u message=%.*s\n", recv->error.error_code,
+              recv->error.recoverable, (int)strnlen(recv->error.message, VW_MAX_ERROR_MSG_BYTES), recv->error.message);
       return false;
     default:
       return true;
   }
 }
 
+static int vw_quality_receive_once(vw_worker_client_t* client, vw_quality_result_t* result, uint32_t timeout_us,
+                                   bool* out_received) {
+  if (out_received) *out_received = false;
+  vw_worker_recv_t recv;
+  int rc = vw_worker_client_receive_frame(client, timeout_us, &recv);
+  if (rc != VW_IPC_RECV_OK) return rc;
+  if (out_received) *out_received = true;
+  return vw_quality_consume_received(client, result, &recv) ? VW_IPC_RECV_OK : VW_IPC_RECV_FATAL;
+}
+
 static bool vw_quality_drain_available(vw_worker_client_t* client, vw_quality_result_t* result) {
   for (;;) {
     bool received = false;
-    if (!vw_quality_receive_once(client, result, VW_QUALITY_POLL_TIMEOUT_US, &received)) return false;
+    int rc = vw_quality_receive_once(client, result, VW_QUALITY_POLL_TIMEOUT_US, &received);
+    if (rc == VW_IPC_RECV_TIMEOUT) return true;
+    if (rc != VW_IPC_RECV_OK) {
+      fprintf(stderr, "quality runner: worker transport failed while receiving\n");
+      return false;
+    }
     if (!received) return true;
   }
 }
@@ -264,6 +364,54 @@ static bool vw_quality_send_live_chunk(vw_worker_client_t* client, const int16_t
   chunk.bytes = (uint32_t)(sample_count * sizeof(int16_t));
   memcpy(chunk.pcm_data, samples, chunk.bytes);
   return vw_worker_client_send_audio(client, &chunk);
+}
+
+static bool vw_quality_make_completion_deadline(int64_t* out_deadline_us) {
+  if (!out_deadline_us) return false;
+  int64_t now_us = vw_platform_get_monotonic_time_us();
+  if (now_us < 0 || VW_QUALITY_COMPLETION_TIMEOUT_US > INT64_MAX - now_us) return false;
+  *out_deadline_us = now_us + VW_QUALITY_COMPLETION_TIMEOUT_US;
+  return true;
+}
+
+static bool vw_quality_wait_for_source_eof(vw_worker_client_t* client, vw_quality_result_t* result,
+                                           const char* marker_prefix) {
+  int64_t deadline_us = 0;
+  if (!vw_quality_make_completion_deadline(&deadline_us)) return false;
+  while (vw_platform_get_monotonic_time_us() < deadline_us) {
+    if (vw_quality_source_eof_seen(marker_prefix)) return true;
+    bool received = false;
+    int rc = vw_quality_receive_once(client, result, VW_QUALITY_COMPLETION_POLL_US, &received);
+    if (rc == VW_IPC_RECV_FATAL) {
+      fprintf(stderr, "quality runner: worker exited before look-ahead source EOF\n");
+      return false;
+    }
+    if (rc != VW_IPC_RECV_OK && rc != VW_IPC_RECV_TIMEOUT) return false;
+  }
+  fprintf(stderr, "quality runner: timed out waiting for look-ahead source EOF\n");
+  return false;
+}
+
+static bool vw_quality_shutdown_and_drain(vw_worker_client_t* client, vw_quality_result_t* result) {
+  if (!client) return false;
+  vw_worker_client_shutdown(client);
+  int64_t deadline_us = 0;
+  if (!vw_quality_make_completion_deadline(&deadline_us)) return false;
+  while (vw_platform_get_monotonic_time_us() < deadline_us) {
+    bool received = false;
+    int rc = vw_quality_receive_once(client, result, VW_QUALITY_COMPLETION_POLL_US, &received);
+    if (rc == VW_IPC_RECV_OK || rc == VW_IPC_RECV_TIMEOUT) continue;
+    if (rc == VW_IPC_RECV_FATAL) {
+      if (client->worker_process && !vw_platform_wait_process(client->worker_process, 5000U)) {
+        fprintf(stderr, "quality runner: worker pipe closed but process did not terminate\n");
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+  fprintf(stderr, "quality runner: timed out waiting for worker shutdown barrier\n");
+  return false;
 }
 
 static bool vw_quality_run_live(vw_worker_client_t* client, const vw_quality_audio_t* audio,
@@ -310,11 +458,7 @@ static bool vw_quality_run_live(vw_worker_client_t* client, const vw_quality_aud
     if (!vw_quality_sleep_until(wall_start_us + pts_us)) return false;
   }
 
-  int64_t settle_deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)VW_QUALITY_SETTLE_MS * 1000LL;
-  while (vw_platform_get_monotonic_time_us() < settle_deadline_us) {
-    bool received = false;
-    if (!vw_quality_receive_once(client, result, 50000U, &received)) return false;
-  }
+  if (!vw_quality_shutdown_and_drain(client, result)) return false;
   int64_t wall_end_us = vw_platform_get_monotonic_time_us();
   if (wall_end_us < 0) return false;
   *out_runtime_us = wall_end_us - wall_start_us;
@@ -323,7 +467,7 @@ static bool vw_quality_run_live(vw_worker_client_t* client, const vw_quality_aud
 
 static bool vw_quality_run_lookahead(vw_worker_client_t* client, const vw_quality_options_t* options,
                                      const vw_quality_audio_t* audio, vw_quality_result_t* result,
-                                     int64_t* out_runtime_us) {
+                                     const char* marker_prefix, int64_t* out_runtime_us) {
   if (!vw_worker_client_start_session(client, 0, "quality-benchmark", options->audio_path)) {
     fprintf(stderr, "quality runner: failed to start look-ahead worker session\n");
     return false;
@@ -352,11 +496,8 @@ static bool vw_quality_run_lookahead(vw_worker_client_t* client, const vw_qualit
     return false;
   }
 
-  int64_t settle_deadline_us = vw_platform_get_monotonic_time_us() + (int64_t)VW_QUALITY_SETTLE_MS * 1000LL;
-  while (vw_platform_get_monotonic_time_us() < settle_deadline_us) {
-    bool received = false;
-    if (!vw_quality_receive_once(client, result, 50000U, &received)) return false;
-  }
+  if (!vw_quality_wait_for_source_eof(client, result, marker_prefix)) return false;
+  if (!vw_quality_shutdown_and_drain(client, result)) return false;
   int64_t wall_end_us = vw_platform_get_monotonic_time_us();
   if (wall_end_us < 0) return false;
   *out_runtime_us = wall_end_us - wall_start_us;
@@ -493,11 +634,20 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  char marker_prefix[VW_PATH_MAX_BYTES];
+  if (!vw_quality_make_marker_prefix(marker_prefix, sizeof(marker_prefix)) || !vw_quality_prepare_markers(marker_prefix)) {
+    fprintf(stderr, "quality runner: failed preparing worker completion markers\n");
+    free(result.segments);
+    vw_quality_free_audio(&audio);
+    return 1;
+  }
+
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
   char endpoint[VW_MAX_SOURCE_URL_BYTES];
   if (!vw_platform_get_random_bytes(auth_token, sizeof(auth_token)) ||
       !vw_quality_make_endpoint(endpoint, sizeof(endpoint))) {
     fprintf(stderr, "quality runner: failed generating IPC credentials\n");
+    vw_quality_cleanup_markers(marker_prefix);
     free(result.segments);
     vw_quality_free_audio(&audio);
     return 1;
@@ -509,6 +659,7 @@ int main(int argc, char** argv) {
   memset(auth_token, 0, sizeof(auth_token));
   if (!client) {
     fprintf(stderr, "quality runner: failed launching/connecting worker\n");
+    vw_quality_cleanup_markers(marker_prefix);
     free(result.segments);
     vw_quality_free_audio(&audio);
     return 1;
@@ -517,11 +668,18 @@ int main(int argc, char** argv) {
   int64_t runtime_us = 0;
   bool ok = options.mode == VW_QUALITY_MODE_LIVE
                 ? vw_quality_run_live(client, &audio, &result, &runtime_us)
-                : vw_quality_run_lookahead(client, &options, &audio, &result, &runtime_us);
+                : vw_quality_run_lookahead(client, &options, &audio, &result, marker_prefix, &runtime_us);
 
-  if (client->session_active) vw_worker_client_stop_session(client, VW_CTRL_REASON_MEDIA_END);
-  vw_worker_client_shutdown(client);
   vw_worker_client_disconnect(client);
+
+  int64_t final_dropped_audio_us = 0;
+  if (!vw_quality_read_drop_marker(marker_prefix, &final_dropped_audio_us)) {
+    fprintf(stderr, "quality runner: failed reading final worker drop counter\n");
+    ok = false;
+  } else {
+    result.dropped_audio_us = final_dropped_audio_us;
+  }
+  vw_quality_cleanup_markers(marker_prefix);
 
   if (ok && result.dropped_audio_us > 0) {
     fprintf(stderr, "quality runner: invalid benchmark; worker dropped %" PRId64 " us of audio\n",
