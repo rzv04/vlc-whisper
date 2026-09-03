@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from vw_benchmark import add_counts, hypothesis_from_result
+from vw_benchmark import add_counts, hypothesis_from_result, runner_timeout_seconds
 from vw_download_corpus import duration_is_eligible, safe_sample_id, write_pcm16_wav
 from vw_quality import ErrorCounts, character_tokens, edit_distance, normalize_text, score_pair, word_tokens
 
@@ -37,6 +37,10 @@ class QualityHelpersTest(unittest.TestCase):
     def test_hypothesis_joins_final_segments(self):
         result = {"segments": [{"text": "hello"}, {"text": " world "}]}
         self.assertEqual(hypothesis_from_result(result), "hello world")
+
+    def test_runner_timeout_preserves_completion_budget(self):
+        self.assertEqual(runner_timeout_seconds(15.0, "live"), 161.5)
+        self.assertEqual(runner_timeout_seconds(15.0, "lookahead"), 280.0)
 
     def test_downloader_helpers(self):
         self.assertTrue(duration_is_eligible(8.0, 2.5, 15.0))
