@@ -271,6 +271,20 @@ For an offline release build, omit `-DVW_PROVISION_MODELS=ON` and place the two 
 
 ### Testing & Quality Assurance
 
+#### Headless EN/RO ASR Quality Benchmark
+
+A developer-only WER/CER regression benchmark lives under `tools/quality_benchmark/`. It is fully headless: it does not launch VLC, play audio, or require X11/Wayland or a Linux desktop environment. Use a developer/test build (`BUILD_TESTING=ON`), download the local FLEURS corpus explicitly, then run the Python orchestrator. The corpus and reports stay git-ignored and no media fixtures are committed.
+
+```bash
+python -m pip install -r tools/quality_benchmark/requirements.txt
+python tools/quality_benchmark/vw_download_corpus.py
+cmake --preset linux-x64-debug
+cmake --build --preset linux-x64-debug --target vw-quality-benchmark vlc-whisper-worker
+python tools/quality_benchmark/vw_benchmark.py --build-dir build/linux-x64-debug --model models/ggml-tiny.bin
+```
+
+See `docs/quality-benchmark.md` for platform, completion-barrier, scoring, and reproducibility details. `tools/quality_benchmark/README.md` is the terse command reference.
+
 #### Running Full Test Suite
 
 ```bash
