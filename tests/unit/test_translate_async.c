@@ -154,8 +154,8 @@ static void test_active_budget_runs_requests_concurrently(void) {
   }
   assert(atomic_load(&g_barrier_arrivals) == VW_TRANSLATE_ASYNC_ACTIVE_BUDGET);
 
-  snprintf(texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET], sizeof(texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET]),
-           "Budget phrase %u", VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U);
+  snprintf(texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET], sizeof(texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET]), "Budget phrase %u",
+           VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U);
   vw_caption_segment_t saturated =
       make_segment(VW_TRANSLATE_ASYNC_ACTIVE_BUDGET + 1U, texts[VW_TRANSLATE_ASYNC_ACTIVE_BUDGET]);
   assert(vw_translate_async_submit(async, &saturated, "en", "ro"));
