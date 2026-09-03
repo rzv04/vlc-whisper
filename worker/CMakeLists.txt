@@ -21,8 +21,15 @@ endif()
 # producing a CPU-only artifact under the canonical release preset name.
 option(VW_WITH_VULKAN "worker: build whisper.cpp with ggml-vulkan GPU backend" ON)
 option(VW_REQUIRE_VULKAN "worker: fail configure when Vulkan was requested but cannot be enabled" OFF)
+option(VW_QUALITY_BENCHMARK_HOOKS "worker: enable developer-only ASR benchmark completion hooks" OFF)
 if(VW_REQUIRE_VULKAN AND NOT VW_WITH_VULKAN)
     message(FATAL_ERROR "VW_REQUIRE_VULKAN=ON requires VW_WITH_VULKAN=ON")
+endif()
+if(VW_QUALITY_BENCHMARK_HOOKS AND NOT BUILD_TESTING)
+    message(FATAL_ERROR "VW_QUALITY_BENCHMARK_HOOKS=ON requires BUILD_TESTING=ON")
+endif()
+if(VW_QUALITY_BENCHMARK_HOOKS AND NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    message(FATAL_ERROR "VW_QUALITY_BENCHMARK_HOOKS requires a GNU/Clang-compatible linker with --wrap support")
 endif()
 
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
@@ -98,10 +105,10 @@ add_executable(vlc-whisper-worker
     ../plugin/src/vw_platform_win32.c
 )
 
-# Developer/test builds expose environment-gated quality hooks without changing the IPC protocol or release worker.
-# GNU/Clang and MinGW linkers support --wrap; normal execution is a zero-I/O passthrough unless the benchmark sets
-# VW_QUALITY_MARKER_PREFIX in the worker environment.
-if(BUILD_TESTING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+# Explicit opt-in keeps benchmark-only completion hooks out of normal debug/release/package workers.
+# When enabled, GNU/Clang and MinGW --wrap intercepts expose only temporary EOF/drop metadata when
+# VW_QUALITY_MARKER_PREFIX is set by the benchmark runner; ordinary worker protocol behavior is unchanged.
+if(VW_QUALITY_BENCHMARK_HOOKS)
     target_sources(vlc-whisper-worker PRIVATE src/vw_quality_hooks.c)
     target_compile_definitions(vlc-whisper-worker PRIVATE VW_QUALITY_LINK_WRAPS=1)
     target_link_options(vlc-whisper-worker PRIVATE
