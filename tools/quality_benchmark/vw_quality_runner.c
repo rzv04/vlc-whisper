@@ -133,8 +133,8 @@ static bool vw_quality_load_wav(const char* path, vw_quality_audio_t* out_audio)
     return false;
   }
 
-  const uint64_t max_bytes =
-      (uint64_t)VW_QUALITY_MAX_AUDIO_SECONDS * VW_QUALITY_SAMPLE_RATE * VW_QUALITY_SAMPLE_WIDTH;
+  const uint64_t max_bytes = (uint64_t)VW_QUALITY_MAX_AUDIO_SECONDS * VW_QUALITY_SAMPLE_RATE *
+                             VW_QUALITY_SAMPLE_WIDTH;
   if ((uint64_t)data_bytes > max_bytes) {
     fprintf(stderr, "quality runner: WAV exceeds %u second safety bound\n", VW_QUALITY_MAX_AUDIO_SECONDS);
     fclose(file);
@@ -210,7 +210,8 @@ static bool vw_quality_receive_once(vw_worker_client_t* client, vw_quality_resul
 
   switch (recv.type) {
     case VW_MSG_CAPTION_SEGMENT:
-      if (memcmp(recv.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0 && recv.segment.is_final) {
+      if (memcmp(recv.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0 &&
+          recv.segment.is_final) {
         return vw_quality_append_segment(result, &recv.segment);
       }
       return true;
@@ -265,8 +266,8 @@ static bool vw_quality_send_live_chunk(vw_worker_client_t* client, const int16_t
   return vw_worker_client_send_audio(client, &chunk);
 }
 
-static bool vw_quality_run_live(vw_worker_client_t* client, const vw_quality_audio_t* audio, vw_quality_result_t* result,
-                                int64_t* out_runtime_us) {
+static bool vw_quality_run_live(vw_worker_client_t* client, const vw_quality_audio_t* audio,
+                                vw_quality_result_t* result, int64_t* out_runtime_us) {
   if (!vw_worker_client_start_session(client, 0, "quality-benchmark", NULL)) {
     fprintf(stderr, "quality runner: failed to start live worker session\n");
     return false;
@@ -494,7 +495,8 @@ int main(int argc, char** argv) {
 
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
   char endpoint[VW_MAX_SOURCE_URL_BYTES];
-  if (!vw_platform_get_random_bytes(auth_token, sizeof(auth_token)) || !vw_quality_make_endpoint(endpoint, sizeof(endpoint))) {
+  if (!vw_platform_get_random_bytes(auth_token, sizeof(auth_token)) ||
+      !vw_quality_make_endpoint(endpoint, sizeof(endpoint))) {
     fprintf(stderr, "quality runner: failed generating IPC credentials\n");
     free(result.segments);
     vw_quality_free_audio(&audio);
@@ -502,8 +504,8 @@ int main(int argc, char** argv) {
   }
 
   vw_worker_client_t* client = vw_worker_client_launch_and_connect_ex(
-      options.worker_path, endpoint, auth_token, options.model_path, options.backend, options.language, options.threads, -1,
-      options.model_dir, false);
+      options.worker_path, endpoint, auth_token, options.model_path, options.backend, options.language, options.threads,
+      -1, options.model_dir, false);
   memset(auth_token, 0, sizeof(auth_token));
   if (!client) {
     fprintf(stderr, "quality runner: failed launching/connecting worker\n");
@@ -522,7 +524,8 @@ int main(int argc, char** argv) {
   vw_worker_client_disconnect(client);
 
   if (ok && result.dropped_audio_us > 0) {
-    fprintf(stderr, "quality runner: invalid benchmark; worker dropped %" PRId64 " us of audio\n", result.dropped_audio_us);
+    fprintf(stderr, "quality runner: invalid benchmark; worker dropped %" PRId64 " us of audio\n",
+            result.dropped_audio_us);
     ok = false;
   }
   if (ok) vw_quality_print_result(&options, &audio, &result, runtime_us);
