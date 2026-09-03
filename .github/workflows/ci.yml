@@ -36,7 +36,7 @@ jobs:
             tools/quality_benchmark/*.c
 
       - name: Configure CMake (coverage preset)
-        run: cmake --preset linux-x64-coverage
+        run: cmake --preset linux-x64-coverage -DVW_QUALITY_BENCHMARK_HOOKS=ON
 
       - name: Build binaries & test executables
         run: cmake --build --preset linux-x64-coverage
