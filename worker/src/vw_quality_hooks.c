@@ -1,10 +1,9 @@
-#include "vw_quality_hook.h"
-
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "vw_protocol_types.h"
+#include "vw_quality_hook.h"
 #include "vw_source_decoder.h"
 #include "vw_worker_queue.h"
 
