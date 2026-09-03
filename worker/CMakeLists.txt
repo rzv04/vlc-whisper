@@ -98,6 +98,18 @@ add_executable(vlc-whisper-worker
     ../plugin/src/vw_platform_win32.c
 )
 
+# Developer/test builds expose environment-gated quality hooks without changing the IPC protocol or release worker.
+# GNU/Clang and MinGW linkers support --wrap; normal execution is a zero-I/O passthrough unless the benchmark sets
+# VW_QUALITY_MARKER_PREFIX in the worker environment.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_sources(vlc-whisper-worker PRIVATE src/vw_quality_hooks.c)
+    target_compile_definitions(vlc-whisper-worker PRIVATE VW_QUALITY_LINK_WRAPS=1)
+    target_link_options(vlc-whisper-worker PRIVATE
+        -Wl,--wrap=vw_source_decoder_read_s16le
+        -Wl,--wrap=vw_worker_queue_push
+    )
+endif()
+
 if(FFMPEG_FOUND AND NOT WIN32)
     target_compile_definitions(vlc-whisper-worker PRIVATE -DVW_WITH_FFMPEG)
     target_link_libraries(vlc-whisper-worker PRIVATE PkgConfig::FFMPEG)
