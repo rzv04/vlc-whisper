@@ -17,9 +17,9 @@
   <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
 </p>
 
-> **Private, offline, real-time AI subtitle generation directly inside VLC, with optional live translation.**
+> **Private, offline, real-time AI subtitle generation for 10+ languages, with optional live translation into 250+ languages.**
 
-Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), VLC-Whisper transcribes and translates speech in real time as you watch local media, over-the-network VoD and even IPTV livestreams. Audio processing and speech recognition run 100% locally on your device. Translation sends finalized subtitle text, not audio, to Google Translate endpoints.
+Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero VAD](https://github.com/snakers4/silero-vad), VLC-Whisper transcribes and translates speech in real time as you watch local media, over-the-network VoD and even IPTV livestreams. Audio processing and speech recognition run 100% locally on your device. Translation is done through Google Translate endpoints.
 
 ---
 
@@ -35,25 +35,24 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 
 ---
 
-## Quick Start for Users (Windows)
+## Quick Start (Windows)
 
 ### Option 1: Standalone Installer (Recommended)
 
 1. **Download**: Grab `vlc-whisper-<version>-win64-setup.exe` from [Latest Releases](https://github.com/rzv04/vlc-whisper/releases).
-2. **Install**: Run the setup wizard. It automatically locates your 64-bit VLC installation, installs the audio filter plugin, bundles the multilingual `tiny` speech model and Silero VAD model, and invalidates VLC's plugin cache so VLC rebuilds it on the next launch. Should your VLC folder not be automatically detected, manually select the destination folder in the wizard (should look something like `C:\Program Files\VideoLAN\VLC` ).
-3. **Launch & Watch**: Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video — subtitles will appear on screen automatically!
-4. Alternatively, open VLC, go to `Tools -> Preferences (Ctrl+P) -> Show settings -> All -> Audio -> Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator).
+2. **Install**: Run the setup wizard.
+3. **Launch & Watch**: Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video - subtitles will appear on screen automatically!
+4. Alternatively, open VLC, go to `Tools > Preferences (Ctrl+P) > Show settings > All > Audio > Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator)
 
 ### Option 2: Portable Archive (.zip)
 
 1. Download `vlc-whisper-<version>-win64.zip` from [Releases](https://github.com/rzv04/vlc-whisper/releases).
 2. Extract the archive directly into your VLC installation directory (e.g. `C:\Program Files\VideoLAN\VLC`).
-3. Open a Command Prompt in your VLC directory and refresh the plugin cache:
+3. Open a Command Prompt in your VLC directory and refresh the plugin cache (or manually delete `plugins.dat`:
    ```cmd
    vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
    ```
-4. Launch VLC with `--audio-filter=vlc_whisper`, or enable the filter under **Tools > Preferences > Show settings: All > Audio > Filters**, and play a video.
-5. The portable archive contains only the release allowlist of model assets (`ggml-tiny.bin`, `ggml-silero-vad.bin`, and `manifest.json`); locally downloaded development models are never swept into the archive.
+4. Enable the filter under `Tools > Preferences > Show settings: All > Audio > Filters`, and play a video.
 
 ---
 
@@ -62,30 +61,27 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 | Component / Feature          | Support Status                               | Notes                                                                                                                                     |
 | :--------------------------- | :------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Windows 10 / 11 (64-bit)** | **Supported**                                | Complete installer wizard, Vulkan GPU acceleration, and CPU fallback.                                                                     |
-| **Linux (x86_64)**           | **Experimental / Dev Preview**               | Compiles and runs from source. Official native packages planned for M5.                                                                   |
-| **macOS**                    | **Unsupported**                              | Not currently planned for initial releases.                                                                                               |
+| **Linux (x86_64)**           | **Experimental / Dev Preview**               | Compiles and runs from source. Official native packages WIP.                                                                              |
+| **macOS**                    | **Unsupported**                              | Not currently planned.                                                                                                                    |
 | **VLC Media Player**         | **VLC 3.0.x (64-bit)**                       | Standard desktop 64-bit VLC release. 32-bit builds are unsupported.                                                                       |
 | **Hardware Backends**        | **Vulkan GPU & Multi-Core CPU**              | Automatic GPU detection with seamless CPU fallback.                                                                                       |
 | **Validated Languages**      | **English, Romanian**                        | Fully tested end-to-end. Other languages supported by the bundled Whisper models may work but have not yet been validated by VLC-Whisper. |
-| **Subtitle Translation**     | **Opt-in (Keyless Google Translate Engine)** | 3-tier fallback (Web RPC, GTX, Mobile scrape). Off by default.                                                                            |
-
-> **Validation limits on this branch:** Linux automated coverage is the primary CI gate; Windows release packaging has explicit GPU/CPU/model preflight checks but still requires the documented Windows VM smoke pass before publishing. See `docs/issues.md` and `docs/test-strategy.md`.
+| **Subtitle Translation**     | **Opt-in (Keyless Google Translate Engine)** | Off by default.                                                                                                                           |
 
 ## Key Features
 
 - 🔒 **100% Offline & Private by Default**: All audio decoding, voice activity detection, and speech recognition occur locally in memory. Zero audio or transcript data ever leaves your computer, no telemetry involved (aside from opt-in, local logging for debug purposes; enable/disable in settings).
-- ⚡ **Hardware Acceleration**: Automatic Vulkan GPU acceleration for near-instant speech decoding, with transparent multi-threaded CPU fallback.
-- 🌐 **Real-Time Subtitle Translation**: Translate subtitles live into your native language with single-line or dual-line display modes. Uses a resilient 3-tier fallback engine with zero API keys or subscriptions required (_opt-in only_).
-- 🎙️ **Silero Voice Activity Detection**: Filters out background noise, silence, and instrumental music to eliminate phantom subtitles and hallucinations.
-- ⏩ **Seamless Playback Controls**: Full timeline synchronization — seeking, pausing, and resuming seamlessly refresh captions without audio glitching.
-- 🎛️ **In-VLC Settings Menu**: Adjust models, languages, CPU thread count, and hardware backend directly inside VLC via **View > VLC-Whisper Settings**.
-- 📦 **On-Demand Model Downloader**: Ships with the fast multilingual `tiny` model. Download higher-accuracy models (`base`, `small`, `medium`, `large`) on demand directly within VLC.
+- ⚡ **Hardware Acceleration**: Automatic Vulkan GPU acceleration for near-instant speech decoding, or multi-threaded CPU alternative.
+- 🌐 **Real-Time Subtitle Translation**: Translate subtitles live into your native language with single-line or dual-line display modes, similar to [Daum PotPlayer](https://potplayer.tv/), _opt-in only_).
+- ⏩ **Lag-free experience**: Seeking and play/pause smoothly resumes captions without audio glitching or video blocking.
+- 🎛️ **In-VLC Settings Menu**: Adjust models, languages and other settings directly inside VLC via `View > VLC-Whisper Settings`.
+- 📦 **On-Demand Model Downloader**: Fast multilingual `tiny` model bundled. Download higher-accuracy models (`base`, `small`, `medium`, `large`) on demand directly through the settings menu.
 
 ---
 
 ## Configuring Settings in VLC
 
-Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Settings**) from the VLC menu bar:
+Open `View > VLC-Whisper Settings`from the VLC menu bar:
 
 ![settings](./assets/vlc-whisper-settings.png)
 
@@ -94,7 +90,7 @@ Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Sett
 - **Audio Language**: Select the primary spoken language in your media (`English`, `Romanian`, `Spanish`, `French`, `German`, `Turkish`, etc.).
 - **CPU Threads**: Number of CPU worker threads. The default of 4 is recommended for most systems.
 - **Real-Time Translation**: Check the box to enable live translation of finalized subtitles. Choose **Dual line** (shows original speech and translation stacked) or **Translation only** (default).
-- **Downloading Models**: Select any model in the dropdown and click **Download Selected Model**. The worker downloads and validates the model in the background over HTTPS without pausing playback.
+- **Downloading Models**: Select any model in the dropdown and click **Download Selected Model**.
 
 ---
 
@@ -104,7 +100,7 @@ Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Sett
 <summary><b>Subtitles are not appearing when playing media</b></summary>
 
 1. Verify that VLC was launched with the audio filter active. Check that you used the **"VLC (with AI Whisper Captions)"** shortcut, or check **Tools > Preferences > Show settings: All > Audio > Filters** and ensure **vlc_whisper** is checked.
-2. Confirm the plugin cache is updated by running `vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"`.
+2. Confirm the plugin cache is updated by running `vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"` (or by deleting `plugins.dat`).
 3. Check **View > VLC-Whisper Settings** to ensure a valid model is selected.
 4. If all else fails, report a bug using the [issue tracker](https://github.com/rzv04/vlc-whisper/issues), using the specified template. **Ensure you provide logs!**
 </details>
@@ -115,20 +111,22 @@ Open **View > VLC-Whisper Settings** (or **Tools > Extensions > VLC-Whisper Sett
 1. If you do not have a dedicated GPU, use the `tiny` or `base` models for smooth real-time transcription.
 2. Adjust the CPU thread count in **View > VLC-Whisper Settings** to match your physical CPU core count (typically 4 or 6).
 3. If using Vulkan GPU acceleration, ensure your graphics drivers are up to date.
+4. If all else fails, report a bug using the [issue tracker](https://github.com/rzv04/vlc-whisper/issues), using the specified template. **Ensure you provide logs!**
 </details>
 
 <details>
 <summary><b>How does privacy work when using translation?</b></summary>
 
-- **Transcription & Audio**: 100% offline. Raw audio and PCM never leave your machine.
-- **Model Downloads**: Explicit user action only. Downloads official model weights from Hugging Face / GitHub over HTTPS with SHA-256 integrity verification.
-- **Translation (Opt-In)**: When translation is enabled, finalized subtitle text strings are sent to Google Translate endpoints over HTTPS. Audio data is never transmitted.
+- **Transcription & Audio**: 100% offline and local.
+- **Model Downloads**: Explicit through the settings menu. Downloads official model weights from Hugging Face / GitHub over HTTPS with SHA-256 integrity verification.
+- **Translation (Opt-In)**: When translation is enabled, finalized subtitle text strings are sent to Google Translate endpoints over HTTPS. Audio is never transmitted.
 </details>
 
 <details>
 <summary><b>How do I uninstall VLC-Whisper?</b></summary>
 
-Run `uninstall-vlc-whisper.exe` from your VLC installation directory, or use Windows **Settings > Apps > Installed apps > VLC-Whisper AI Subtitle Plugin > Uninstall**. Alternatively, go to **Control Panel > Programs > Uninstall a program** and uninstall **VLC-Whisper AI Subtitle Plugin**. The uninstaller removes the project-owned plugin binaries, worker executables, shortcuts, registry keys, and the model cache recorded for the installing user; it does not remove another user's cache or VLC root notice files.
+(**Recommended**) Go to `Control Panel > Programs > Uninstall a program` and uninstall **VLC-Whisper AI Subtitle Plugin**.
+Or manually run `uninstall-vlc-whisper.exe` from your VLC installation directory, or use Windows `Settings > Apps > Installed apps > VLC-Whisper AI Subtitle Plugin > Uninstall`.
 
 </details>
 
@@ -140,7 +138,7 @@ The following technical sections are intended for developers, packagers, and con
 
 ## System Architecture
 
-VLC-Whisper uses an isolated two-process architecture to guarantee VLC media playback stability:
+VLC-Whisper uses a two-process architecture to guarantee VLC media playback stability:
 
 ```mermaid
 flowchart TB
@@ -214,16 +212,17 @@ cd vlc-whisper
 
 ### CMake Presets Reference
 
-| Preset Name               | Target OS     | Backend                                      | Output Binary                | Purpose                      |
-| :------------------------ | :------------ | :------------------------------------------- | :--------------------------- | :--------------------------- |
-| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback)               | `vlc-whisper-worker`         | Linux development & tests    |
-| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                                     | `vlc-whisper-worker-cpu`     | CPU-only testing             |
-| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                              | `vlc-whisper-worker-cpu`     | Test code coverage           |
-| `windows-x64-release`     | Windows x64   | Vulkan GPU required; CPU fallback bundled    | `vlc-whisper-worker.exe`     | Production Windows installer |
-| `windows-x64-release-cpu` | Windows x64   | CPU-only                                     | `vlc-whisper-worker-cpu.exe` | Explicit CPU-only release    |
-| `windows-x64-debug`       | Windows x64   | Vulkan GPU (development may fall back to CPU)| `vlc-whisper-worker.exe`     | Windows debug symbols        |
+| Preset Name               | Target OS     | Backend                                       | Output Binary                | Purpose                      |
+| :------------------------ | :------------ | :-------------------------------------------- | :--------------------------- | :--------------------------- |
+| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback)                | `vlc-whisper-worker`         | Linux development & tests    |
+| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                                      | `vlc-whisper-worker-cpu`     | CPU-only testing             |
+| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                               | `vlc-whisper-worker-cpu`     | Test code coverage           |
+| `windows-x64-release`     | Windows x64   | Vulkan GPU required; CPU fallback bundled     | `vlc-whisper-worker.exe`     | Production Windows installer |
+| `windows-x64-release-cpu` | Windows x64   | CPU-only                                      | `vlc-whisper-worker-cpu.exe` | Explicit CPU-only release    |
+| `windows-x64-debug`       | Windows x64   | Vulkan GPU (development may fall back to CPU) | `vlc-whisper-worker.exe`     | Windows debug symbols        |
 
-The production `windows-x64-release` preset is intentionally fail-closed: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset. For the MinGW cross-build, provide the configured `VW_VULKAN_SDK` layout when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
+> [!WARNING]
+> About `windows-x64-release`: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset. For the MinGW cross-build, provide a `VW_VULKAN_SDK` environment variable when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
 
 ---
 
@@ -244,11 +243,11 @@ cmake --preset windows-x64-release-cpu
 cmake --build --preset windows-x64-release-cpu -j4
 ```
 
-A CPU-only installer removes (or schedules reboot-time removal of) any old `vlc-whisper-worker.exe` left by a previous GPU package. Runtime worker discovery therefore cannot select stale GPU code ahead of the newly installed `vlc-whisper-worker-cpu.exe`.
+A CPU-only installer removes (or schedules reboot-time removal of) any old `vlc-whisper-worker.exe` left by a previous GPU package.
 
 #### 3. Building the Windows Installer (.exe & .zip)
 
-Release packaging requires the exact pinned `models/ggml-tiny.bin` and `models/ggml-silero-vad.bin`. Existing files are SHA-256 checked before they are accepted; a wrong or stale local file fails packaging instead of being bundled. Build-time downloads remain opt-in.
+Release packaging requires the exact `models/ggml-tiny.bin` and `models/ggml-silero-vad.bin`. Existing files are SHA-256 checked before they are accepted; a wrong or stale local file fails packaging instead of being bundled. Build-time downloads remain opt-in.
 
 ```bash
 # Either place the two pinned model files under models/ yourself, or allow the
