@@ -22,7 +22,8 @@
 #define VW_QUALITY_CHANNELS 1U
 #define VW_QUALITY_SAMPLE_WIDTH 2U
 #define VW_QUALITY_LIVE_CHUNK_SAMPLES 320U
-#define VW_QUALITY_LIVE_TAIL_SAMPLES VW_QUALITY_SAMPLE_RATE
+// 500 ms holdback plus up to one full 1 s hop guarantees a post-speech inference frontier.
+#define VW_QUALITY_LIVE_TAIL_SAMPLES (VW_QUALITY_SAMPLE_RATE * 3U / 2U)
 #define VW_QUALITY_POSITION_INTERVAL_US 100000LL
 #define VW_QUALITY_MAX_AUDIO_SECONDS 60U
 #define VW_QUALITY_MAX_SEGMENTS 512U
@@ -139,8 +140,7 @@ static bool vw_quality_load_wav(const char* path, vw_quality_audio_t* out_audio)
     return false;
   }
 
-  const uint64_t max_bytes =
-      (uint64_t)VW_QUALITY_MAX_AUDIO_SECONDS * VW_QUALITY_SAMPLE_RATE * VW_QUALITY_SAMPLE_WIDTH;
+  const uint64_t max_bytes = (uint64_t)VW_QUALITY_MAX_AUDIO_SECONDS * VW_QUALITY_SAMPLE_RATE * VW_QUALITY_SAMPLE_WIDTH;
   if ((uint64_t)data_bytes > max_bytes) {
     fprintf(stderr, "quality runner: WAV exceeds %u second safety bound\n", VW_QUALITY_MAX_AUDIO_SECONDS);
     fclose(file);
