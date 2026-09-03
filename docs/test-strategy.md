@@ -35,6 +35,8 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 ## Required cases
 
 - Start local English media, captions appear after bounded warm-up, and final captions have valid ordered PTS.
+- Live/non-seekable PCM (`START.source_kind == VW_SOURCE_LIVE_AUDIO`) becomes inference-eligible after 2 seconds, grows its retained context by 1 second per pass to the 8-second maximum, then uses a 1-second steady-state hop. During the growing phase, segments ending within the newest 500 ms are not emitted as immutable captions.
+- A seekable local file whose source decoder fails to open or seek may fall back to PCM forwarding, but it retains `VW_SOURCE_LOCAL_FILE` classification and therefore preserves the legacy 8-second startup / 2-second hop rather than entering progressive live scheduling.
 - Pause stops AUDIO forwarding and clears partial state; resume does not reuse a stale worker session.
 - End/stop clears captions and closes worker cleanly.
 - User seeks, changes rate, replaces media, or creates non-monotonic PTS: generated captions clear, VLC keeps playing, a single diagnostic appears, no crash. Every accepted live or source seek creates a fresh caption-session ID so buffered pre-seek source and translated cues are stale by construction.
@@ -64,7 +66,7 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 - `tests/unit/vw_test_worker_client.c` (14c receive-frame block): `vw_worker_client_receive_frame` decodes `CAPTION_SEGMENT`/`STATUS`/`ERROR` in order, drains and skips an unknown `PAUSE` frame, times out with 0 against a silent server (transport stays usable), and returns -1 at EOF; segment text is copied into caller-owned storage.
 - `tests/integration/test_worker_lifecycle.c` (14c additions): worker with zeroed `model_path` rejects `START` through the client API (E_MODEL_MISSING error path); model-gated section (when `models/ggml-tiny.en.bin` exists and not under Valgrind) streams four 512 ms silence chunks through `STARTED`/`AUDIO`/`STOP`/`SHUTDOWN` and exits 0.
 - `tests/integration/test_worker_ipc.c` (14c): unchanged asserts re-run against the worker reader-thread split, proving the split preserves lifecycle semantics.
-- `tests/unit/test_caption_presenter.c` (15): presenter display/show_segment/clear against VLC symbol stubs (NULL-filter standalone mode). Step 15 wiring itself is module-internal (sender-thread dispatch to OSD) and is verified by live-VLC acceptance: captions appear ~8s+ behind audio due to the batch 8s-window inference geometry (documented in the plan); automated suite is regression-only for this path.
+- `tests/unit/test_caption_presenter.c` (15): presenter display/show_segment/clear against VLC symbol stubs (NULL-filter standalone mode). Step 15 wiring itself is module-internal (sender-thread dispatch to OSD). Live-VLC acceptance now validates progressive live scheduling rather than the old batch-only warm-up: completed speech may produce captions from the growing 2→8 second context, while any trailing segment within the 500 ms right-edge guard is withheld until later context; automated suite remains regression-only for this path.
 - `tests/unit/vw_test_worker_client.c` (16): fake server now expects `PAUSE` (USER_PAUSE) then `RESUME` (USER_RESUME) control frames between AUDIO and STOP, verifying the client pause/resume API and that the session stays active through both.
 - `tests/integration/test_worker_lifecycle.c` (16): model-gated section sends PAUSE/RESUME mid-stream before STOP/SHUTDOWN, proving the worker survives both controls with exit 0.
 - `tests/unit/vw_test_worker_client.c` (17): fake server decodes the `STOP` payload and asserts `reason == VW_CTRL_REASON_SEEK_DISCONTINUITY`.
@@ -105,7 +107,7 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 Define the reference machine before claiming “real time”: CPU model/core count, RAM, Windows build, VLC build, model hash, worker flags, and fixture. Record:
 
 - Real-time factor = inference processing time divided by audio duration; target steady-state below 1.0 for tiny.en on reference hardware.
-- End-to-caption latency: target p95 below 5 seconds under the selected 8-second/2-second default windowing, measured from segment end PTS to display scheduling.
+- End-to-caption latency: target p95 below 5 seconds for live/non-seekable media under the 2-second progressive startup, 1-second steady-state hop, and 500 ms growing-window edge holdback, measured from segment end PTS to display scheduling. Seekable local-file PCM fallback keeps the legacy 8-second/2-second cadence and is benchmarked separately from true live mode.
 - No unbounded queue; backlog hard limit 8 seconds (16 × 512 ms chunks); zero intentional playback stalls.
 
 These targets are engineering gates, not a guarantee for every PC or noisy source.
