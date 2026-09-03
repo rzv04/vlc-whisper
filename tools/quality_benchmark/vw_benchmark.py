@@ -18,6 +18,10 @@ from vw_quality import ErrorCounts, normalize_text, score_pair
 DEFAULT_MANIFEST = Path(__file__).resolve().parent / "local" / "corpus" / "manifest.json"
 DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "local" / "results"
 SUPPORTED_MODES = ("live", "lookahead")
+RUNNER_COMPLETION_TIMEOUT_SECONDS = 120.0
+RUNNER_STARTUP_ALLOWANCE_SECONDS = 15.0
+RUNNER_OUTER_GRACE_SECONDS = 10.0
+LIVE_TAIL_SECONDS = 1.5
 
 
 def find_executable(build_dir: Path, relative_dir: str, stems: tuple[str, ...]) -> Path:
@@ -41,6 +45,18 @@ def add_counts(left: ErrorCounts, right: ErrorCounts) -> ErrorCounts:
         reference_words=left.reference_words + right.reference_words,
         char_errors=left.char_errors + right.char_errors,
         reference_chars=left.reference_chars + right.reference_chars,
+    )
+
+
+def runner_timeout_seconds(duration_seconds: float, mode: str) -> float:
+    """Keep Python's outer watchdog strictly outside the C runner's bounded waits."""
+    pacing_seconds = max(0.0, duration_seconds) + (LIVE_TAIL_SECONDS if mode == "live" else 0.0)
+    completion_phases = 1 if mode == "live" else 2
+    return (
+        pacing_seconds
+        + RUNNER_STARTUP_ALLOWANCE_SECONDS
+        + completion_phases * RUNNER_COMPLETION_TIMEOUT_SECONDS
+        + RUNNER_OUTER_GRACE_SECONDS
     )
 
 
@@ -127,7 +143,7 @@ def main() -> int:
                 "--model-dir",
                 str(model_path.parent),
             ]
-            timeout_seconds = max(60.0, duration_seconds * 3.0 + 30.0)
+            timeout_seconds = runner_timeout_seconds(duration_seconds, mode)
             try:
                 completed = subprocess.run(
                     command,
@@ -138,7 +154,10 @@ def main() -> int:
                     timeout=timeout_seconds,
                 )
             except subprocess.TimeoutExpired:
-                print(f"benchmark runner timed out for {sample['id']} ({mode})", file=sys.stderr)
+                print(
+                    f"benchmark runner timed out for {sample['id']} ({mode}) after {timeout_seconds:.1f}s",
+                    file=sys.stderr,
+                )
                 return 1
             if completed.returncode != 0:
                 print(completed.stderr.rstrip(), file=sys.stderr)
