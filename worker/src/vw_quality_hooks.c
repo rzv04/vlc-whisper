@@ -53,10 +53,9 @@ size_t __wrap_vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t
 }
 
 bool __wrap_vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {
-  uint64_t before = q ? vw_worker_queue_get_dropped_audio_us(q) : 0;
   bool accepted = __real_vw_worker_queue_push(q, type, payload, payload_len);
-  uint64_t after = q ? vw_worker_queue_get_dropped_audio_us(q) : before;
-  if (after != before) vw_quality_write_drop_marker(after);
+  uint64_t dropped_audio_us = q ? vw_worker_queue_get_dropped_audio_us(q) : 0;
+  vw_quality_write_drop_marker(dropped_audio_us);
   return accepted;
 }
 
