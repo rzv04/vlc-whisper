@@ -35,6 +35,9 @@ typedef struct vw_benchmark {
   uint64_t last_worker_inference_us;
   uint64_t last_worker_dropped_audio_us;
   uint64_t latency_samples_dropped;
+  uint64_t last_segment_id;
+  int64_t last_segment_start_pts_us;
+  int64_t last_segment_end_pts_us;
   int64_t first_caption_elapsed_us;
   int64_t live_pts_to_monotonic_us;
   int64_t latency_samples[VW_BENCHMARK_MAX_LATENCY_SAMPLES];
@@ -53,11 +56,12 @@ typedef struct vw_benchmark {
   bool live_clock_valid;
 } vw_benchmark_t;
 
-// Records translation telemetry for every attempted caption, including failed latency. Failures at/above the global
-// translation deadline are classified as timeouts; earlier transport/parser failures are counted separately.
+// Records translation telemetry and emits privacy-safe VLC diagnostics for attempted failures, distinguishing pipeline
+// unavailability, deadline exhaustion, and provider fallback failure without retaining subtitle text.
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
-// Starts a bounded benchmark session, creates its private temporary report, and writes the initial active snapshot
-// without recording transcript or PCM data.
+
+// Starts a bounded benchmark session, replacing the platform temp directory's single last-session `.txt` report and
+// writing its initial aggregate snapshot without recording transcript or PCM data.
 bool vw_benchmark_begin(vw_benchmark_t* benchmark, const char* model_id, const char* backend, int64_t now_us);
 
 // Records one successfully transmitted PCM chunk and establishes the live PTS-to-monotonic clock mapping if needed
@@ -68,8 +72,8 @@ void vw_benchmark_record_audio(vw_benchmark_t* benchmark, int64_t start_pts_us, 
 // progress, and error frames without retaining payload data.
 void vw_benchmark_record_frame(vw_benchmark_t* benchmark);
 
-// Records a valid caption and samples live utterance latency without comparing incompatible source clock domains,
-// while accumulating bounded segment duration and UTF-8 size measurements.
+// Retains the latest segment identifier and PTS for diagnostics, then records bounded aggregate caption and live
+// latency metrics without persisting either source or translated subtitle bodies.
 void vw_benchmark_record_caption_received(vw_benchmark_t* benchmark, const vw_caption_segment_t* segment,
                                           int64_t now_us, bool source_mode);
 
