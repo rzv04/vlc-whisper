@@ -53,14 +53,17 @@ The plugin splits incoming PCM into fixed-size chunks of `VW_AUDIO_CHUNK_MAX_PCM
 
 The bounded SPSC queue defaults to **16 chunks** capacity. At 512 ms per chunk this provides an 8-second buffer capacity.
 
-| Parameter                         | Duration                  | In chunks (512 ms each) |
+On the worker process side, the inbound frame queue (`vw_worker_queue_t`) connects the IPC reader thread to the inference loop with capacity `VW_WORKER_FRAME_QUEUE_CAPACITY` (**512 frames**). Because audio packets sent over IPC arrive in 20 ms to 40 ms slices (~50 Hz cadence), a 512-slot buffer provides ~10.2 seconds of backlog at 20 ms (~20.5 seconds at 40 ms), absorbing 600 ms – 1,500 ms CPU batch inference passes without audio drops while bounding payload memory to < 10 MB.
+
+| Parameter                         | Duration                  | In chunks / frames      |
 | --------------------------------- | ------------------------- | ----------------------- |
 | Live progressive startup         | 2 s                       | ~4 chunks               |
 | Live analysis context            | grows 2 s → 8 s           | ~4 → 16 chunks          |
 | Live steady-state hop            | 1 s                       | ~2 chunks               |
 | Local-file PCM fallback window   | 8 s                       | 16 chunks               |
 | Local-file PCM fallback hop      | 2 s                       | ~4 chunks               |
-| Backlog (queue capacity)         | 8 s                       | 16 chunks               |
+| Plugin SPSC queue capacity       | 8 s                       | 16 chunks (512 ms max)  |
+| Worker frame queue capacity      | ~10.2 s (at 20 ms)        | 512 frames (`VW_WORKER_FRAME_QUEUE_CAPACITY`) |
 
 Backpressure rule: playback wins. If the audio queue is full, discard the newest unprocessed audio, increment `audio_dropped_us`, emit a rate-limited warning, and continue. Never slow VLC. Captions after a gap may be missing; they must never be timestamped as if they were complete.
 

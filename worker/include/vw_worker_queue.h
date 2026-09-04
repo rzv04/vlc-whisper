@@ -15,6 +15,10 @@ typedef struct vw_worker_frame {
 
 typedef struct vw_worker_queue vw_worker_queue_t;  // opaque
 
+// Capacity for the worker's inbound IPC frame queue (512 slots provides ~10.2s of backlog at 20ms
+// frame cadence to absorb Whisper batch inference compute spikes without dropping audio frames).
+#define VW_WORKER_FRAME_QUEUE_CAPACITY 512U
+
 // Allocates a bounded FIFO queue holding IPC frames with owned payload buffers. Capacity limits
 // outstanding frames; returns NULL on allocation failure. Not realtime: uses a mutex internally.
 vw_worker_queue_t* vw_worker_queue_create(size_t capacity);
