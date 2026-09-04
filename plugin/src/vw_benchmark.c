@@ -16,6 +16,13 @@
 
 #define VW_BENCHMARK_REPORT_FILENAME "vlc-whisper-benchmark.txt"
 
+#ifndef _WIN32
+static bool vw_benchmark_directory_exists(const char* path) {
+  struct stat info;
+  return path && path[0] && stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+#endif
+
 static bool vw_benchmark_resolve_report_path(char* path, size_t path_size) {
   if (!path || path_size == 0) return false;
 #ifdef _WIN32
@@ -25,8 +32,8 @@ static bool vw_benchmark_resolve_report_path(char* path, size_t path_size) {
   int written = snprintf(path, path_size, "%s%s", temp_dir, VW_BENCHMARK_REPORT_FILENAME);
 #else
   const char* temp_dir = getenv("XDG_RUNTIME_DIR");
-  if (!temp_dir || !temp_dir[0]) temp_dir = getenv("TMPDIR");
-  if (!temp_dir || !temp_dir[0]) temp_dir = "/tmp";
+  if (!vw_benchmark_directory_exists(temp_dir)) temp_dir = getenv("TMPDIR");
+  if (!vw_benchmark_directory_exists(temp_dir)) temp_dir = "/tmp";
   int written = snprintf(path, path_size, "%s/%s", temp_dir, VW_BENCHMARK_REPORT_FILENAME);
 #endif
   return written >= 0 && (size_t)written < path_size;
