@@ -64,7 +64,14 @@ static int64_t vw_benchmark_trans_percentile(const vw_benchmark_t* benchmark, un
 static const char* vw_benchmark_translation_failure_reason(uint32_t latency_us) {
   if (latency_us == 0) return "pipeline_saturated_or_unavailable";
   if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US) return "deadline_exhausted";
-  return "providers_failed_before_deadline";
+  return "provider_fallbacks_failed";
+}
+
+static const char* vw_benchmark_translation_failure_detail(uint32_t latency_us) {
+  if (latency_us == 0) return "translation pipeline rejected the cue before a network request could run";
+  if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US)
+    return "global 800ms cue deadline exhausted while running the Web RPC, GTX, and Mobile fallback chain";
+  return "Web RPC, GTX, and Mobile produced no valid translation before the deadline (request or response parse failure)";
 }
 
 static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, int64_t end_us) {
@@ -208,10 +215,11 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
   if (!benchmark) return;
   if (!success) {
     const char* reason = vw_benchmark_translation_failure_reason(latency_us);
+    const char* detail = vw_benchmark_translation_failure_detail(latency_us);
     vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE",
-                 "segment=%llu start_pts_us=%lld end_pts_us=%lld latency_us=%u reason=%s",
+                 "segment=%llu start_pts_us=%lld end_pts_us=%lld latency_us=%u reason=%s detail=%s",
                  (unsigned long long)benchmark->last_segment_id, (long long)benchmark->last_segment_start_pts_us,
-                 (long long)benchmark->last_segment_end_pts_us, (unsigned int)latency_us, reason);
+                 (long long)benchmark->last_segment_end_pts_us, (unsigned int)latency_us, reason, detail);
   }
   if (!benchmark->active) return;
   benchmark->translation_requests_sent++;
