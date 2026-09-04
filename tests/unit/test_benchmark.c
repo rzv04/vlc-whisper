@@ -60,16 +60,20 @@ static void test_translation_failure_logging(void) {
   EXPECT(strstr(capture.message, "start_pts_us=12000000") != NULL);
   EXPECT(strstr(capture.message, "end_pts_us=13500000") != NULL);
   EXPECT(strstr(capture.message, "reason=pipeline_saturated_or_unavailable") != NULL);
+  EXPECT(strstr(capture.message, "before a network request could run") != NULL);
 
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, 100000, false);
   EXPECT(strstr(capture.message, "latency_us=100000") != NULL);
-  EXPECT(strstr(capture.message, "reason=providers_failed_before_deadline") != NULL);
+  EXPECT(strstr(capture.message, "reason=provider_fallbacks_failed") != NULL);
+  EXPECT(strstr(capture.message, "Web RPC, GTX, and Mobile produced no valid translation") != NULL);
+  EXPECT(strstr(capture.message, "request or response parse failure") != NULL);
 
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
   EXPECT(strstr(capture.message, "latency_us=800000") != NULL);
   EXPECT(strstr(capture.message, "reason=deadline_exhausted") != NULL);
+  EXPECT(strstr(capture.message, "global 800ms cue deadline exhausted") != NULL);
   EXPECT(strstr(capture.message, "source") == NULL);
   EXPECT(strstr(capture.message, "translated") == NULL);
 
