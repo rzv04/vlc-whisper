@@ -66,7 +66,7 @@ The runner starts a `VW_SOURCE_LIVE_AUDIO` session and sends the WAV as 20 ms, 1
 
 After the source PCM, the runner supplies **1.5 seconds** of silent PCM at the same 1x pace. The 500 ms portion clears the production right-edge holdback and the additional full 1 second guarantees that even a clip ending immediately after an inference hop crosses the next progressive/steady-state inference frontier. For example, a 2.8 second clip is paced through 4.3 seconds, so the 4.0 second pass can commit speech held at the 3.0 second pass. The runner then sends `SHUTDOWN` after all audio frames and keeps draining worker output until the authenticated IPC pipe reaches EOF and the worker process exits. Because worker input is a FIFO queue, that shutdown is the completion barrier for all earlier accepted audio work. The barrier has a bounded 120 second timeout; timeout or premature worker failure invalidates the sample.
 
-The worker queue hook records the true cumulative dropped-audio counter. Any nonzero drop invalidates the sample, including an audio frame evicted while making room for the final shutdown frame. WER/CER is therefore never reported from a knowingly partial live run.
+The worker queue hook records the true cumulative dropped-audio counter. Any nonzero drop invalidates the sample, including an audio frame evicted while making room for the final shutdown frame. WER/CER is therefore never reported from a knowingly partial live run. To absorb 600 ms – 1,500 ms CPU batch inference passes when 20 ms audio packets arrive continuously at 50 Hz, the worker queue is configured with `VW_WORKER_FRAME_QUEUE_CAPACITY` (512 frames), providing ~10.2 s of absorption buffer to prevent spurious queue drops and sample invalidation.
 
 ### Look-ahead mode
 

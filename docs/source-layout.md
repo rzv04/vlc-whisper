@@ -138,8 +138,9 @@ vlc-whisper/
 ├── tools/quality_benchmark/                   # Headless developer-only local ASR quality tooling
 │   ├── README.md                              # Minimal corpus/build/run command reference
 │   ├── CMakeLists.txt                         # Builds excluded-from-all vw-quality-benchmark runner
-│   ├── vw_quality_runner.c                    # 1x live/look-ahead worker driver; no VLC/audio output
+│   ├── vw_quality_runner.c                    # Offline batch and 1x live/look-ahead worker driver; no VLC/audio output
 │   ├── vw_download_corpus.py                  # Explicit deterministic EN/RO FLEURS local downloader
+│   ├── vw_download_corpus_direct.py           # Lightweight direct EN/RO FLEURS tar downloader
 │   ├── vw_benchmark.py                        # Corpus orchestration and per-language report generation
 │   ├── vw_quality.py                          # Normalization, Levenshtein WER/CER, aggregation
 │   └── test_vw_quality.py                     # Network-free Python helper regression tests

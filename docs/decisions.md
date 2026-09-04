@@ -106,8 +106,9 @@ Consequences:
 The worker process receives incoming `VW_MSG_AUDIO_PCM` frames across the IPC transport. Running `whisper_full()` inference directly on the worker main/reader loop introduces 200–500 ms of blocking delay per window. If the pipe is not drained continuously, backpressure travels back to the plugin's sender thread.
 
 Consequences:
-1. **Thread Decoupling**: Decouple IPC frame receiving from worker main loop using a dedicated worker IPC reader thread (`vw_worker_reader_main`) and a bounded SPSC queue (`vw_spsc_queue_t`).
+1. **Thread Decoupling**: Decouple IPC frame receiving from worker main loop using a dedicated worker IPC reader thread (`vw_worker_reader_main`) and a bounded FIFO queue (`vw_worker_queue_t`).
 2. **Pipe Safety**: The reader thread drains named pipe / socket frames continuously, while the worker main loop pops PCM chunks and executes inference asynchronously.
+3. **Queue Sizing & Absorption (`VW_WORKER_FRAME_QUEUE_CAPACITY`)**: Audio frames arrive in ~20–40 ms slices (~50 Hz). A small queue (e.g. 32 slots = 640 ms) overflows during CPU inference passes that exceed 600 ms, triggering unrecoverable audio frame evictions. The queue capacity is defined by `VW_WORKER_FRAME_QUEUE_CAPACITY` (512 slots), providing ~10.2 s of absorption buffer to withstand batch compute spikes while bounding worker payload memory strictly under 10 MB.
 
 ## ADR-014: Process-Wide Platform Media Framework Management
 

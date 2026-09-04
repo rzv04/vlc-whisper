@@ -13,10 +13,12 @@
 #include <windows.h>
 #endif
 
+#include "ggml-backend.h"
 #include "vw_platform.h"
 #include "vw_protocol_types.h"
 #include "vw_quality_hook.h"
 #include "vw_worker_client.h"
+#include "whisper.h"
 
 #define VW_QUALITY_SAMPLE_RATE 16000U
 #define VW_QUALITY_CHANNELS 1U
@@ -31,7 +33,11 @@
 #define VW_QUALITY_COMPLETION_POLL_US 100000U
 #define VW_QUALITY_COMPLETION_TIMEOUT_US 120000000LL
 
-typedef enum vw_quality_mode { VW_QUALITY_MODE_LIVE = 0, VW_QUALITY_MODE_LOOKAHEAD = 1 } vw_quality_mode_t;
+typedef enum vw_quality_mode {
+  VW_QUALITY_MODE_OFFLINE = 0,
+  VW_QUALITY_MODE_LIVE = 1,
+  VW_QUALITY_MODE_LOOKAHEAD = 2
+} vw_quality_mode_t;
 
 typedef struct vw_quality_audio {
   int16_t* samples;
@@ -506,6 +512,174 @@ static bool vw_quality_run_lookahead(vw_worker_client_t* client, const vw_qualit
   return true;
 }
 
+static const char* vw_quality_mode_name(vw_quality_mode_t mode) {
+  switch (mode) {
+    case VW_QUALITY_MODE_OFFLINE:
+      return "offline";
+    case VW_QUALITY_MODE_LIVE:
+      return "live";
+    case VW_QUALITY_MODE_LOOKAHEAD:
+      return "lookahead";
+    default:
+      return "unknown";
+  }
+}
+
+#ifdef _WIN32
+typedef struct {
+  FILE* file;
+} vw_quality_file_loader_t;
+
+static size_t vw_quality_file_read(void* context, void* output, size_t read_size) {
+  vw_quality_file_loader_t* loader = (vw_quality_file_loader_t*)context;
+  return loader && loader->file ? fread(output, 1, read_size, loader->file) : 0;
+}
+
+static bool vw_quality_file_eof(void* context) {
+  vw_quality_file_loader_t* loader = (vw_quality_file_loader_t*)context;
+  return !loader || !loader->file || feof(loader->file) != 0;
+}
+
+static void vw_quality_file_close(void* context) {
+  vw_quality_file_loader_t* loader = (vw_quality_file_loader_t*)context;
+  if (!loader) return;
+  if (loader->file) fclose(loader->file);
+  free(loader);
+}
+
+static struct whisper_context* vw_quality_whisper_init_utf8_path(const char* model_path,
+                                                                 struct whisper_context_params params) {
+  int wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model_path, -1, NULL, 0);
+  if (wide_length <= 0) return NULL;
+  wchar_t* wide_path = (wchar_t*)calloc((size_t)wide_length, sizeof(wchar_t));
+  if (!wide_path) return NULL;
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, model_path, -1, wide_path, wide_length) <= 0) {
+    free(wide_path);
+    return NULL;
+  }
+  vw_quality_file_loader_t* context = (vw_quality_file_loader_t*)calloc(1, sizeof(*context));
+  if (context) context->file = _wfopen(wide_path, L"rb");
+  free(wide_path);
+  if (!context || !context->file) {
+    free(context);
+    return NULL;
+  }
+  struct whisper_model_loader loader = {context, vw_quality_file_read, vw_quality_file_eof, vw_quality_file_close};
+  return whisper_init_with_params(&loader, params);
+}
+#endif
+
+static void vw_quality_whisper_log(enum ggml_log_level level, const char* text, void* user_data) {
+  (void)user_data;
+  if (level == GGML_LOG_LEVEL_ERROR && text) {
+    fprintf(stderr, "whisper: %s", text);
+  }
+}
+
+static bool vw_quality_run_offline(const vw_quality_options_t* options, const vw_quality_audio_t* audio,
+                                   vw_quality_result_t* result, int64_t* out_runtime_us) {
+  if (!options || !audio || !result || !out_runtime_us) return false;
+
+  whisper_log_set(vw_quality_whisper_log, NULL);
+
+  struct whisper_context_params cparams = whisper_context_default_params();
+  cparams.use_gpu = (strcmp(options->backend, "cpu") != 0);
+  cparams.gpu_device = 0;
+
+  struct whisper_context* ctx = NULL;
+#ifdef _WIN32
+  ctx = vw_quality_whisper_init_utf8_path(options->model_path, cparams);
+#else
+  ctx = whisper_init_from_file_with_params(options->model_path, cparams);
+#endif
+  if (!ctx) {
+    fprintf(stderr, "quality runner: failed to load whisper model '%s'\n", options->model_path);
+    return false;
+  }
+
+  bool gpu_active = false;
+  if (cparams.use_gpu) {
+    size_t dev_count = ggml_backend_dev_count();
+    size_t remaining = (size_t)cparams.gpu_device;
+    for (size_t i = 0; i < dev_count; i++) {
+      ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+      enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+      if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+        if (remaining == 0) {
+          gpu_active = true;
+          break;
+        }
+        remaining--;
+      }
+    }
+  }
+  snprintf(result->resolved_backend, sizeof(result->resolved_backend), "%s", gpu_active ? "gpu" : "cpu");
+
+  float* pcm = (float*)malloc(audio->sample_count * sizeof(float));
+  if (!pcm) {
+    whisper_free(ctx);
+    return false;
+  }
+  for (size_t i = 0; i < audio->sample_count; i++) {
+    pcm[i] = (float)audio->samples[i] / 32768.0f;
+  }
+
+  struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+  wparams.strategy = WHISPER_SAMPLING_GREEDY;
+  wparams.print_progress = false;
+  wparams.print_special = false;
+  wparams.print_realtime = false;
+  wparams.print_timestamps = false;
+  wparams.translate = false;
+  wparams.language = options->language;
+  wparams.n_threads = options->threads;
+
+  int64_t start_us = vw_platform_get_monotonic_time_us();
+  int rc = whisper_full(ctx, wparams, pcm, (int)audio->sample_count);
+  int64_t end_us = vw_platform_get_monotonic_time_us();
+
+  free(pcm);
+
+  if (rc != 0) {
+    fprintf(stderr, "quality runner: whisper_full failed with code %d\n", rc);
+    whisper_free(ctx);
+    return false;
+  }
+
+  int64_t elapsed_us = end_us - start_us;
+  if (elapsed_us < 0) elapsed_us = 0;
+  *out_runtime_us = elapsed_us;
+  result->inference_us = elapsed_us;
+  result->queued_audio_us = (int64_t)((audio->sample_count * 1000000ULL) / VW_QUALITY_SAMPLE_RATE);
+  result->dropped_audio_us = 0;
+
+  int n_segments = whisper_full_n_segments(ctx);
+  for (int i = 0; i < n_segments; i++) {
+    const char* txt = whisper_full_get_segment_text(ctx, i);
+    if (!txt) continue;
+    int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+    int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+
+    vw_caption_segment_t seg;
+    memset(&seg, 0, sizeof(seg));
+    seg.start_pts_us = t0 * 10000LL;
+    seg.end_pts_us = t1 * 10000LL;
+    seg.text_utf8 = (char*)txt;
+    size_t len = strlen(txt);
+    if (len > VW_MAX_TEXT_BYTES) len = VW_MAX_TEXT_BYTES;
+    seg.text_bytes = (uint16_t)len;
+
+    if (!vw_quality_append_segment(result, &seg)) {
+      fprintf(stderr, "quality runner: failed appending segment in offline mode\n");
+      whisper_free(ctx);
+      return false;
+    }
+  }
+
+  whisper_free(ctx);
+  return true;
+}
+
 static void vw_quality_json_string(FILE* out, const char* text) {
   fputc('"', out);
   if (text) {
@@ -548,7 +722,7 @@ static void vw_quality_print_result(const vw_quality_options_t* options, const v
                                     const vw_quality_result_t* result, int64_t runtime_us) {
   int64_t audio_duration_us = (int64_t)((audio->sample_count * 1000000ULL) / VW_QUALITY_SAMPLE_RATE);
   printf("{\n  \"mode\": ");
-  vw_quality_json_string(stdout, options->mode == VW_QUALITY_MODE_LIVE ? "live" : "lookahead");
+  vw_quality_json_string(stdout, vw_quality_mode_name(options->mode));
   printf(",\n  \"language\": ");
   vw_quality_json_string(stdout, options->language);
   printf(",\n  \"audio_duration_us\": %" PRId64, audio_duration_us);
@@ -571,8 +745,8 @@ static void vw_quality_print_result(const vw_quality_options_t* options, const v
 
 static void vw_quality_usage(const char* argv0) {
   fprintf(stderr,
-          "Usage: %s --worker PATH --model PATH --audio WAV --language en|ro --mode live|lookahead "
-          "[--backend auto|gpu|cpu] [--threads 1..16] [--model-dir DIR]\n",
+          "Usage: %s --model PATH --audio WAV --language en|ro --mode offline|live|lookahead "
+          "[--worker PATH] [--backend auto|gpu|cpu] [--threads 1..16] [--model-dir DIR]\n",
           argv0);
 }
 
@@ -598,7 +772,9 @@ static bool vw_quality_parse_args(int argc, char** argv, vw_quality_options_t* o
       options->threads = atoi(argv[++i]);
     else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
       const char* mode = argv[++i];
-      if (strcmp(mode, "live") == 0)
+      if (strcmp(mode, "offline") == 0)
+        options->mode = VW_QUALITY_MODE_OFFLINE;
+      else if (strcmp(mode, "live") == 0)
         options->mode = VW_QUALITY_MODE_LIVE;
       else if (strcmp(mode, "lookahead") == 0)
         options->mode = VW_QUALITY_MODE_LOOKAHEAD;
@@ -609,8 +785,8 @@ static bool vw_quality_parse_args(int argc, char** argv, vw_quality_options_t* o
       return false;
     }
   }
-  if (!options->worker_path || !options->model_path || !options->audio_path || !options->language || !mode_set)
-    return false;
+  if (!options->model_path || !options->audio_path || !options->language || !mode_set) return false;
+  if (options->mode != VW_QUALITY_MODE_OFFLINE && !options->worker_path) return false;
   if (strcmp(options->language, "en") != 0 && strcmp(options->language, "ro") != 0) return false;
   if (strcmp(options->backend, "auto") != 0 && strcmp(options->backend, "gpu") != 0 &&
       strcmp(options->backend, "cpu") != 0)
@@ -634,6 +810,15 @@ int main(int argc, char** argv) {
   if (!result.segments) {
     vw_quality_free_audio(&audio);
     return 1;
+  }
+
+  if (options.mode == VW_QUALITY_MODE_OFFLINE) {
+    int64_t runtime_us = 0;
+    bool ok = vw_quality_run_offline(&options, &audio, &result, &runtime_us);
+    if (ok) vw_quality_print_result(&options, &audio, &result, runtime_us);
+    free(result.segments);
+    vw_quality_free_audio(&audio);
+    return ok ? 0 : 1;
   }
 
   char marker_prefix[VW_PATH_MAX_BYTES];

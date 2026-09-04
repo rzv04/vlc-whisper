@@ -17,7 +17,7 @@ from vw_quality import ErrorCounts, normalize_text, score_pair
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parent / "local" / "corpus" / "manifest.json"
 DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "local" / "results"
-SUPPORTED_MODES = ("live", "lookahead")
+SUPPORTED_MODES = ("offline", "live", "lookahead")
 RUNNER_COMPLETION_TIMEOUT_SECONDS = 120.0
 RUNNER_STARTUP_ALLOWANCE_SECONDS = 15.0
 RUNNER_OUTER_GRACE_SECONDS = 10.0
@@ -51,11 +51,11 @@ def add_counts(left: ErrorCounts, right: ErrorCounts) -> ErrorCounts:
 def runner_timeout_seconds(duration_seconds: float, mode: str) -> float:
     """Keep Python's outer watchdog strictly outside the C runner's bounded waits."""
     pacing_seconds = max(0.0, duration_seconds) + (LIVE_TAIL_SECONDS if mode == "live" else 0.0)
-    completion_phases = 1 if mode == "live" else 2
+    completion_phases = 0 if mode == "offline" else (1 if mode == "live" else 2)
     return (
         pacing_seconds
         + RUNNER_STARTUP_ALLOWANCE_SECONDS
-        + completion_phases * RUNNER_COMPLETION_TIMEOUT_SECONDS
+        + max(1, completion_phases) * RUNNER_COMPLETION_TIMEOUT_SECONDS
         + RUNNER_OUTER_GRACE_SECONDS
     )
 
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runner", type=Path)
     parser.add_argument("--backend", choices=("auto", "gpu", "cpu"), default="auto")
     parser.add_argument("--threads", type=int, default=4)
-    parser.add_argument("--mode", choices=("both",) + SUPPORTED_MODES, default="both")
+    parser.add_argument("--mode", choices=("all", "both") + SUPPORTED_MODES, default="all")
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -89,13 +89,22 @@ def main() -> int:
         print("--threads must be in 1..16", file=sys.stderr)
         return 2
 
+    if args.mode == "all":
+        modes = ("offline", "live", "lookahead")
+    elif args.mode == "both":
+        modes = ("live", "lookahead")
+    else:
+        modes = (args.mode,)
+
     try:
         runner = args.runner.resolve() if args.runner else find_executable(
             build_dir, "tools/quality_benchmark", ("vw-quality-benchmark",)
         )
-        worker = args.worker.resolve() if args.worker else find_executable(
-            build_dir, "worker", ("vlc-whisper-worker", "vlc-whisper-worker-cpu")
-        )
+        worker = None
+        if any(m in ("live", "lookahead") for m in modes):
+            worker = args.worker.resolve() if args.worker else find_executable(
+                build_dir, "worker", ("vlc-whisper-worker", "vlc-whisper-worker-cpu")
+            )
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -105,7 +114,6 @@ def main() -> int:
     if not samples:
         print("manifest contains no samples", file=sys.stderr)
         return 2
-    modes = SUPPORTED_MODES if args.mode == "both" else (args.mode,)
 
     if any(sample.get("language") == "ro" for sample in samples) and ".en." in model_path.name:
         print("warning: an English-only model was selected while Romanian samples are present", file=sys.stderr)
@@ -113,21 +121,20 @@ def main() -> int:
     per_sample: list[dict[str, Any]] = []
     aggregate: dict[tuple[str, str], ErrorCounts] = defaultdict(lambda: ErrorCounts(0, 0, 0, 0))
 
-    for sample_index, sample in enumerate(samples, start=1):
-        language = str(sample["language"])
-        reference = str(sample["reference"])
-        audio_path = (manifest_path.parent / str(sample["path"])).resolve()
-        if not audio_path.is_file():
-            print(f"missing corpus audio: {audio_path}", file=sys.stderr)
-            return 1
-        duration_seconds = float(sample.get("duration_seconds", 0.0))
+    for mode in modes:
+        print(f"\n=== Running benchmark phase: {mode.upper()} ===")
+        for sample_index, sample in enumerate(samples, start=1):
+            language = str(sample["language"])
+            reference = str(sample["reference"])
+            audio_path = (manifest_path.parent / str(sample["path"])).resolve()
+            if not audio_path.is_file():
+                print(f"missing corpus audio: {audio_path}", file=sys.stderr)
+                return 1
+            duration_seconds = float(sample.get("duration_seconds", 0.0))
 
-        for mode in modes:
             print(f"[{sample_index}/{len(samples)}] {language} {sample['id']} {mode} ({duration_seconds:.1f}s)")
             command = [
                 str(runner),
-                "--worker",
-                str(worker),
                 "--model",
                 str(model_path),
                 "--audio",
@@ -143,6 +150,8 @@ def main() -> int:
                 "--model-dir",
                 str(model_path.parent),
             ]
+            if worker is not None:
+                command.extend(["--worker", str(worker)])
             timeout_seconds = runner_timeout_seconds(duration_seconds, mode)
             try:
                 completed = subprocess.run(
@@ -195,7 +204,7 @@ def main() -> int:
 
     rows: list[dict[str, Any]] = []
     print("\nLanguage  Mode       WER      CER    Word errors   Char errors")
-    print("--------  --------  -------  -------  ------------  -----------")
+    print("--------  ---------  -------  -------  ------------  -----------")
     for language in sorted({str(sample["language"]) for sample in samples}):
         for mode in modes:
             counts = aggregate[(language, mode)]
@@ -211,7 +220,7 @@ def main() -> int:
             }
             rows.append(row)
             print(
-                f"{language:<8}  {mode:<8}  {counts.wer * 100:6.2f}%  {counts.cer * 100:6.2f}%  "
+                f"{language:<8}  {mode:<9}  {counts.wer * 100:6.2f}%  {counts.cer * 100:6.2f}%  "
                 f"{counts.word_errors:5d}/{counts.reference_words:<5d}  "
                 f"{counts.char_errors:5d}/{counts.reference_chars:<5d}"
             )
