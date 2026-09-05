@@ -38,7 +38,6 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
       if (strcmp(cur->obj.object_type, "input") == 0) {
         vout_thread_t* vout = input_GetVout((input_thread_t*)cur);
         if (vout) {
-          vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_VOUT_FOUND", "Retrieved vout directly from input_thread ancestor");
           return vout;
         }
       } else if (strcmp(cur->obj.object_type, "vout") == 0) {
@@ -56,15 +55,11 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
               vout_thread_t* vout = input_GetVout((input_thread_t*)child);
               if (vout) {
                 vlc_list_release(children);
-                vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_VOUT_FOUND",
-                             "Retrieved active vout via children list input");
                 return vout;
               }
             } else if (strcmp(child->obj.object_type, "vout") == 0) {
               vlc_object_hold(child);
               vlc_list_release(children);
-              vw_log_event(VW_LOG_LEVEL_INFO, "PRESENTER_VOUT_FOUND",
-                           "Retrieved active vout directly via children list");
               return (vout_thread_t*)child;
             }
           }
