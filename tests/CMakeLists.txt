@@ -22,6 +22,7 @@ endmacro()
 
 add_vw_test(test_protocol_codec unit/test_protocol_codec.c)
 add_vw_test(test_protocol_validate unit/test_protocol_validate.c)
+add_vw_test(test_protocol_start_failure_paths unit/test_protocol_start_failure_paths.c)
 add_vw_test(test_protocol_util unit/test_protocol_util.c)
 add_vw_test(test_queue unit/test_queue.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
 add_vw_test(test_audio_capture unit/test_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
@@ -51,6 +52,9 @@ endif()
 
 add_vw_test(test_worker_config unit/test_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
 target_link_libraries(test_worker_config PRIVATE whisper)
+add_vw_test(test_worker_config_failure_paths unit/test_worker_config_failure_paths.c
+            ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
+target_link_libraries(test_worker_config_failure_paths PRIVATE whisper)
 add_vw_test(test_audio_buffer unit/test_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c)
 add_vw_test(test_vad unit/test_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c)
 target_link_libraries(test_vad PRIVATE whisper)
@@ -77,6 +81,9 @@ target_compile_definitions(test_translate_async PRIVATE VW_TRANSLATE_TESTING=1)
 if(WIN32)
     target_link_libraries(test_translate_async PRIVATE winhttp)
 endif()
+
+add_vw_test(test_queue_audio_timeline integration/test_queue_audio_timeline.c
+            ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c)
 
 add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_sha256.c ${CMAKE_SOURCE_DIR}/worker/src/vw_model_download.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate_async.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_worker_ipc PRIVATE whisper)
