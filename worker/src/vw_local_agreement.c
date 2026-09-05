@@ -94,11 +94,10 @@ size_t vw_local_agreement_update(vw_local_agreement_t* state, const vw_local_agr
          vw_local_agreement_words_equal(&state->previous[confirmed_count], &filtered[confirmed_count])) {
     confirmed_count++;
   }
-
-  size_t returned = confirmed_count < output_capacity ? confirmed_count : output_capacity;
-  if (returned > 0) vw_local_agreement_copy_words(output, filtered, returned);
+  if (confirmed_count > output_capacity) confirmed_count = output_capacity;
 
   if (confirmed_count > 0) {
+    vw_local_agreement_copy_words(output, filtered, confirmed_count);
     vw_local_agreement_append_tail(state, filtered, confirmed_count);
     state->last_committed_end_us = filtered[confirmed_count - 1U].end_pts_us;
     state->has_committed = 1;
@@ -107,7 +106,7 @@ size_t vw_local_agreement_update(vw_local_agreement_t* state, const vw_local_agr
   size_t remainder = filtered_count - confirmed_count;
   if (remainder > 0) memmove(state->previous, filtered + confirmed_count, remainder * sizeof(state->previous[0]));
   state->previous_count = remainder;
-  return returned;
+  return confirmed_count;
 }
 
 int vw_local_agreement_format_commit(const vw_local_agreement_word_t* words, size_t word_count, char* text_out,
