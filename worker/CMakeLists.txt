@@ -79,6 +79,16 @@ else()
     endif()
 endif()
 
+set(VW_LOCAL_AGREEMENT_WORKER_REMAPS
+    vw_worker_queue_pop=vw_local_agreement_worker_queue_pop
+    vw_segment_builder_clear=vw_local_agreement_builder_clear
+    vw_segment_builder_push_hypothesis=vw_local_agreement_builder_push
+    vw_audio_buffer_get_samples=vw_local_agreement_audio_get_samples
+    vw_whisper_engine_get_segment_count=vw_local_agreement_segment_count
+    vw_whisper_engine_get_segment=vw_local_agreement_get_segment
+)
+set_source_files_properties(src/vw_worker.c PROPERTIES COMPILE_DEFINITIONS "${VW_LOCAL_AGREEMENT_WORKER_REMAPS}")
+
 add_executable(vlc-whisper-worker
     src/main.c
     src/vw_worker.c
@@ -86,6 +96,7 @@ add_executable(vlc-whisper-worker
     src/vw_vad.c
     src/vw_segment_builder.c
     src/vw_local_agreement.c
+    src/vw_local_agreement_hooks.c
     src/vw_hallucination_filter.c
     src/vw_audio_buffer.c
     src/vw_worker_config.c
