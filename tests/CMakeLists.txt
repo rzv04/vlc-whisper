@@ -26,6 +26,7 @@ add_vw_test(test_protocol_util unit/test_protocol_util.c)
 add_vw_test(test_queue unit/test_queue.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
 add_vw_test(test_audio_capture unit/test_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
 add_vw_test(test_segment_builder unit/test_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c)
+add_vw_test(test_local_agreement unit/test_local_agreement.c ${CMAKE_SOURCE_DIR}/worker/src/vw_local_agreement.c)
 add_vw_test(test_hallucination_filter unit/test_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c)
 add_vw_test(test_worker_queue unit/test_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c)
 add_vw_test(test_caption_timing unit/test_caption_timing.c)
@@ -78,7 +79,17 @@ if(WIN32)
     target_link_libraries(test_translate_async PRIVATE winhttp)
 endif()
 
-add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_sha256.c ${CMAKE_SOURCE_DIR}/worker/src/vw_model_download.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate_async.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+set(VW_LOCAL_AGREEMENT_WORKER_REMAPS
+    vw_worker_queue_pop=vw_local_agreement_worker_queue_pop
+    vw_segment_builder_clear=vw_local_agreement_builder_clear
+    vw_segment_builder_push_hypothesis=vw_local_agreement_builder_push
+    vw_audio_buffer_get_samples=vw_local_agreement_audio_get_samples
+    vw_whisper_engine_get_segment_count=vw_local_agreement_segment_count
+    vw_whisper_engine_get_segment=vw_local_agreement_get_segment
+)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c PROPERTIES COMPILE_DEFINITIONS "${VW_LOCAL_AGREEMENT_WORKER_REMAPS}")
+
+add_vw_test(test_worker_ipc integration/test_worker_ipc.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_local_agreement.c ${CMAKE_SOURCE_DIR}/worker/src/vw_local_agreement_hooks.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_sha256.c ${CMAKE_SOURCE_DIR}/worker/src/vw_model_download.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate_async.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_worker_ipc PRIVATE whisper)
 if(FFMPEG_FOUND AND NOT WIN32)
     target_compile_definitions(test_worker_ipc PRIVATE -DVW_WITH_FFMPEG)
@@ -88,7 +99,7 @@ endif()
 if(WIN32)
     target_link_libraries(test_worker_ipc PRIVATE winhttp)
 endif()
-add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_sha256.c ${CMAKE_SOURCE_DIR}/worker/src/vw_model_download.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate_async.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+add_vw_test(test_worker_lifecycle integration/test_worker_lifecycle.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_local_agreement.c ${CMAKE_SOURCE_DIR}/worker/src/vw_local_agreement_hooks.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_sha256.c ${CMAKE_SOURCE_DIR}/worker/src/vw_model_download.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate_async.c ${VW_SOURCE_DECODER_SRCS} ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 target_link_libraries(test_worker_lifecycle PRIVATE whisper)
 if(FFMPEG_FOUND AND NOT WIN32)
     target_compile_definitions(test_worker_lifecycle PRIVATE -DVW_WITH_FFMPEG)
