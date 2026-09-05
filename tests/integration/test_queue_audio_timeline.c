@@ -41,9 +41,7 @@ static uint8_t* make_audio_payload(int64_t start_pts_us, int64_t duration_us, ui
   return payload;
 }
 
-static int64_t sample_span_us(size_t sample_count) {
-  return (int64_t)((sample_count * 1000000ULL) / 16000ULL);
-}
+static int64_t sample_span_us(size_t sample_count) { return (int64_t)((sample_count * 1000000ULL) / 16000ULL); }
 
 int main(void) {
   const int64_t frame_duration_us = 100000;
@@ -137,8 +135,7 @@ int main(void) {
 
     int64_t represented_end_pts_us = after_pts + sample_span_us(after_count);
     int64_t incoming_end_pts_us = decoded.start_pts_us + decoded.duration_us;
-    check_true("queue eviction must not collapse missing media time",
-               represented_end_pts_us >= incoming_end_pts_us);
+    check_true("queue eviction must not collapse missing media time", represented_end_pts_us >= incoming_end_pts_us);
   }
 
   free(decoded_pcm);
