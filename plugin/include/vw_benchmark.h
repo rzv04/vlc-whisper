@@ -56,12 +56,12 @@ typedef struct vw_benchmark {
   bool live_clock_valid;
 } vw_benchmark_t;
 
-// Records translation telemetry and emits privacy-safe VLC diagnostics for attempted failures, distinguishing pipeline
-// unavailability, deadline exhaustion, and provider fallback failure without retaining subtitle text.
+// Records translation telemetry and emits privacy-safe VLC diagnostics with second/millisecond timing for attempted
+// failures, distinguishing pipeline unavailability, deadline exhaustion, and provider fallback failure without subtitle text.
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
 
 // Starts a bounded benchmark session, replacing the platform temp directory's single last-session `.txt` report and
-// writing its initial aggregate snapshot without recording transcript or PCM data.
+// writing human-readable second/millisecond aggregate timing without recording transcript or PCM data.
 bool vw_benchmark_begin(vw_benchmark_t* benchmark, const char* model_id, const char* backend, int64_t now_us);
 
 // Records one successfully transmitted PCM chunk and establishes the live PTS-to-monotonic clock mapping if needed
