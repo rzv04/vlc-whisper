@@ -43,13 +43,9 @@ static double vw_benchmark_ratio(uint64_t numerator, uint64_t denominator) {
   return denominator == 0 ? 0.0 : (double)numerator / (double)denominator;
 }
 
-static double vw_benchmark_us_to_ms(int64_t duration_us) {
-  return (double)duration_us / 1000.0;
-}
+static double vw_benchmark_us_to_ms(int64_t duration_us) { return (double)duration_us / 1000.0; }
 
-static double vw_benchmark_us_to_s(int64_t duration_us) {
-  return (double)duration_us / 1000000.0;
-}
+static double vw_benchmark_us_to_s(int64_t duration_us) { return (double)duration_us / 1000000.0; }
 
 static int vw_benchmark_compare_i64(const void* lhs, const void* rhs) {
   const int64_t left = *(const int64_t*)lhs;
@@ -86,7 +82,8 @@ static const char* vw_benchmark_translation_failure_detail(uint32_t latency_us) 
   if (latency_us == 0) return "translation pipeline rejected the cue before a network request could run";
   if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US)
     return "global 800ms cue deadline exhausted while running the Web RPC, GTX, and Mobile fallback chain";
-  return "Web RPC, GTX, and Mobile produced no valid translation before the deadline (request or response parse failure)";
+  return "Web RPC, GTX, and Mobile produced no valid translation before the deadline (request or response parse "
+         "failure)";
 }
 
 static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, int64_t end_us) {
@@ -103,6 +100,10 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   uint64_t processing_audio_us = benchmark->audio_duration_us;
   if (processing_audio_us == 0) processing_audio_us = benchmark->segment_audio_duration_us;
   int64_t duration_us = end_us > benchmark->started_us ? end_us - benchmark->started_us : 0;
+  int64_t translation_latency_min_us =
+      benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 0) : 0;
+  int64_t translation_latency_max_us =
+      benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 100) : 0;
   fprintf(report, "report_version=2\n");
   fprintf(report, "state=%s\n", finalized ? "finalized" : "active");
   fprintf(report, "model=%s\n", benchmark->model_id[0] ? benchmark->model_id : "unknown");
@@ -145,17 +146,12 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "translation_timeout_count=%llu\n", (unsigned long long)benchmark->translation_timeout_count);
   fprintf(report, "translation_duration_s=%.3f\n", (double)benchmark->translation_duration_us / 1000000.0);
   fprintf(report, "translation_latency_samples=%zu\n", benchmark->translation_latency_sample_count);
-  fprintf(report, "translation_latency_min_ms=%.3f\n",
-          vw_benchmark_us_to_ms(benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 0)
-                                                                           : 0));
+  fprintf(report, "translation_latency_min_ms=%.3f\n", vw_benchmark_us_to_ms(translation_latency_min_us));
   fprintf(report, "translation_latency_p50_ms=%.3f\n",
           vw_benchmark_us_to_ms(vw_benchmark_trans_percentile(benchmark, 50)));
   fprintf(report, "translation_latency_p95_ms=%.3f\n",
           vw_benchmark_us_to_ms(vw_benchmark_trans_percentile(benchmark, 95)));
-  fprintf(report, "translation_latency_max_ms=%.3f\n",
-          vw_benchmark_us_to_ms(benchmark->translation_latency_sample_count
-                                    ? vw_benchmark_trans_percentile(benchmark, 100)
-                                    : 0));
+  fprintf(report, "translation_latency_max_ms=%.3f\n", vw_benchmark_us_to_ms(translation_latency_max_us));
   fprintf(report, "latency_clock=live_pts_to_monotonic_only\n");
   fprintf(report, "post_filtering_included_in_speed=false\n");
   bool success = fflush(report) == 0;
@@ -236,11 +232,12 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
   if (!success) {
     const char* reason = vw_benchmark_translation_failure_reason(latency_us);
     const char* detail = vw_benchmark_translation_failure_detail(latency_us);
+    double start_pts_s = vw_benchmark_us_to_s(benchmark->last_segment_start_pts_us);
+    double end_pts_s = vw_benchmark_us_to_s(benchmark->last_segment_end_pts_us);
+    double latency_ms = vw_benchmark_us_to_ms((int64_t)latency_us);
     vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE",
                  "segment=%llu start_pts_s=%.3f end_pts_s=%.3f latency_ms=%.3f reason=%s detail=%s",
-                 (unsigned long long)benchmark->last_segment_id, vw_benchmark_us_to_s(benchmark->last_segment_start_pts_us),
-                 vw_benchmark_us_to_s(benchmark->last_segment_end_pts_us), vw_benchmark_us_to_ms((int64_t)latency_us),
-                 reason, detail);
+                 (unsigned long long)benchmark->last_segment_id, start_pts_s, end_pts_s, latency_ms, reason, detail);
   }
   if (!benchmark->active) return;
   benchmark->translation_requests_sent++;
