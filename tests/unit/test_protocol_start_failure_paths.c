@@ -74,7 +74,8 @@ int main(void) {
 
   start = make_valid_local_start();
   start.source_url_len = 1;
-  check_false("START rejects source_url_len/string mismatch", vw_protocol_validate_payload(VW_MSG_START_SESSION, &start));
+  check_false("START rejects source_url_len/string mismatch",
+              vw_protocol_validate_payload(VW_MSG_START_SESSION, &start));
 
   start = make_valid_local_start();
   start.source_url_len = VW_MAX_SOURCE_URL_BYTES + 1U;
@@ -87,7 +88,8 @@ int main(void) {
 
   start = make_valid_live_start();
   memset(start.language, 'x', sizeof(start.language));
-  check_false("START rejects a non-terminated language field", vw_protocol_validate_payload(VW_MSG_START_SESSION, &start));
+  check_false("START rejects a non-terminated language field",
+              vw_protocol_validate_payload(VW_MSG_START_SESSION, &start));
 
   if (g_failures != 0) {
     fprintf(stderr, "test_protocol_start_failure_paths: %d contract failure(s)\n", g_failures);
