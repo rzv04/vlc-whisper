@@ -125,3 +125,17 @@ Unix-domain integration tests use unique absolute paths under `/tmp`, derived fr
 test listener from unlinking its own executable when the build's test working directory is used as the socket path.
 Release test binaries are compiled with `NDEBUG` removed because assertions contain executable checks and cleanup
 side effects that are part of the test harness contract.
+
+## Failure-path-first development
+
+Meaningful feature and behavior work follows a red-before-green discipline for failure handling. Before implementation changes are written, add tests for the important invalid inputs, boundary values, teardown/error transitions, and cross-component seams affected by the change; verify those tests fail for the intended reason against the pre-implementation behavior. The implementation may then be written against the behavioral contract rather than against fixture-specific mechanics. Do not weaken a failure-path test merely to make a change green, and do not special-case production behavior for a test fixture.
+
+When a change crosses a queue, decoder, IPC boundary, thread/process lifetime, session epoch, filesystem/network boundary, or other subsystem seam, at least one integration/seam test must exercise the failure composition rather than only the individual units.
+
+This test-only follow-up adds three explicit postmortem contracts:
+
+- `tests/unit/test_protocol_start_failure_paths.c` exercises malformed `START_SESSION` combinations, including audio format, source-kind/source-URL consistency, length mismatch, and language-field boundaries.
+- `tests/unit/test_worker_config_failure_paths.c` enforces reject-on-overflow semantics for identity-bearing worker CLI values (`--pipe`, `--vad-model`, `--log-file`) rather than silent truncation.
+- `tests/integration/test_queue_audio_timeline.c` composes worker-queue eviction with an already-populated audio buffer and requires the dropped media-time gap not to be collapsed. The assertion deliberately permits multiple future implementations: rejecting the discontinuous append, re-anchoring, or explicitly representing/filling the gap can satisfy the observable timeline invariant.
+
+These contract tests do not assert that the underlying postmortem findings are fixed. Where current `main` violates the stated contract, the test is expected to be red until a separate implementation change makes the behavior conform.
