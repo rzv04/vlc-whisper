@@ -99,11 +99,12 @@ int main(void) {
   vw_benchmark_record_audio(&benchmark, 11000000, 1000000, 3000000);
   vw_benchmark_record_frame(&benchmark);
 
-  vw_caption_segment_t segment = {.segment_id = 42,
-                                  .start_pts_us = 10000000,
-                                  .end_pts_us = 10500000,
-                                  .text_bytes = 4,
-                                  .text_utf8 = (char*)"test"};
+  vw_caption_segment_t segment = {0};
+  segment.segment_id = 42;
+  segment.start_pts_us = 10000000;
+  segment.end_pts_us = 10500000;
+  segment.text_bytes = 4;
+  segment.text_utf8 = (char*)"test";
   vw_benchmark_record_caption_received(&benchmark, &segment, 2100000, false);
   EXPECT(benchmark.captions_received == 1);
   EXPECT(benchmark.last_segment_id == 42);
