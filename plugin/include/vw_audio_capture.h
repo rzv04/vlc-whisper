@@ -31,6 +31,8 @@ typedef struct vw_audio_capture {
   // forwarding new.
   _Atomic bool* invalid_pts_drain_pending;  // optional external signal (points into plugin sys atomic)
   struct vw_spsc_queue* queue;
+  // Optional atomic pointer to current playback rate; used to throttle/drop audio at high speeds (>4.0x).
+  _Atomic float* playback_rate;
 } vw_audio_capture_t;
 
 // Audio chunk structure representing a block of PCM audio data, processed from the VLC audio filter pipeline.
@@ -66,10 +68,8 @@ typedef struct {
   uint32_t channels;         // Number of channels (e.g. 2 for stereo)
 } vw_audio_input_t;
 
-// Extracts incoming PCM audio blocks from the VLC pipeline, downmixes/resamples to 16kHz Mono S16,
-// computes precise durations, and chunks them to fit limits.
-// Strictly non-blocking and zero-allocation (Rule 4) to protect VLC callbacks. Pushes to SPSC queue and safely
-// ignores overflow.
+// Resamples and downmixes incoming PCM audio to 16kHz mono, chunking into SPSC queue.
+// Realtime-safe and zero-allocation; throttles and drops audio when playback rate exceeds 4.0x.
 bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_input_t* input);
 
 #endif  // VW_AUDIO_CAPTURE_H_

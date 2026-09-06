@@ -111,6 +111,7 @@ vlc-whisper/
 │   │   ├── test_protocol_codec.c              # Serialization & frame encoding unit tests
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
 │   │   ├── test_protocol_util.c               # Saturating arithmetic boundary and overflow unit tests
+│   │   ├── test_log.c                         # Thread-safe logging, multi-instance registration & file flush tests
 │   │   ├── test_source_decoder.c              # Media Foundation / FFmpeg native source demuxer tests
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests

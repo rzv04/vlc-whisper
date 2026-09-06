@@ -24,7 +24,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-001 — Permanent Subtitle Freeze on Screen During Silence via `b_ephemer = true`
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `b_ephemer = false`)
 - **Affected**: `plugin/src/vw_caption_presenter.c:126` (also lines 117-135, 359-362)
 - **Trigger**: Any dialogue segment finishes and is followed by silence (e.g. pause in speech, quiet movie scene).
 - **Impact**: In `vw_caption_presenter_render_spu()`, setting `subpic->b_ephemer = true;` instructs VLC's SPU engine to ignore `i_stop` and keep rendering the subpicture until a subsequent subpicture arrives. When silence ensues, the previous subtitle remains permanently frozen on the screen indefinitely.
@@ -33,7 +33,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-002 — Model Download Progress Subpicture Queue Leak & Permanent "Done (100%)" Banner
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05; root cause extended)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `replace_existing = true`, `b_ephemer = false`, and progress channel clear)
 - **Affected**: `plugin/src/vw_caption_presenter.c:211, 126`, `plugin/src/vw_whisper_module.c:1411-1418`
 - **Trigger**: Background model download in progress and reaching completion.
 - **Impact**: Progress updates render with `replace_existing = false`, continuously allocating and enqueuing subpicture objects in VLC's SPU channel queue without clearing previous ones. Additionally, on DONE the module zeroes `model_download_id` (1413) *before* `vw_plugin_respawn_worker()` runs, so the clear guard at module.c:590-593 is skipped and the success path never flushes the progress channel, freezing "Model <id>: done (100%)" (rendered with `b_ephemer = true`) across the top of the video for the entire playback duration.
@@ -42,7 +42,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-004 — Worker Path Resolution Skipped on Respawn, Causing Indefinite 2-Second Sender Freezes
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `vw_plugin_resolve_worker_path()` on respawn)
 - **Affected**: `plugin/src/vw_whisper_module.c:622-627, 984, 1032-1043`
 - **Trigger**: Worker crashes or restarts when `worker-path` config is unconfigured or empty.
 - **Impact**: `vw_plugin_respawn_worker()` passes empty `sys->worker_path` (`""`) directly to `vw_plugin_launch_with_auto_retry()`, skipping `vw_plugin_resolve_worker_path()`. No worker process is spawned, and the sender thread blocks for 2,000ms every 10 seconds in `vw_ipc_connect()` retries, permanently disabling captions. The comment at module.c:623 acknowledges the empty-path case but nothing resolves it.
@@ -60,7 +60,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-006 — Unhandled `SIGPIPE` in POSIX curl Subprocess Spawning
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `sigaction` `SIG_IGN` on SIGPIPE)
 - **Affected**: `worker/src/vw_translate.c:786`
 - **Trigger**: Child curl process exits abruptly while worker writes payload to `pipe_in`.
 - **Impact**: Writing to a broken pipe without `MSG_NOSIGNAL` raises uncaught `SIGPIPE` (signal 13), immediately terminating the entire worker process and dropping VLC captions. No `SIGPIPE`/`SIG_IGN` handling exists anywhere under `worker/`.
@@ -69,7 +69,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-007 — Bidirectional Blocking Pipe Deadlock in Curl Transport
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `poll()` multiplexing and non-blocking I/O)
 - **Affected**: `worker/src/vw_translate.c:782-822`
 - **Trigger**: Curl produces early output/diagnostics or translation payload exceeds standard pipe buffer (64KB).
 - **Impact**: The parent process synchronously writes the entire payload (up to ~65,526 B, near the 64 KB pipe buffer) before reading from `pipe_out`. If curl fills `pipe_out` buffer or parent blocks on full `pipe_in`, both processes deadlock permanently.
@@ -78,7 +78,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-008 — `WinHttpSendRequest` Parameter Failure on Fallback Tiers on Windows
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via explicit 0 header length for NULL headers)
 - **Affected**: `worker/src/vw_translate.c:633`
 - **Trigger**: Tier 1 (Web RPC) fails or times out, initiating Tier 2 (GTX) or Tier 3 (Mobile) fallback on Windows.
 - **Impact**: Passing `(DWORD)-1L` for headers length when `headers == NULL` violates WinHTTP API contract and fails with `ERROR_INVALID_PARAMETER` (87), completely disabling fallback translation tiers on Windows. The GTX/mobile tiers pass `content_type=NULL` (translate.c:919, 932), so exactly the fallback tiers hit the NULL-header case. Runtime failure is API-contract dependent (unverifiable on Linux); the source defect is present.
@@ -87,7 +87,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-010 — Media Foundation Buffer Lock Leak
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via guaranteed Unlock before Release)
 - **Affected**: `worker/src/vw_source_decoder_mf.c:260-261, 311, 313`
 - **Trigger**: Media Foundation decodes a sample where `cbCurrentLength == 0`.
 - **Impact**: `IMFMediaBuffer::Lock()` is acquired, but `Unlock()` is skipped on the zero-length branch, and `Release()` is called on a locked buffer, leaking COM allocator locks and stalling subsequent decodes.
@@ -123,7 +123,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-018 — Data Race and Type Confusion in `vw_log_set_sink`
 
 - **Priority**: P1
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `g_log_mutex` synchronization and multi-instance registration)
 - **Affected**: `protocol/src/vw_log.c:19-22, 56-59`
 - **Trigger**: Concurrent logging while log sink is updated or cleared.
 - **Impact**: Sink pointer and user data pointer are updated via separate atomic stores (log.c:20-21) and loaded separately at log.c:56-57, allowing mismatched pointer invocation or use-after-free during teardown. The plugin clears via `vw_log_set_sink(NULL, NULL)` (vw_whisper_module.c:1648/1660/1697/1731/1841) while sender/reader threads may log: a window exists where sink=`vw_plugin_log_sink` and udata=NULL, so the callback gets a NULL object.
@@ -136,7 +136,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-019 — Fast-Forward (>16x Playback Rate) Crashes Worker via Protocol Validation Failure
 
 - **Priority**: P2
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via rate clamping in client and throttling in capture)
 - **Affected**: `plugin/src/vw_worker_client.c:447`, `plugin/src/vw_whisper_module.c:1117, 1128`, `protocol/src/vw_protocol_validate.c:146`
 - **Trigger**: Playback rate set above 16x (e.g. 32x or 64x fast-forward in VLC).
 - **Impact**: The plugin forwards `rate > 16.0f` to the worker in `VW_MSG_POSITION` (client clamps only `<=0`, not `>16`). Worker validation strictly rejects `playback_rate > 16.0f`, treats it as a fatal protocol error, and terminates.
@@ -145,7 +145,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-020 — Unconditional Flushing of VLC System OSD (Channel 1) Destroys Native Player HUD
 
 - **Priority**: P2
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via conditional fallback flush preserving OSD channel 1)
 - **Affected**: `plugin/src/vw_caption_presenter.c:487-488`
 - **Trigger**: Any pause, resume, seek, rate change, or media blanking event.
 - **Impact**: `vw_caption_presenter_blank()` unconditionally flushes VLC's native OSD channel 1, erasing native volume, mute, and speed notifications even when a private SPU channel is active.
@@ -343,7 +343,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-064 — macOS/BSD IPC Send Can Terminate the Host with SIGPIPE
 
 - **Priority**: P2
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via `MSG_NOSIGNAL` on send and `SO_NOSIGPIPE` on socket creation)
 - **Affected**: `protocol/src/vw_ipc_socket_linux.c:128-130, 135`
 - **Trigger**: The IPC peer closes while a macOS or BSD build sends a frame.
 - **Impact**: `MSG_NOSIGNAL` is defined as zero on platforms lacking that flag, and no `SO_NOSIGPIPE` is set anywhere in the file. An `EPIPE` from `send` (:135) can therefore raise the default SIGPIPE and terminate the VLC plugin or worker.
@@ -599,7 +599,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-075 — Auth-Token RNG Failure Returns a Nonfunctional Filter as Success
 
 - **Priority**: P3
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Closed (Fixed in `fix/reconciled-p1-defects` via fail-closed return on random token failure)
 - **Affected**: `plugin/src/vw_whisper_module.c:1743-1744, 1799`
 - **Trigger**: `vw_platform_get_random_bytes()` fails during plugin open.
 - **Impact**: The plugin logs the RNG failure (WARN only) but still returns `VLC_SUCCESS` (:1799) without launching a worker or sender thread. VLC accepts the filter, while queued audio is never drained and captions silently remain unavailable. Fail-closed precedent exists in the pipe-name RNG path (1642-1665).

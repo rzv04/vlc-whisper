@@ -115,6 +115,9 @@ static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id,
   subpic->p_region = region;
   subpic->i_channel = channel_id;
   subpic->i_start = (vlc_tick_t)start_tick;
+  if (stop_tick <= start_tick) {
+    stop_tick = vw_saturating_add_i64(start_tick, VW_CAPTION_MIN_DISPLAY_DURATION_US);
+  }
   subpic->i_stop = (vlc_tick_t)stop_tick;
   // Render in the OSD clock domain: b_subtitle=false selects render_osd_date = mdate(), the
   // clock this VLC 3.0.23 build demonstrably renders filter-pushed subpictures against (the
@@ -123,7 +126,9 @@ static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id,
   // i_stop must therefore be mdate-based. Media-domain scheduling (b_subtitle=true) is the
   // 17c look-ahead target, blocked on observing the subtitle clock's behavior.
   subpic->b_subtitle = false;
-  subpic->b_ephemer = true;
+  // VW-001: b_ephemer must be false so VLC automatically hides/destroys the subpicture when
+  // mdate reaches i_stop; b_ephemer=true causes subtitles to freeze permanently during silence.
+  subpic->b_ephemer = false;
   subpic->b_absolute = false;
   subpic->b_fade = true;
 
@@ -208,7 +213,7 @@ bool vw_caption_presenter_show_model_progress(vw_caption_presenter_t* presenter,
   int64_t start_tick = (int64_t)mdate();
   bool rendered = vw_caption_presenter_render_spu(
       vout, presenter->model_progress_channel_id, progress_text, SUBPICTURE_ALIGN_TOP, 20, start_tick,
-      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US), false);
+      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US), true);
   vlc_object_release(VLC_OBJECT(vout));
   return rendered;
 }
@@ -483,9 +488,11 @@ void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
   if (vout) {
     if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0) {
       vout_FlushSubpictureChannel(vout, presenter->spu_channel_id);
+    } else {
+      // VW-020: only flush VLC system OSD (channel 1) if private SPU channel was not registered
+      vout_FlushSubpictureChannel(vout, 1);
+      vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, VW_OSD_BLANK_DURATION_US, "");
     }
-    vout_FlushSubpictureChannel(vout, 1);
-    vout_OSDText(vout, 1, SUBPICTURE_ALIGN_BOTTOM, VW_OSD_BLANK_DURATION_US, "");
     vlc_object_release(VLC_OBJECT(vout));
   }
 }

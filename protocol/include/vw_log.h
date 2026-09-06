@@ -20,13 +20,20 @@ typedef void (*vw_log_sink_fn)(vw_log_level_t level, const char* event_id, const
 // output.
 void vw_log_set_enabled(bool enabled);
 
-// Sets custom log sink callback (defaults to stderr unbuffered printing if NULL)
+// Sets or registers a custom log sink callback under mutex protection with instance tracking, preventing torn updates,
+// type confusion, or use-after-free.
 void vw_log_set_sink(vw_log_sink_fn sink, void* user_data);
 
-// Sets an additional FILE* output that enabled log events are also written to; pass NULL to disable file output.
+// Sets an additional FILE* output under mutex protection that flushes prior files and synchronizes concurrent writes
+// and lifecycle transitions.
 void vw_log_set_file(FILE* file);
 
-// Privacy-safe variadic log function: NEVER logs PCM samples, transcript text, or secret tokens.
+// Flushes the active diagnostic log file and stderr streams under mutex protection to guarantee buffered output is
+// written safely.
+void vw_log_flush(void);
+
+// Privacy-safe variadic log function: formats message outside the lock, writes under mutex, and never logs PCM
+// samples, transcript text, or secret tokens.
 void vw_log_event(vw_log_level_t level, const char* event_id, const char* fmt, ...);
 
 #endif  // VW_LOG_H_

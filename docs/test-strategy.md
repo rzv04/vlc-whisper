@@ -153,3 +153,12 @@ This test-only follow-up adds three explicit postmortem contracts:
 - `tests/integration/test_queue_audio_timeline.c` composes worker-queue eviction with an already-populated audio buffer and requires the dropped media-time gap not to be collapsed. The assertion deliberately permits multiple future implementations: rejecting the discontinuous append, re-anchoring, or explicitly representing/filling the gap can satisfy the observable timeline invariant.
 
 These contract tests do not assert that the underlying postmortem findings are fixed. Where current `main` violates the stated contract, the test is expected to be red until a separate implementation change makes the behavior conform.
+
+## P1 Defect Regression Test Suite
+
+Regression coverage has been established for reconciled P1 defects:
+- `tests/unit/test_log.c`: Verifies thread safety under `g_log_mutex`, multi-instance plugin logging registration and unregistration where an unregistering instance does not clobber active peers, mutex-protected `FILE*` lifecycle, and atomic `vw_log_flush()`.
+- `tests/unit/test_caption_presenter.c`: Verifies that subtitle SPU subpictures have `b_ephemer = false` so that captions do not freeze on screen during dialogue silence (VW-001); verifies that `blank()` flushes dedicated SPU channels without destroying VLC's native system OSD channel 1 HUD (VW-020); verifies model progress channel replacement and cleanup (VW-002).
+- `tests/unit/test_audio_capture.c`: Verifies that incoming audio blocks are throttled and dropped when playback rate exceeds 4.0x, updating duration accounting while avoiding SPSC queue saturation (VW-019).
+- `tests/unit/test_oversized_uri_rejected_before_truncation.c`: Verifies that media-swap source URIs check original string length against destination buffer boundaries before copying, preventing silent truncation into malicious or unintended paths (Finding #22).
+
