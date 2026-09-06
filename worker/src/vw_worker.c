@@ -436,7 +436,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   char translate_dst_lang[16] = "en";
   uint8_t translate_mode = 1;
 
-  vw_worker_queue_t* queue = vw_worker_queue_create(32);
+  vw_worker_queue_t* queue = vw_worker_queue_create(VW_WORKER_FRAME_QUEUE_CAPACITY);
   if (!queue) {
     free(window_samples);
     if (audio_buf) vw_audio_buffer_free(audio_buf);

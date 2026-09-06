@@ -32,13 +32,20 @@ jobs:
             plugin/include/*.h plugin/src/*.c \
             protocol/include/*.h protocol/src/*.c \
             worker/include/*.h worker/src/*.c \
-            tests/include/*.h tests/unit/*.c tests/integration/*.c
+            tests/include/*.h tests/unit/*.c tests/integration/*.c \
+            tools/quality_benchmark/*.c
 
       - name: Configure CMake (coverage preset)
-        run: cmake --preset linux-x64-coverage
+        run: cmake --preset linux-x64-coverage -DVW_QUALITY_BENCHMARK_HOOKS=ON
 
       - name: Build binaries & test executables
         run: cmake --build --preset linux-x64-coverage
+
+      - name: Build local quality benchmark runner
+        run: cmake --build --preset linux-x64-coverage --target vw-quality-benchmark
+
+      - name: Python quality-tool unit tests
+        run: python3 -m unittest discover -s tools/quality_benchmark -p 'test_*.py'
 
       - name: CTest unit & integration suite (STRICT)
         run: ctest --preset linux-x64-coverage --output-on-failure

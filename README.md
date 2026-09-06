@@ -39,43 +39,35 @@ Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Silero V
 
 ### Option 1: Standalone Installer (Recommended)
 
-1. **Download**: Grab `vlc-whisper-<version>-win64-setup.exe` from [Latest Releases](https://github.com/rzv04/vlc-whisper/releases).
-2. **Install**: Run the setup wizard.
-3. **Launch & Watch**: Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video - subtitles will appear on screen automatically!
-4. Alternatively, open VLC, go to `Tools > Preferences (Ctrl+P) > Show settings > All > Audio > Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator)
+1. Grab `vlc-whisper-<version>-win64-setup.exe` from [Latest Releases](https://github.com/rzv04/vlc-whisper/releases), and run the setup wizard.
+2. Open VLC using the newly created **"VLC (with AI Whisper Captions)"** desktop shortcut, and play any video - subtitles will appear on screen automatically!
+3. Alternatively, open VLC, go to `Tools > Preferences (Ctrl+P) > Show settings > All > Audio > Filters` and select the `Offline Whisper AI Captions Filter` checkbox there. Useful when VLC is being launched by third-party apps, such as [IPTVnator](https://github.com/4gray/iptvnator).
 
 ### Option 2: Portable Archive (.zip)
 
 1. Download `vlc-whisper-<version>-win64.zip` from [Releases](https://github.com/rzv04/vlc-whisper/releases).
 2. Extract the archive directly into your VLC installation directory (e.g. `C:\Program Files\VideoLAN\VLC`).
 3. Open a Command Prompt in your VLC directory and refresh the plugin cache (or manually delete `plugins.dat`:
+
    ```cmd
+
    vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
    ```
+
 4. Enable the filter under `Tools > Preferences > Show settings: All > Audio > Filters`, and play a video.
 
 ---
 
-## Platform & Compatibility List
-
-| Component / Feature          | Support Status                               | Notes                                                                                                                                     |
-| :--------------------------- | :------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Windows 10 / 11 (64-bit)** | **Supported**                                | Complete installer wizard, Vulkan GPU acceleration, and CPU fallback.                                                                     |
-| **Linux (x86_64)**           | **Experimental / Dev Preview**               | Compiles and runs from source. Official native packages WIP.                                                                              |
-| **macOS**                    | **Unsupported**                              | Not currently planned.                                                                                                                    |
-| **VLC Media Player**         | **VLC 3.0.x (64-bit)**                       | Standard desktop 64-bit VLC release. 32-bit builds are unsupported.                                                                       |
-| **Hardware Backends**        | **Vulkan GPU & Multi-Core CPU**              | Automatic GPU detection with seamless CPU fallback.                                                                                       |
-| **Validated Languages**      | **English, Romanian**                        | Fully tested end-to-end. Other languages supported by the bundled Whisper models may work but have not yet been validated by VLC-Whisper. |
-| **Subtitle Translation**     | **Opt-in (Keyless Google Translate Engine)** | Off by default.                                                                                                                           |
-
 ## Key Features
 
-- 🔒 **100% Offline & Private by Default**: All audio decoding, voice activity detection, and speech recognition occur locally in memory. Zero audio or transcript data ever leaves your computer, no telemetry involved (aside from opt-in, local logging for debug purposes; enable/disable in settings).
-- ⚡ **Hardware Acceleration**: Automatic Vulkan GPU acceleration for near-instant speech decoding, or multi-threaded CPU alternative.
-- 🌐 **Real-Time Subtitle Translation**: Translate subtitles live into your native language with single-line or dual-line display modes, similar to [Daum PotPlayer](https://potplayer.tv/), _opt-in only_).
-- ⏩ **Lag-free experience**: Seeking and play/pause smoothly resumes captions without audio glitching or video blocking.
-- 🎛️ **In-VLC Settings Menu**: Adjust models, languages and other settings directly inside VLC via `View > VLC-Whisper Settings`.
-- 📦 **On-Demand Model Downloader**: Fast multilingual `tiny` model bundled. Download higher-accuracy models (`base`, `small`, `medium`, `large`) on demand directly through the settings menu.
+- 🔒 **100% Offline & Private by Default**
+- ⚡ **GPU Vulkan Acceleration**
+- 🌐 **Real-Time Subtitle Translation Support**
+- ⏩ **Lag-free experience<sup>_\*_</sup>**
+- 🎛️ **In-VLC Settings Menu**
+- 📦 **On-Demand Model Downloader**
+
+_<sup>\*</sup> Aside from a small initial video start delay, seeking and play/pause should not cause any stutters or audio glitches._
 
 ---
 
@@ -91,6 +83,9 @@ Open `View > VLC-Whisper Settings`from the VLC menu bar:
 - **CPU Threads**: Number of CPU worker threads. The default of 4 is recommended for most systems.
 - **Real-Time Translation**: Check the box to enable live translation of finalized subtitles. Choose **Dual line** (shows original speech and translation stacked) or **Translation only** (default).
 - **Downloading Models**: Select any model in the dropdown and click **Download Selected Model**.
+
+> [!WARNING]
+> The settings menu is currently a Lua extension. Due to VLC extension limitations, the GUI may not fully update before you hit 'Apply', and might report wrong results (especially about downloaded models). Press the 'Apply' button to check if models were actually downloaded before.
 
 ---
 
@@ -123,6 +118,14 @@ Open `View > VLC-Whisper Settings`from the VLC menu bar:
 </details>
 
 <details>
+<summary><b>VLC keeps crashing!</b></summary>
+
+1. Either disable the plugin, or uninstall it entirely, then replay a video or audio. If VLC still crashes, the issue might not be caused by VLC-Whisper.
+2. If you believe the crash is caused by VLC-Whisper, report a bug using the [issue tracker](https://github.com/rzv04/vlc-whisper/issues), using the specified template. **Ensure you provide logs!**
+
+</details>
+
+<details>
 <summary><b>How do I uninstall VLC-Whisper?</b></summary>
 
 (**Recommended**) Go to `Control Panel > Programs > Uninstall a program` and uninstall **VLC-Whisper AI Subtitle Plugin**.
@@ -131,6 +134,24 @@ Or manually run `uninstall-vlc-whisper.exe` from your VLC installation directory
 </details>
 
 ---
+
+## Benchmark Results
+
+> [!INFO]
+> These results should only be treated as anecdotal and are not fully representative of actual whisper.cpp or VLC-Whisper performance.
+
+Evaluated on FLEURS dataset subset (10 clips English, 10 clips Romanian) using `models/ggml-tiny.bin` (4 CPU threads):
+
+| Language            | Mode              | Measured WER (%) | Measured CER (%) | Word Errors / Ref Words | Estimated WER (Excl. Duplicates)\* | Notes                                               |
+| :------------------ | :---------------- | :--------------: | :--------------: | :---------------------: | :--------------------------------: | :-------------------------------------------------- |
+| **English (`en`)**  | **`offline`**     |    **10.38%**    |    **4.97%**     |        22 / 212         |               10.38%               | Native batch whisper.cpp baseline                   |
+| **English (`en`)**  | **`local media`** |    **10.38%**    |    **4.87%**     |        22 / 212         |               10.38%               | Same overall quality as the offline version         |
+| **English (`en`)**  | **`livestream`**  |    **46.23%**    |    **39.32%**    |        98 / 212         |             **~13.2%**             | Measured rolling window (~70 duplicate insertions)  |
+| **Romanian (`ro`)** | **`offline`**     |    **93.03%**    |    **29.71%**    |        227 / 244        |               93.03%               | Multilingual `tiny` baseline                        |
+| **Romanian (`ro`)** | **`local media`** |    **89.75%**    |    **33.00%**    |        219 / 244        |               89.75%               | Real-time source demuxing                           |
+| **Romanian (`ro`)** | **`livestream`**  |   **159.43%**    |    **91.52%**    |        389 / 244        |            **~83.61%**             | Measured rolling window (~185 duplicate insertions) |
+
+_\* Theoretical estimation excludes excess word insertions caused by phrase deduplication leaks across consecutive rolling-window hops (English: 70 duplicate insertions deducted $\to$ 28/212 errors; Romanian: 185 duplicate insertions deducted $\to$ 204/244 errors)._
 
 # Developer & Contributor Guide
 
@@ -212,17 +233,17 @@ cd vlc-whisper
 
 ### CMake Presets Reference
 
-| Preset Name               | Target OS     | Backend                                       | Output Binary                | Purpose                      |
-| :------------------------ | :------------ | :-------------------------------------------- | :--------------------------- | :--------------------------- |
-| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback)                | `vlc-whisper-worker`         | Linux development & tests    |
-| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                                      | `vlc-whisper-worker-cpu`     | CPU-only testing             |
-| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                               | `vlc-whisper-worker-cpu`     | Test code coverage           |
-| `windows-x64-release`     | Windows x64   | Vulkan GPU required; CPU fallback bundled     | `vlc-whisper-worker.exe`     | Production Windows installer |
-| `windows-x64-release-cpu` | Windows x64   | CPU-only                                      | `vlc-whisper-worker-cpu.exe` | Explicit CPU-only release    |
-| `windows-x64-debug`       | Windows x64   | Vulkan GPU (development may fall back to CPU) | `vlc-whisper-worker.exe`     | Windows debug symbols        |
+| Preset Name               | Target OS     | Backend                                       | Output Binary                | Purpose                             |
+| :------------------------ | :------------ | :-------------------------------------------- | :--------------------------- | :---------------------------------- |
+| `linux-x64-debug`         | Linux (Debug) | Vulkan GPU (auto CPU fallback)                | `vlc-whisper-worker`         | Linux development & tests           |
+| `linux-x64-debug-cpu`     | Linux (Debug) | CPU-only                                      | `vlc-whisper-worker-cpu`     | CPU-only testing                    |
+| `linux-x64-coverage`      | Linux (Debug) | CPU-only + gcov                               | `vlc-whisper-worker-cpu`     | Test code coverage                  |
+| `windows-x64-release`     | Windows x64   | Vulkan GPU required; CPU fallback bundled     | `vlc-whisper-worker.exe`     | Production Windows installer (NSIS) |
+| `windows-x64-release-cpu` | Windows x64   | CPU-only                                      | `vlc-whisper-worker-cpu.exe` | Explicit CPU-only release           |
+| `windows-x64-debug`       | Windows x64   | Vulkan GPU (development may fall back to CPU) | `vlc-whisper-worker.exe`     | Windows debug symbols               |
 
 > [!WARNING]
-> About `windows-x64-release`: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset. For the MinGW cross-build, provide a `VW_VULKAN_SDK` environment variable when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
+> About `windows-x64-release`: if the Vulkan SDK and `glslc` cannot be resolved, CMake stops instead of silently producing a CPU-only worker under the GPU release preset name. For the MinGW cross-build, provide a `VW_VULKAN_SDK` environment variable when the host packages are not sufficient. Use `windows-x64-release-cpu` when a CPU-only artifact is intentional.
 
 ---
 
@@ -270,6 +291,20 @@ For an offline release build, omit `-DVW_PROVISION_MODELS=ON` and place the two 
 ---
 
 ### Testing & Quality Assurance
+
+#### Headless EN/RO ASR Quality Benchmark
+
+A developer-only WER/CER regression benchmark lives under `tools/quality_benchmark/`. It is fully headless: it does not launch VLC, play audio, or require X11/Wayland or a Linux desktop environment. Configure a developer/test build with `VW_QUALITY_BENCHMARK_HOOKS=ON`, download the local FLEURS corpus explicitly, then run the Python orchestrator. The corpus and reports stay git-ignored and no media fixtures are committed.
+
+```bash
+python -m pip install -r tools/quality_benchmark/requirements.txt
+python tools/quality_benchmark/vw_download_corpus.py
+cmake --preset linux-x64-debug -DVW_QUALITY_BENCHMARK_HOOKS=ON
+cmake --build --preset linux-x64-debug --target vw-quality-benchmark vlc-whisper-worker
+python tools/quality_benchmark/vw_benchmark.py --build-dir build/linux-x64-debug --model models/ggml-tiny.bin
+```
+
+See `docs/quality-benchmark.md` for platform, completion-barrier, scoring, and reproducibility details. `tools/quality_benchmark/README.md` is the terse command reference.
 
 #### Running Full Test Suite
 
