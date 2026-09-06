@@ -195,6 +195,11 @@ opencode.jsonc
 opencode.json
 
 .commandcode/
+.omp/
+.agents/
+.opencode/
+.playwright-mcp/
+skills-lock.json
 
 graphify-out/
 .graphifyignore
