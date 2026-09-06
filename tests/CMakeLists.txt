@@ -10,6 +10,7 @@ macro(add_vw_test test_name)
         ${CMAKE_SOURCE_DIR}/worker/third_party/whisper.cpp/include
         ${CMAKE_SOURCE_DIR}/worker/third_party/whisper.cpp/ggml/include
         ${CMAKE_SOURCE_DIR}/tests/include
+        ${CMAKE_SOURCE_DIR}/tests/support
     )
     target_link_libraries(${test_name} PRIVATE vw_protocol Threads::Threads)
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
@@ -108,6 +109,59 @@ endif()
 add_vw_test(test_worker_client unit/vw_test_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 add_vw_test(test_worker_client_seek_epoch unit/test_worker_client_seek_epoch.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 add_vw_test(test_worker_client_compat unit/test_worker_client_compat.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+
+# Failure-path worker seam tests use deterministic test doubles for decoder/VAD/Whisper so they do not need
+# model files, real media, VLC GUI, or a platform decoder. Production worker/session code remains unmodified.
+set(VW_STUB_WORKER_CONTRACT_SRCS
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_sha256.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_model_download.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c
+    ${CMAKE_SOURCE_DIR}/worker/src/vw_translate_async.c
+    ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c
+    ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c
+    ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c
+    ${CMAKE_SOURCE_DIR}/tests/support/vw_test_worker_stubs.c)
+
+function(add_vw_stub_worker_contract_test test_name source_file)
+    add_vw_test(${test_name} ${source_file} ${VW_STUB_WORKER_CONTRACT_SRCS})
+    target_link_libraries(${test_name} PRIVATE whisper)
+    if(WIN32)
+        target_link_libraries(${test_name} PRIVATE winhttp bcrypt mfplat mfreadwrite mfuuid ole32 propsys)
+    endif()
+endfunction()
+
+add_vw_stub_worker_contract_test(test_decoder_again_never_becomes_eof
+                                 integration/test_decoder_again_never_becomes_eof.c)
+add_vw_stub_worker_contract_test(test_source_error_never_becomes_clean_eof
+                                 integration/test_source_error_never_becomes_clean_eof.c)
+add_vw_stub_worker_contract_test(test_live_media_end_flushes_tail
+                                 integration/test_live_media_end_flushes_tail.c)
+add_vw_stub_worker_contract_test(test_new_session_resets_all_session_state
+                                 integration/test_new_session_resets_all_session_state.c)
+
+add_vw_test(test_oversized_uri_rejected_before_truncation unit/test_oversized_uri_rejected_before_truncation.c)
+target_compile_definitions(test_oversized_uri_rejected_before_truncation
+                           PRIVATE VW_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+
+# The quality benchmark currently lives on its feature branch, not main. Keep its failure contracts registered now;
+# they return 77 while the feature is absent and automatically become active when the tool lands on this branch.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME test_benchmark_rejects_empty_reference
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/quality/test_quality_benchmark_failure_paths.py
+                     empty-reference)
+    add_test(NAME test_benchmark_rejects_fixture_hash_mismatch
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/quality/test_quality_benchmark_failure_paths.py
+                     hash-mismatch)
+    set_tests_properties(test_benchmark_rejects_empty_reference test_benchmark_rejects_fixture_hash_mismatch
+                         PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 if(WIN32)
     add_vw_test(test_platform unit/test_platform.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
