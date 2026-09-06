@@ -1,6 +1,5 @@
 #include "vw_test_worker_stubs.h"
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,9 +71,7 @@ bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* 
   return true;
 }
 
-const char* vw_whisper_engine_get_text(const vw_whisper_engine_t* engine) {
-  return engine ? "stub speech" : "";
-}
+const char* vw_whisper_engine_get_text(const vw_whisper_engine_t* engine) { return engine ? "stub speech" : ""; }
 
 int vw_whisper_engine_get_segment_count(const vw_whisper_engine_t* engine) {
   return (engine && g_transcribe_calls > 0) ? 1 : 0;
@@ -149,30 +146,27 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return true;
 }
 
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us) {
-  if (!decoder || !out_pcm || max_samples == 0) return 0;
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us) {
+  if (out_sample_count) *out_sample_count = 0;
+  if (!decoder || !out_pcm || max_samples == 0 || !out_sample_count) return VW_SOURCE_DECODER_READ_ERROR;
   g_decoder_read_calls++;
-  if (g_decoder_mode == VW_TEST_DECODER_ERROR) {
-    errno = EIO;
-    return 0;
-  }
+  if (g_decoder_mode == VW_TEST_DECODER_ERROR) return VW_SOURCE_DECODER_READ_ERROR;
   if (g_decoder_mode == VW_TEST_DECODER_AGAIN_THEN_DATA && g_decoder_read_calls <= 5) {
-    errno = EAGAIN;
-    return 0;
+    return VW_SOURCE_DECODER_READ_AGAIN;
   }
-  if (decoder->emitted_data) return 0;
+  if (decoder->emitted_data) return VW_SOURCE_DECODER_READ_EOF;
 
   size_t count = max_samples < 1600 ? max_samples : 1600;
   memset(out_pcm, 0, count * sizeof(*out_pcm));
   if (out_pts_us) *out_pts_us = decoder->pts_us;
   decoder->pts_us += (int64_t)((count * 1000000ULL) / 16000ULL);
   decoder->emitted_data = true;
-  return count;
+  *out_sample_count = count;
+  return VW_SOURCE_DECODER_READ_OK;
 }
 
-int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) {
-  return decoder ? 60000000 : -1;
-}
+int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) { return decoder ? 60000000 : -1; }
 
 void vw_source_decoder_close(vw_source_decoder_t* decoder) { free(decoder); }

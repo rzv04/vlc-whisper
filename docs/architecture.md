@@ -65,7 +65,7 @@ On the worker process side, the inbound frame queue (`vw_worker_queue_t`) connec
 | Plugin SPSC queue capacity       | 8 s                       | 16 chunks (512 ms max)  |
 | Worker frame queue capacity      | ~10.2 s (at 20 ms)        | 512 frames (`VW_WORKER_FRAME_QUEUE_CAPACITY`) |
 
-Backpressure rule: playback wins. If the audio queue is full, discard the newest unprocessed audio, increment `audio_dropped_us`, emit a rate-limited warning, and continue. Never slow VLC. Captions after a gap may be missing; they must never be timestamped as if they were complete.
+Backpressure rule: playback wins. If the audio queue is full, discard the newest unprocessed audio, increment `audio_dropped_us`, emit a rate-limited warning, and continue. Never slow VLC. The worker detects a discontinuity between the buffered end PTS and the next accepted audio PTS, clears the pre-gap PCM, and re-anchors at the incoming PTS. Captions after a gap may be missing; they must never be timestamped as if they were complete.
 
 ## Session state
 
@@ -76,7 +76,9 @@ IDLE -> STARTING -> READY -> PLAYING <-> PAUSED -> STOPPING -> IDLE
                   FAILED <------ DISCONTINUITY (Epoch Reset / Re-sync)
 ```
 
-A caption session is identified by a random 128-bit `session_id`; each playback start and each accepted seek epoch creates a new one. `sequence` is monotonic per transport direction and continues across caption-session restarts while the worker process/IPC connection stays alive. The plugin ignores stale session messages. A pause sends `PAUSE`, stops forwarding audio, and clears partial captions; final captions already scheduled may remain until their end PTS. Resume sends `RESUME`. Stop clears all generated captions before closing IPC. Module teardown detaches `p_filter->p_sys`, joins the sender, then clears presenters and destroys IPC/queue state.
+A caption session is identified by a random 128-bit `session_id`; each playback start and each accepted seek epoch creates a new one. `sequence` is monotonic per transport direction and continues across caption-session restarts while the worker process/IPC connection stays alive. A fresh `START` resets pause state, decoder anchors, EOF state, PCM, VAD, and queued captions before the new epoch becomes active. The plugin ignores stale session messages. A pause sends `PAUSE`, stops forwarding audio, and clears partial captions; final captions already scheduled may remain until their end PTS. Resume sends `RESUME`. `STOP(MEDIA_END)` and `SHUTDOWN` run one final live-tail inference and emit its final source captions before teardown. Stop clears generated captions before closing IPC. Module teardown detaches `p_filter->p_sys`, joins the sender, then clears presenters and destroys IPC/queue state.
+
+Native source decoders expose four outcomes: samples available, retryable stall, explicit EOF, and fatal error. Retryable stalls yield control to the worker without advancing or ending the source; only explicit EOF latches completion, while fatal errors produce `E_INTERNAL` and terminate the caption session without affecting VLC playback.
 
 Seeking & discontinuity policy (shipped in step 17; hardened in steps 17c & 17d and the MVP release gate):
 - In **Live Streaming Mode**, when a non-monotonic PTS, seek event (`BLOCK_FLAG_DISCONTINUITY`), rate change, or media swap occurs, the plugin clears active presenter captions, sends `STOP` (`SEEK_DISCONTINUITY`), discards the SPSC queue, and starts a new session epoch seamlessly without disabling captions or interrupting VLC media playback.

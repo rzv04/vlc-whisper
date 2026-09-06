@@ -70,6 +70,10 @@ The WER/CER benchmark under `tools/quality_benchmark/` is deliberately separate 
 - `tests/unit/test_translate.c`: one global 800 ms deadline is consumed across fallback tiers rather than reset for each request.
 - `tests/integration/test_worker_lifecycle.c`: wrong-token HELLO rejection (worker exits 1), first-frame-not-HELLO rejection (worker exits 1), client NULL-arg validation (NULL endpoint/token), connect failure with no listener.
 - `tests/integration/test_worker_ipc.c`: `START` with an unsupported sample rate rejected with an `E_AUDIO_FORMAT` error reply; clean `SHUTDOWN` exit.
+- `tests/unit/test_protocol_start_failure_paths.c`: exact 16 kHz mono S16LE validation, concrete language and terminated model fields, source-kind/URL consistency, and declared URL length equality.
+- `tests/integration/test_queue_audio_timeline.c`: a worker-queue audio eviction followed by a later frame preserves the media-time gap by re-anchoring buffered PCM instead of collapsing timestamps.
+- `tests/integration/test_decoder_again_never_becomes_eof.c` and `test_source_error_never_becomes_clean_eof.c`: retryable decoder stalls never latch EOF, while fatal decoder reads emit `E_INTERNAL` and end only the caption session.
+- `tests/integration/test_live_media_end_flushes_tail.c` and `test_new_session_resets_all_session_state.c`: media end flushes residual live speech, and a replacement `START` resets pause, decoder, EOF, PCM, VAD, and caption state.
 - `tests/unit/test_worker_config.c`: worker CLI arg parsing — valid `--token`/`--pipe`/`--model` success, and startup failure paths returning exit code 2 (bad `--token` length, non-hex `--token`, unknown option, dangling `--token`, NULL config).
 - `tests/unit/test_worker_config.c`: logging disabled by default, `--enable-logging`, and `--log-file` implying enabled diagnostics.
 - `tests/unit/vw_test_worker_client.c`: client-API session state machine (`vw_worker_client_start_session`, `vw_worker_client_send_audio`, `vw_worker_client_stop_session`, `vw_worker_client_shutdown`), transport receive timeout (`vw_ipc_receive_timeout`), and protocol framing verification against an in-process mock server.
@@ -114,7 +118,7 @@ The WER/CER benchmark under `tools/quality_benchmark/` is deliberately separate 
 - `tests/unit/test_translate.c` (21b): RFC 3986 percent URL encoding, HTML entity unescaping, Web RPC (`MkEWBc`) envelope response parsing, legacy GTX JSON array parsing, mobile web scrape HTML parsing, timeout budgeting (800ms), and 3-tier fallback tier constant validation.
 - `tests/unit/test_caption_presenter.c` (21b): dual-line translated subtitle formatting (`<source>\n<translated>`) and single-line translation-only presentation via VLC SPU subpicture rendering.
 - `cmake/vw_provision_model.cmake`, `cmake/vw_check_workers.cmake`, `cmake/vw_packaging.cmake` & `cmake/vw_installer.nsi.in`: release packaging requires the exact tiny and Silero VAD SHA-256 values even when those gitignored model files already exist locally; the portable ZIP uses an explicit model allowlist. The production Windows GPU preset fails if Vulkan cannot be enabled and requires both GPU and CPU workers. An explicit CPU-only installer removes or schedules deletion of a stale canonical GPU worker from an earlier GPU installation. Standalone NSIS acceptance still covers 64-bit VLC discovery, process handling, worker staging, reboot-safe replacement, notice ownership, uninstall cleanup, local media, and live network streams.
-- `tools/quality_benchmark/test_vw_quality.py`: network-free coverage for the EN/RO quality tool's normalizer, Romanian compatibility characters, edit distance/aggregation, and manifest/WAV helper behavior. CI builds `vw-quality-benchmark` and runs these helpers but does not download FLEURS or invoke Whisper WER/CER.
+- `tools/quality_benchmark/test_vw_quality.py` and `tests/quality/test_quality_benchmark_failure_paths.py`: network-free coverage for normalization, Romanian compatibility characters, edit distance/aggregation, manifest/WAV helpers, normalized-empty reference rejection, and pre-run fixture SHA-256 verification. CI builds `vw-quality-benchmark` and runs these helpers but does not download FLEURS or invoke Whisper WER/CER.
 
 ## Performance contract
 
@@ -146,13 +150,13 @@ Meaningful feature and behavior work follows a red-before-green discipline for f
 
 When a change crosses a queue, decoder, IPC boundary, thread/process lifetime, session epoch, filesystem/network boundary, or other subsystem seam, at least one integration/seam test must exercise the failure composition rather than only the individual units.
 
-This test-only follow-up adds three explicit postmortem contracts:
+The postmortem contract suite added these explicit red tests before implementation:
 
 - `tests/unit/test_protocol_start_failure_paths.c` exercises malformed `START_SESSION` combinations, including audio format, source-kind/source-URL consistency, length mismatch, and language-field boundaries.
 - `tests/unit/test_worker_config_failure_paths.c` enforces reject-on-overflow semantics for identity-bearing worker CLI values (`--pipe`, `--vad-model`, `--log-file`) rather than silent truncation.
 - `tests/integration/test_queue_audio_timeline.c` composes worker-queue eviction with an already-populated audio buffer and requires the dropped media-time gap not to be collapsed. The assertion deliberately permits multiple future implementations: rejecting the discontinuous append, re-anchoring, or explicitly representing/filling the gap can satisfy the observable timeline invariant.
 
-These contract tests do not assert that the underlying postmortem findings are fixed. Where current `main` violates the stated contract, the test is expected to be red until a separate implementation change makes the behavior conform.
+The protocol, queue timeline, decoder stall/error, live-tail, fresh-session, and benchmark integrity contracts were confirmed red before implementation and green afterward. Security-scoped ledger items remain outside this change.
 
 ## P1 Defect Regression Test Suite
 
@@ -161,4 +165,3 @@ Regression coverage has been established for reconciled P1 defects:
 - `tests/unit/test_caption_presenter.c`: Verifies that subtitle SPU subpictures have `b_ephemer = false` so that captions do not freeze on screen during dialogue silence (VW-001); verifies that `blank()` flushes dedicated SPU channels without destroying VLC's native system OSD channel 1 HUD (VW-020); verifies model progress channel replacement and cleanup (VW-002).
 - `tests/unit/test_audio_capture.c`: Verifies that incoming audio blocks are throttled and dropped when playback rate exceeds 4.0x, updating duration accounting while avoiding SPSC queue saturation (VW-019).
 - `tests/unit/test_oversized_uri_rejected_before_truncation.c`: Verifies that media-swap source URIs check original string length against destination buffer boundaries before copying, preventing silent truncation into malicious or unintended paths (Finding #22).
-

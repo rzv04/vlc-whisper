@@ -207,9 +207,13 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return false;
 }
 
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us) {
-  if (!decoder || !decoder->p_reader || !out_pcm || max_samples == 0) return 0;
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us) {
+  if (out_sample_count) *out_sample_count = 0;
+  if (!decoder || !decoder->p_reader || !out_pcm || max_samples == 0 || !out_sample_count)
+    return VW_SOURCE_DECODER_READ_ERROR;
+  if (decoder->eof_reached) return VW_SOURCE_DECODER_READ_EOF;
 
   size_t total_samples = 0;
 
@@ -227,7 +231,8 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       memmove(decoder->leftover_buffer, decoder->leftover_buffer + to_copy,
               (decoder->leftover_count - to_copy) * sizeof(int16_t));
       decoder->leftover_count -= to_copy;
-      return total_samples;
+      *out_sample_count = total_samples;
+      return VW_SOURCE_DECODER_READ_OK;
     } else {
       decoder->leftover_count = 0;
     }
@@ -242,14 +247,20 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
     HRESULT hr = decoder->p_reader->lpVtbl->ReadSample(decoder->p_reader, (DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0,
                                                        &dwStreamIndex, &dwStreamFlags, &llTimestamp, &pSample);
 
-    if (FAILED(hr) || (dwStreamFlags & MF_SOURCE_READERF_ENDOFSTREAM)) {
+    if (FAILED(hr)) {
+      if (pSample) pSample->lpVtbl->Release(pSample);
+      return VW_SOURCE_DECODER_READ_ERROR;
+    }
+
+    if (dwStreamFlags & MF_SOURCE_READERF_ENDOFSTREAM) {
       decoder->eof_reached = true;
       if (pSample) pSample->lpVtbl->Release(pSample);
       break;
     }
 
     if (!pSample) {
-      continue;
+      *out_sample_count = total_samples;
+      return total_samples > 0 ? VW_SOURCE_DECODER_READ_OK : VW_SOURCE_DECODER_READ_AGAIN;
     }
 
     IMFMediaBuffer* pBuffer = NULL;
@@ -292,16 +303,14 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
                 pBuffer->lpVtbl->Unlock(pBuffer);
                 pBuffer->lpVtbl->Release(pBuffer);
                 pSample->lpVtbl->Release(pSample);
-                decoder->eof_reached = true;
-                break;
+                return VW_SOURCE_DECODER_READ_ERROR;
               }
               int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
               if (!new_buffer) {
                 pBuffer->lpVtbl->Unlock(pBuffer);
                 pBuffer->lpVtbl->Release(pBuffer);
                 pSample->lpVtbl->Release(pSample);
-                decoder->eof_reached = true;
-                break;
+                return VW_SOURCE_DECODER_READ_ERROR;
               }
               decoder->leftover_buffer = new_buffer;
               decoder->leftover_capacity = new_capacity;
@@ -311,13 +320,22 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
           }
         }
         pBuffer->lpVtbl->Unlock(pBuffer);
+      } else {
+        pBuffer->lpVtbl->Release(pBuffer);
+        pSample->lpVtbl->Release(pSample);
+        return VW_SOURCE_DECODER_READ_ERROR;
       }
       pBuffer->lpVtbl->Release(pBuffer);
+    } else {
+      pSample->lpVtbl->Release(pSample);
+      return VW_SOURCE_DECODER_READ_ERROR;
     }
     pSample->lpVtbl->Release(pSample);
   }
 
-  return total_samples;
+  *out_sample_count = total_samples;
+  if (total_samples > 0) return VW_SOURCE_DECODER_READ_OK;
+  return decoder->eof_reached ? VW_SOURCE_DECODER_READ_EOF : VW_SOURCE_DECODER_READ_AGAIN;
 }
 
 int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) {

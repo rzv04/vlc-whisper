@@ -379,7 +379,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-079 — Media-Swap START Leaves Stale Worker Session State *(new 2026-09-05)*
 
 - **Priority**: P2
-- **Status**: Open
+- **Status**: Closed (2026-09-07)
 - **Affected**: `worker/src/vw_worker.c:585-606`
 - **Trigger**: Media swap (different session_id) while the old session was paused or had source-mode anchors set.
 - **Impact**: (a) `paused` is not reset — AUDIO_PCM is ignored (:797) and source decode is gated (:1092) until the first POSITION tick flips the paused transition, delaying captions; (b) `last_playback_pts_us`/`decoded_pts_us`/`current_playback_pts_us`/`source_eof`/`eof_retry_count` survive into the new epoch — if the new item's timeline starts below the old seek anchor, the first POSITION ticks trigger spurious `backward_jump` → forced seek + translation invalidation (worker-side analog of VW-060; compounds VW-063 if seeks fail).
@@ -388,7 +388,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-080 — Media Foundation Gap-Read Livelock *(new 2026-09-05)*
 
 - **Priority**: P2
-- **Status**: Open
+- **Status**: Closed (2026-09-07)
 - **Affected**: `worker/src/vw_source_decoder_mf.c:251-253`
 - **Trigger**: A source repeatedly returns S_OK with NULL samples (gap) and no EOF.
 - **Impact**: `if (!pSample) continue;` spins the read loop indefinitely with no timeout; the worker never regains control and lookahead decode stalls.
@@ -397,7 +397,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-081 — Transient Decoder Stall Promoted to Permanent `source_eof` *(new 2026-09-05)*
 
 - **Priority**: P2
-- **Status**: Open
+- **Status**: Closed (2026-09-07)
 - **Affected**: `worker/src/vw_worker.c:1152-1154`, `worker/src/vw_source_decoder_ffmpeg.c:309-314`
 - **Trigger**: Corrupt or awkward stream where FFmpeg's `defer_no_progress >= 2` break returns 0 samples *without* `eof_reached` (decoder-side EAGAIN).
 - **Impact**: The worker latches permanent `source_eof` after 3 consecutive 0-sample reads, so a transient stall ends session-wide lookahead transcription early.
@@ -464,7 +464,7 @@ every ledger entry against current source, corrected four entries, closed two as
 ### VW-054 — Missing Semantic Validation for `START_SESSION`, `CONTROL`, and `ERROR` Payloads
 
 - **Priority**: P3
-- **Status**: Open (re-confirmed 2026-09-05)
+- **Status**: Partially closed (2026-09-07: `START_SESSION` fixed; `CONTROL`, `STATUS`, and `ERROR` remain open)
 - **Affected**: `protocol/src/vw_protocol_validate.c:116-117, 130-136`
 - **Trigger**: Senders transmitting malformed session start or control frames.
 - **Impact**: `START_SESSION` returns true unconditionally (:116-117); PAUSE/RESUME/STOP (`reason` unvalidated), STATUS, and ERROR all return true (:130-136). Mitigation: the worker re-checks `sample_rate` itself (vw_worker.c:607).

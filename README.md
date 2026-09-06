@@ -294,7 +294,7 @@ For an offline release build, omit `-DVW_PROVISION_MODELS=ON` and place the two 
 
 #### Headless EN/RO ASR Quality Benchmark
 
-A developer-only WER/CER regression benchmark lives under `tools/quality_benchmark/`. It is fully headless: it does not launch VLC, play audio, or require X11/Wayland or a Linux desktop environment. Configure a developer/test build with `VW_QUALITY_BENCHMARK_HOOKS=ON`, download the local FLEURS corpus explicitly, then run the Python orchestrator. The corpus and reports stay git-ignored and no media fixtures are committed.
+A developer-only WER/CER regression benchmark lives under `tools/quality_benchmark/`. It is fully headless: it does not launch VLC, play audio, or require X11/Wayland or a Linux desktop environment. Configure a developer/test build with `VW_QUALITY_BENCHMARK_HOOKS=ON`, download the local FLEURS corpus explicitly, then run the Python orchestrator. Before launching workers, it rejects normalized-empty references and verifies every WAV against its manifest SHA-256. The corpus and reports stay git-ignored and no media fixtures are committed.
 
 ```bash
 python -m pip install -r tools/quality_benchmark/requirements.txt

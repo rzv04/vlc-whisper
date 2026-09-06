@@ -83,8 +83,8 @@ vw_audio_buffer_t* vw_audio_buffer_create(size_t max_samples);
 // Safe to call with a NULL pointer; internally checks before freeing.
 void vw_audio_buffer_free(vw_audio_buffer_t* buf);
 
-// Appends 16-bit integer PCM samples (S16LE) received from IPC to the worker's internal buffer.
-// Implicitly converts the compact 16-bit IPC integer format into 32-bit floats required by whisper.cpp.
+// Appends S16LE PCM as normalized floats, clearing and re-anchoring buffered audio when incoming media PTS reveals a
+// discontinuity instead of collapsing the missing timeline interval.
 bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, size_t sample_count, int64_t pts_us);
 
 // Returns current sample count stored in the audio buffer.

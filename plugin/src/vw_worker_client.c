@@ -284,7 +284,7 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   vw_msg_start_t start = {.timeline_origin_pts_us = timeline_origin_pts_us,
                           .sample_rate = 16000,
                           .channels = 1,
-                          .sample_format = VW_AUDIO_FORMAT_S16,
+                          .sample_format = VW_SAMPLE_FORMAT_S16LE,
                           .source_kind = source_url ? VW_SOURCE_LOCAL_FILE : VW_SOURCE_LIVE_AUDIO};
   memcpy(start.session_id.bytes, client->session_id, 16);
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);

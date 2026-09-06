@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -22,6 +23,14 @@ RUNNER_COMPLETION_TIMEOUT_SECONDS = 120.0
 RUNNER_STARTUP_ALLOWANCE_SECONDS = 15.0
 RUNNER_OUTER_GRACE_SECONDS = 10.0
 LIVE_TAIL_SECONDS = 1.5
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def find_executable(build_dir: Path, relative_dir: str, stems: tuple[str, ...]) -> Path:
@@ -117,6 +126,25 @@ def main() -> int:
 
     if any(sample.get("language") == "ro" for sample in samples) and ".en." in model_path.name:
         print("warning: an English-only model was selected while Romanian samples are present", file=sys.stderr)
+
+    for sample in samples:
+        reference = str(sample.get("reference", ""))
+        if not normalize_text(reference):
+            print(f"empty normalized reference for sample {sample.get('id', '<unknown>')}", file=sys.stderr)
+            return 2
+        audio_path = (manifest_path.parent / str(sample.get("path", ""))).resolve()
+        if not audio_path.is_file():
+            print(f"missing corpus audio: {audio_path}", file=sys.stderr)
+            return 1
+        expected_sha256 = str(sample.get("sha256", "")).lower()
+        actual_sha256 = sha256_file(audio_path)
+        if expected_sha256 != actual_sha256:
+            print(
+                f"SHA-256 mismatch for sample {sample.get('id', '<unknown>')}: "
+                f"expected {expected_sha256}, got {actual_sha256}",
+                file=sys.stderr,
+            )
+            return 1
 
     per_sample: list[dict[str, Any]] = []
     aggregate: dict[tuple[str, str], ErrorCounts] = defaultdict(lambda: ErrorCounts(0, 0, 0, 0))
