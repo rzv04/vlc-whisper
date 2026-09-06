@@ -65,5 +65,8 @@ endif()
 # Separate sample snippet targets (marked EXCLUDE_FROM_ALL)
 add_subdirectory(samples EXCLUDE_FROM_ALL)
 
+# Developer-only local ASR quality benchmark target (not packaged or built by default)
+add_subdirectory(tools/quality_benchmark EXCLUDE_FROM_ALL)
+
 # Packaging and distribution (CPack & NSIS installer)
 include(cmake/vw_packaging.cmake)
