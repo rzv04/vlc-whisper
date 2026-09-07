@@ -117,9 +117,7 @@ int vw_local_agreement_format_commit(const vw_local_agreement_word_t* words, siz
   for (size_t i = 0; i < word_count; i++) {
     if (!vw_local_agreement_word_valid(&words[i])) return 0;
     size_t len = strlen(words[i].text_utf8);
-    size_t needed = len + (i > 0 ? 1U : 0U);
-    if (written + needed + 1U > text_capacity) return 0;
-    if (i > 0) text_out[written++] = ' ';
+    if (written + len + 1U > text_capacity) return 0;
     memcpy(text_out + written, words[i].text_utf8, len);
     written += len;
     text_out[written] = '\0';

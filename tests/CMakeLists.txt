@@ -29,6 +29,7 @@ add_vw_test(test_segment_builder unit/test_segment_builder.c ${CMAKE_SOURCE_DIR}
 add_vw_test(test_local_agreement unit/test_local_agreement.c ${CMAKE_SOURCE_DIR}/worker/src/vw_local_agreement.c)
 add_vw_test(test_hallucination_filter unit/test_hallucination_filter.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c)
 add_vw_test(test_worker_queue unit/test_worker_queue.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c)
+add_vw_test(test_worker_queue_priority unit/test_worker_queue_priority.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_queue.c)
 add_vw_test(test_caption_timing unit/test_caption_timing.c)
 add_vw_test(test_benchmark unit/test_benchmark.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
 add_vw_test(test_caption_presenter unit/test_caption_presenter.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_caption_presenter.c)
@@ -84,6 +85,7 @@ set(VW_LOCAL_AGREEMENT_WORKER_REMAPS
     vw_segment_builder_clear=vw_local_agreement_builder_clear
     vw_segment_builder_push_hypothesis=vw_local_agreement_builder_push
     vw_audio_buffer_get_samples=vw_local_agreement_audio_get_samples
+    vw_whisper_engine_transcribe_pcm=vw_local_agreement_transcribe_pcm
     vw_whisper_engine_get_segment_count=vw_local_agreement_segment_count
     vw_whisper_engine_get_segment=vw_local_agreement_get_segment
 )

@@ -9,14 +9,16 @@ Measure perceived live/network caption latency when immutable output is gated by
 - Assumptions and explicit non-goals: branch starts at `main` SHA `3d1387444bfc85e808497858e6dffe00abc16567`; this is an experiment, not a production policy decision. No AlignAtt, fuzzy agreement, automatic Whisper history, new network behavior, presenter rewrite, or source/lookahead change. `graphify-out/` is absent on current `main`, so dependencies are verified from CMake and source callers instead.
 
 ## Scope
-- In scope: LocalAgreement-2 for `VW_SOURCE_LIVE_AUDIO`, live-only token timestamps, exact confirmed-prefix skipping near the last committed timestamp, state reset on discontinuity/pause/restart, unit tests, and documentation.
+- In scope: LocalAgreement-2 for `VW_SOURCE_LIVE_AUDIO`, live-only whisper.cpp token timestamps, exact confirmed-prefix skipping near the last committed timestamp, state reset on discontinuity/pause/restart/empty inference, worker lifecycle-control prioritization, unit tests, and documentation.
 - Out of scope: full 30-second sentence-aware Whisper-Streaming buffer trimming, the paper's 200-word inter-sentence prompt, `no_context=false`, LocalAgreement for local lookahead, and protocol changes.
-- Files/components expected to change: `vw_local_agreement.[ch]`, `vw_whisper_engine.[ch]`, `vw_worker.c`, worker/test CMake, LocalAgreement/Whisper tests, architecture/source-layout/whisper-api/test-strategy docs.
+- Files/components expected to change: `vw_local_agreement.[ch]`, `vw_local_agreement_hooks.c`, worker/test CMake, queue code/tests, architecture/source-layout/whisper-api/test-strategy docs as needed.
 
 ## Design
-- Inputs and outputs: each live Whisper pass exposes normal text tokens with relative token timestamps. The worker converts them to absolute PTS and feeds a bounded LocalAgreement state. Only the longest common prefix shared by two consecutive unconfirmed hypotheses is emitted to the existing immutable segment builder.
+- Inputs and outputs: each live Whisper pass enables whisper.cpp token timestamps and exposes raw text tokenizer pieces with authentic relative `t0`/`t1`. The worker converts them to absolute PTS and feeds a bounded LocalAgreement state. Only the longest common token prefix shared by two consecutive unconfirmed hypotheses is emitted to the existing immutable segment builder.
+- Token fidelity: agreement operates on raw Whisper token pieces rather than whitespace splitting. Leading-space/subword bytes are preserved and confirmed pieces are concatenated exactly, so languages without whitespace word boundaries are not collapsed into one agreement unit.
 - Ownership/threading model: LocalAgreement state belongs to the worker main loop; no plugin callback or IPC reader-thread work is added.
-- Bounds, time units, and failure behavior: fixed token/history capacities; all PTS are signed microseconds. Confirmed-prefix alignment uses the paper's 1-second timestamp neighborhood and exact 1..5-token suffix/prefix matching. Overflow withholds excess text for a later update rather than emitting truncated text. Reset discards unconfirmed state.
+- Bounds, time units, and failure behavior: fixed token/history capacities; all PTS are signed microseconds. Confirmed-prefix alignment uses the paper's 1-second timestamp neighborhood and exact 1..5-token suffix/prefix matching. Invalid/overflowing token passes are withheld and clear the prior unconfirmed hypothesis rather than emitting partial text.
+- Queue behavior: the 512-frame worker queue remains bounded, but the worker-facing pop path promotes lifecycle controls ahead of queued PCM. Audio older than the promoted transition is discarded/accounted so PAUSE/STOP/replacement START/SHUTDOWN cannot wait behind ~10 seconds of stale audio.
 - Privacy/security implications: no transcript/PCM persistence or new network access. Diagnostics contain counts/timing only, never token text.
 - Protocol change: none.
 
@@ -24,12 +26,15 @@ The experiment intentionally retains VLC-Whisper's current 2-second first live i
 
 ## Acceptance criteria
 - [ ] First live hypothesis is hidden; a token prefix is emitted only after exact agreement with the next hypothesis.
+- [ ] Agreement units and commit PTS come from whisper.cpp text tokens and token `t0`/`t1`, not interpolated whitespace words.
 - [ ] Confirmed tokens are never re-emitted when overlapping windows repeat them near the prior commit frontier.
+- [ ] Empty successful inference passes clear the previous unconfirmed hypothesis so agreement is consecutive across passes.
 - [ ] Pause, seek/discontinuity, session restart, invalid PTS, and stop clear unconfirmed agreement state.
-- [ ] Source/lookahead and local-file PCM fallback retain existing behavior.
+- [ ] Lifecycle controls are not delayed behind the enlarged PCM queue; obsolete pre-transition PCM is discarded/accounted.
+- [ ] Source/lookahead and local-file PCM fallback retain existing transcription behavior.
 - [ ] Emitted protocol segments remain `is_final=true`; visible captions are never revised.
-- [ ] Existing benchmark reports continue measuring first-caption and live utterance latency from the newly committed token PTS.
-- [ ] Automated tests cover first-pass withholding, two-pass commit, divergence, confirmed-prefix skipping, and reset.
+- [ ] Existing benchmark reports continue measuring first-caption and live utterance latency from authentic committed token PTS.
+- [ ] Automated tests cover first-pass withholding, two-pass commit, divergence, confirmed-prefix skipping, empty-pass reset, raw-token formatting, and prioritized control dequeue.
 - [ ] Documentation matches the experimental behavior.
 
 ## Test plan

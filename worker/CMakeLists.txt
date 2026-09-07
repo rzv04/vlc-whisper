@@ -84,6 +84,7 @@ set(VW_LOCAL_AGREEMENT_WORKER_REMAPS
     vw_segment_builder_clear=vw_local_agreement_builder_clear
     vw_segment_builder_push_hypothesis=vw_local_agreement_builder_push
     vw_audio_buffer_get_samples=vw_local_agreement_audio_get_samples
+    vw_whisper_engine_transcribe_pcm=vw_local_agreement_transcribe_pcm
     vw_whisper_engine_get_segment_count=vw_local_agreement_segment_count
     vw_whisper_engine_get_segment=vw_local_agreement_get_segment
 )
