@@ -25,6 +25,8 @@ typedef struct vw_test_worker_fixture {
   vw_worker_client_t* client;
 } vw_test_worker_fixture_t;
 
+// Returns the current process identifier as a portable long value for constructing unique test IPC endpoint names
+// without depending on platform-specific PID types.
 static inline long vw_test_process_id(void) {
 #ifdef _WIN32
   return (long)_getpid();
@@ -33,11 +35,15 @@ static inline long vw_test_process_id(void) {
 #endif
 }
 
+// Runs the production worker entry point on a test thread and converts its integer exit status into pthread-compatible
+// pointer storage for deterministic fixture joining.
 static inline void* vw_test_worker_thread_main(void* arg) {
   vw_worker_config_t* config = (vw_worker_config_t*)arg;
   return (void*)(intptr_t)vw_worker_run(config);
 }
 
+// Initializes a deterministic worker fixture, launches the production worker on a thread, and connects an authenticated
+// client through a process-unique local IPC endpoint.
 static inline bool vw_test_worker_fixture_start(vw_test_worker_fixture_t* fixture, const char* suffix) {
   if (!fixture || !suffix) return false;
   memset(fixture, 0, sizeof(*fixture));
@@ -63,6 +69,8 @@ static inline bool vw_test_worker_fixture_start(vw_test_worker_fixture_t* fixtur
   return fixture->client != NULL;
 }
 
+// Sends a deterministic sequence of 512-millisecond PCM chunks through the real worker client, advancing media PTS
+// monotonically so lifecycle tests exercise normal live-audio framing.
 static inline bool vw_test_send_audio_chunks(vw_worker_client_t* client, int chunk_count, int64_t start_pts_us) {
   if (!client || chunk_count < 0) return false;
   for (int i = 0; i < chunk_count; i++) {
@@ -78,6 +86,8 @@ static inline bool vw_test_send_audio_chunks(vw_worker_client_t* client, int chu
   return true;
 }
 
+// Requests worker shutdown, joins the fixture thread, disconnects the client transport, and returns the worker's exit
+// status while safely handling partially initialized fixtures.
 static inline int vw_test_worker_fixture_shutdown(vw_test_worker_fixture_t* fixture) {
   if (!fixture) return 1;
   if (fixture->client) vw_worker_client_shutdown(fixture->client);

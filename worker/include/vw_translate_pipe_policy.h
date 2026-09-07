@@ -63,6 +63,10 @@ static inline int vw_translate_keep_sigpipe_ignored(int signum, const void* acti
 
 #ifdef VW_TRANSLATE_PIPE_POLICY_OVERRIDE
 #ifndef _WIN32
+// Namespace the legacy source-local helper tokens before vw_translate.c is parsed, so the resulting project-authored
+// C symbols obey the repository-wide vw_ prefix invariant without changing their internal semantics.
+#define set_cloexec vw_translate_set_cloexec
+#define set_nonblocking vw_translate_set_nonblocking
 #define pipe(pipefd) vw_translate_make_nonblocking_pipe((pipefd))
 #define sigaction(signum, action, old_action) vw_translate_keep_sigpipe_ignored((signum), (action), (old_action))
 #endif
