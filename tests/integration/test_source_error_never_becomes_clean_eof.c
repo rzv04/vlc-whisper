@@ -4,7 +4,7 @@
 
 int main(void) {
   vw_test_worker_stubs_reset();
-  vw_test_decoder_set_mode(VW_TEST_DECODER_ERROR);
+  vw_test_decoder_set_mode(VW_TEST_DECODER_ERROR_AFTER_DATA);
 
   vw_test_worker_fixture_t fixture;
   bool started = vw_test_worker_fixture_start(&fixture, "decoder-error");
@@ -20,7 +20,9 @@ int main(void) {
       if (status == VW_IPC_RECV_OK && recv.type == VW_MSG_ERROR) saw_error = true;
       if (status == VW_IPC_RECV_FATAL) break;
     }
-    vw_test_check_true("decoder I/O failure is surfaced as an error instead of clean EOF", saw_error);
+    vw_test_check_true("decoder made source progress before the terminal failure", vw_test_decoder_read_calls() >= 2);
+    vw_test_check_true("decoder failure after source progress is surfaced instead of becoming AGAIN or clean EOF",
+                       saw_error);
     if (fixture.client->session_active) vw_worker_client_stop_session(fixture.client, VW_CTRL_REASON_USER_STOP);
   }
   if (fixture.thread_started) {

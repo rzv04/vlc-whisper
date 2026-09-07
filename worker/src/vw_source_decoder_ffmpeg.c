@@ -268,7 +268,7 @@ vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t
           decoder->flush_sent = true;
         } else if (flush_ret != AVERROR(EAGAIN)) {
           vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_FLUSH", "avcodec_send_packet(NULL) failed (%d)", flush_ret);
-          decoder->flush_sent = true;
+          return VW_SOURCE_DECODER_READ_ERROR;
         }
       }
 

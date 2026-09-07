@@ -156,6 +156,9 @@ vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t
   if (g_decoder_mode == VW_TEST_DECODER_AGAIN_THEN_DATA && g_decoder_read_calls <= 5) {
     return VW_SOURCE_DECODER_READ_AGAIN;
   }
+  if (g_decoder_mode == VW_TEST_DECODER_ERROR_AFTER_DATA && decoder->emitted_data) {
+    return VW_SOURCE_DECODER_READ_ERROR;
+  }
   if (decoder->emitted_data) return VW_SOURCE_DECODER_READ_EOF;
 
   size_t count = max_samples < 1600 ? max_samples : 1600;
