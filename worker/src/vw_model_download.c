@@ -720,24 +720,9 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
 
 void vw_model_download_abort(vw_model_download_t* dl) {
   if (!dl) return;
+  // Cancellation is owner-only: this thread publishes intent but never snapshots, waits on, or signals child_pid.
+  // The downloader thread that forked curl observes abort_requested and is solely responsible for kill/waitpid.
   atomic_store(&dl->abort_requested, true);
-#ifndef _WIN32
-  pthread_mutex_lock(&dl->lock);
-  pid_t pid = dl->child_pid;
-  if (pid > 0) {
-    int status = 0;
-    pid_t r = waitpid(pid, &status, WNOHANG);
-    if (r == 0) {
-      kill(pid, SIGTERM);
-    } else {
-      dl->child_pid = 0;
-    }
-  }
-  pthread_mutex_unlock(&dl->lock);
-#else
-  // The downloader thread owns WinHTTP handles and observes this flag between
-  // short receive timeouts; closing them here would race an in-flight read.
-#endif
   pthread_mutex_lock(&dl->lock);
   if (dl->progress.stage != VW_MODEL_STAGE_DONE && dl->progress.stage != VW_MODEL_STAGE_FAILED &&
       dl->progress.stage != VW_MODEL_STAGE_IDLE) {
@@ -762,16 +747,10 @@ void vw_model_download_free(vw_model_download_t* dl) {
     dl->thread_started = false;
   }
 #ifndef _WIN32
+  // After joining, the downloader owner has already reaped or observed termination of its curl child. Never perform a
+  // second wait/kill from the freeing thread: a stale numeric PID could already refer to an unrelated worker child.
   pthread_mutex_lock(&dl->lock);
-  if (dl->child_pid > 0) {
-    int st = 0;
-    pid_t r = waitpid(dl->child_pid, &st, WNOHANG);
-    if (r == 0) {
-      kill(dl->child_pid, SIGTERM);
-      waitpid(dl->child_pid, &st, 0);
-    }
-    dl->child_pid = 0;
-  }
+  dl->child_pid = 0;
   pthread_mutex_unlock(&dl->lock);
 #endif
   vw_model_download_release_lock(dl);

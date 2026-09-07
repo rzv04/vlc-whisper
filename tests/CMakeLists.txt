@@ -21,11 +21,22 @@ macro(add_vw_test test_name)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endmacro()
 
+# Every test target that compiles vw_translate.c uses the same atomic nonblocking-pipe policy as the production worker.
+if(NOT WIN32)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_SOURCE_DIR}/worker/include/vw_translate_pipe_policy.h"
+        COMPILE_DEFINITIONS "VW_TRANSLATE_PIPE_POLICY_OVERRIDE=1"
+    )
+endif()
+
 add_vw_test(test_protocol_codec unit/test_protocol_codec.c)
 add_vw_test(test_protocol_validate unit/test_protocol_validate.c)
 add_vw_test(test_protocol_start_failure_paths unit/test_protocol_start_failure_paths.c)
 add_vw_test(test_protocol_util unit/test_protocol_util.c)
 add_vw_test(test_log unit/test_log.c)
+add_vw_test(test_plugin_log_scope unit/test_plugin_log_scope.c)
+add_vw_test(test_worker_process_policy unit/test_worker_process_policy.c)
+add_vw_test(test_translate_pipe_policy unit/test_translate_pipe_policy.c)
 add_vw_test(test_queue unit/test_queue.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
 add_vw_test(test_audio_capture unit/test_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_audio_capture.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_queue.c)
 add_vw_test(test_segment_builder unit/test_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_segment_builder.c ${CMAKE_SOURCE_DIR}/worker/src/vw_hallucination_filter.c)

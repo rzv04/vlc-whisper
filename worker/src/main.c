@@ -10,6 +10,7 @@
 #endif
 
 #include "vw_log.h"
+#include "vw_process_policy.h"
 #include "vw_worker.h"
 #include "vw_worker_config.h"
 
@@ -58,7 +59,7 @@ static void vw_worker_free_utf8_arguments(int argc, char** argv) {
 // Opens a UTF-8 log path through the Unicode Windows filesystem API.
 static FILE* vw_worker_open_log_utf8(const char* path) {
   if (!path) return NULL;
-  int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+  int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0, NULL, NULL);
   if (chars <= 0) return NULL;
   wchar_t* wide_path = (wchar_t*)malloc((size_t)chars * sizeof(wchar_t));
   if (!wide_path) return NULL;
@@ -128,6 +129,7 @@ static void vw_worker_setup_log_file(const vw_worker_config_t* config) {
 }
 
 int main(int argc, char** argv) {
+  if (!vw_process_install_worker_signal_policy()) return 2;
 #ifdef _WIN32
   (void)argc;
   (void)argv;
