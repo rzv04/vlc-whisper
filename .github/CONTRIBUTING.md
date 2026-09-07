@@ -10,7 +10,6 @@ For meaningful behavior changes:
 2. Map `producer -> boundary -> consumer -> lifecycle owner`.
 3. Define external failure handling before the happy path.
 4. Write failure/boundary/seam specs first when behavior crosses components.
-5. Verify exact pinned dependency semantics when they matter.
 
 Use `ai/task-template.md` for high-risk work and `docs/invariants.md` for the canonical contract set.
 
