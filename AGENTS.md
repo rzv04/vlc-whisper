@@ -7,8 +7,7 @@
 1. Read the affected code, its callers/consumers, and the relevant contract. Do not plan from memory.
 2. Read only the relevant sections linked by `docs/README.md`; do not load every large reference document by default.
 3. For meaningful/high-risk work, use `ai/task-template.md` and save the plan under `docs/plans/`.
-4. If behavior depends on VLC, whisper.cpp, FFmpeg, Media Foundation, or another pinned dependency, verify the exact pinned version/commit.
-5. If a local dependency graph exists, use it to find affected callers/boundaries, then verify against source.
+4. If a local dependency graph exists, use it to find affected callers/boundaries, then verify against source.
 
 ## Hard invariants
 
