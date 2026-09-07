@@ -16,7 +16,6 @@ For each changed behavior, record:
 `producer -> boundary -> consumer -> lifecycle owner`
 
 - Invariants touched: timeline | state/API | lifecycle | identity | metric | realtime | privacy/network | other
-- Exact dependency pins whose semantics matter:
 
 ## Failure semantics
 | Boundary/failure | retry | recover | fail session | fail process/startup |
