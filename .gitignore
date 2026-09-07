@@ -82,7 +82,7 @@ dkms.conf
 # Local History for Visual Studio Code
 .history/
 
-# Built Visual StudioCode Extensions
+# Built Visual Studio Code Extensions
 *.vsix
 
 ### VisualStudioCode Patch ###
