@@ -5,17 +5,13 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#endif
-// clang-format off
-#include <vlc_common.h>
-// clang-format on
-
 #include "vw_caption_presenter.h"
 #include "vw_log.h"
 #include "vw_platform.h"
 #include "vw_worker_client.h"
+
+typedef struct vlc_object_t vlc_object_t;
+void vlc_object_release(vlc_object_t* obj);
 
 // Close-path state is thread-local because VLC can destroy independent filter instances concurrently on different
 // threads; each teardown must retain only its own presenter context and SHUTDOWN suppression state.
