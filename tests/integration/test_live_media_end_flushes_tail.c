@@ -1,18 +1,10 @@
-#ifdef _WIN32
-#include <winsock2.h>
-#endif
-
 #include <string.h>
-
-// clang-format off
-#include <vlc_common.h>
-// clang-format on
 
 #include "vw_caption_presenter.h"
 #include "vw_test.h"
 #include "vw_test_worker_stubs.h"
 
-#undef vlc_object_release
+typedef struct vlc_object_t vlc_object_t;
 
 static int g_presenter_clear_calls = 0;
 static int g_presenter_show_calls = 0;
