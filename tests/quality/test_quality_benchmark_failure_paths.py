@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -50,6 +51,9 @@ def hash_mismatch_contract() -> int:
         print("hash mismatch subprocess fixture is currently POSIX-only")
         return SKIP
 
+    sys.path.insert(0, str(QUALITY_DIR))
+    from vw_download_corpus import write_pcm16_wav  # type: ignore
+
     with tempfile.TemporaryDirectory(prefix="vw-quality-hash-") as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
         audio = temp_dir / "sample.wav"
@@ -58,52 +62,53 @@ def hash_mismatch_contract() -> int:
         manifest = temp_dir / "manifest.json"
         report = temp_dir / "report.json"
 
-        audio.write_bytes(b"fixture bytes do not match the declared digest")
+        pcm_bytes = b"\x00\x00" * 160
+        write_pcm16_wav(audio, pcm_bytes)
         model.write_bytes(b"stub model")
         runner.write_text("#!/usr/bin/env python3\nimport json\nprint(json.dumps({'segments': []}))\n", encoding="utf-8")
         runner.chmod(0o755)
-        manifest.write_text(
-            json.dumps(
+        manifest_data = {
+            "schema_version": 1,
+            "dataset_revision": "test-revision",
+            "samples": [
                 {
-                    "schema_version": 1,
-                    "dataset_revision": "test-revision",
-                    "samples": [
-                        {
-                            "id": "hash-mismatch",
-                            "language": "en",
-                            "reference": "hello world",
-                            "path": audio.name,
-                            "duration_seconds": 0.01,
-                            "sha256": "00" * 32,
-                        }
-                    ],
+                    "id": "hash-contract",
+                    "language": "en",
+                    "reference": "hello world",
+                    "path": audio.name,
+                    "duration_seconds": 0.01,
+                    "sha256": hashlib.sha256(pcm_bytes).hexdigest(),
                 }
-            ),
-            encoding="utf-8",
-        )
-
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(BENCHMARK_DRIVER),
-                "--manifest",
-                str(manifest),
-                "--build-dir",
-                str(temp_dir),
-                "--model",
-                str(model),
-                "--runner",
-                str(runner),
-                "--mode",
-                "offline",
-                "--output",
-                str(report),
             ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
+        }
+        manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+        command = [
+            sys.executable,
+            str(BENCHMARK_DRIVER),
+            "--manifest",
+            str(manifest),
+            "--build-dir",
+            str(temp_dir),
+            "--model",
+            str(model),
+            "--runner",
+            str(runner),
+            "--mode",
+            "offline",
+            "--output",
+            str(report),
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", check=False)
+        if completed.returncode != 0 or not report.exists():
+            print("downloader-generated WAV/manifest hash pair was rejected", file=sys.stderr)
+            print((completed.stderr + "\n" + completed.stdout).lower(), file=sys.stderr)
+            return 1
+
+        report.unlink()
+        manifest_data["samples"][0]["sha256"] = "00" * 32
+        manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", check=False)
         diagnostic = (completed.stderr + "\n" + completed.stdout).lower()
         hash_diagnostic = "hash" in diagnostic or "sha" in diagnostic or "checksum" in diagnostic
         if completed.returncode == 0 or report.exists() or not hash_diagnostic:

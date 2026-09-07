@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import wave
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,10 +26,10 @@ RUNNER_OUTER_GRACE_SECONDS = 10.0
 LIVE_TAIL_SECONDS = 1.5
 
 
-def sha256_file(path: Path) -> str:
+def sha256_wav_frames(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+    with wave.open(str(path), "rb") as source:
+        for chunk in iter(lambda: source.readframes(8192), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -137,7 +138,11 @@ def main() -> int:
             print(f"missing corpus audio: {audio_path}", file=sys.stderr)
             return 1
         expected_sha256 = str(sample.get("sha256", "")).lower()
-        actual_sha256 = sha256_file(audio_path)
+        try:
+            actual_sha256 = sha256_wav_frames(audio_path)
+        except (EOFError, wave.Error) as exc:
+            print(f"invalid corpus WAV for sample {sample.get('id', '<unknown>')}: {exc}", file=sys.stderr)
+            return 1
         if expected_sha256 != actual_sha256:
             print(
                 f"SHA-256 mismatch for sample {sample.get('id', '<unknown>')}: "
@@ -154,7 +159,7 @@ def main() -> int:
         for sample_index, sample in enumerate(samples, start=1):
             language = str(sample["language"])
             reference = str(sample["reference"])
-            audio_path = (manifest_path.parent / str(sample["path"])).resolve()
+            audio_path = (manifest_path.parent / str(sample.get("path", ""))).resolve()
             if not audio_path.is_file():
                 print(f"missing corpus audio: {audio_path}", file=sys.stderr)
                 return 1
