@@ -1,194 +1,70 @@
-# VLC-whisper Diagrams
+# VLC-Whisper Diagrams
 
-These diagrams are the visual companion to the accepted foundation. They are normative where they repeat an accepted decision in `architecture.md` or `decisions.md`; if a diagram and a contract disagree, the contract wins until the diagram is corrected.
+Supplemental visuals only. `architecture.md`, `api-contracts.md`, and ADRs are authoritative when prose/diagrams disagree. The root README contains the primary system flow.
 
-## System context
-
-```mermaid
-flowchart LR
-    U[User] -->|Opens and controls local video| V[VLC: pinned Windows build]
-    V -->|Decoded PCM plus media PTS| C[Capture module: C]
-    C --> Q[Bounded SPSC audio queue]
-    Q --> S[IPC sender thread]
-    S <-->|Authenticated local named pipe \n versioned binary protocol| W[vlc-whisper-worker.exe: C host]
-    W --> H[whisper.cpp C API\npinned dependency]
-    H --> M[(Local tiny.en model)]
-    W -->|Timed final caption segments| R[IPC receiver and presenter: C]
-    R -->|Timed subtitle or OSD path| V
-    V -->|Captions over video| U
-
-    classDef boundary fill:#fff4e5,stroke:#d97706,color:#111;
-    classDef local fill:#ecfdf5,stroke:#059669,color:#111;
-    class W,H,M local;
-    class S,W,R boundary;
-```
-
-The user, VLC, plugin, worker, and model all remain on the same machine. There is no HTTP endpoint, cloud transcription service, telemetry destination, or TCP listener.
-
-## Thread and ownership boundaries
+## Ownership boundary
 
 ```mermaid
 flowchart TB
-    A[VLC audio callback] -->|Non-blocking enqueue only| Q[(Bounded SPSC queue)]
-    A -. prohibited .-> X[Pipe I/O, inference, waits, per-block allocation]
-    T1[IPC sender thread] -->|Drains queue| P[Named-pipe client]
-    P --> W[Worker process]
-    W --> P2[Named-pipe client]
-    P2 --> T2[IPC receiver thread]
-    T2 -->|Validated timed segments| PR[Caption presenter]
-    PR --> V[VLC rendering path]
+    A[VLC audio callback] -->|bounded enqueue| Q[(Plugin SPSC queue)]
+    Q --> S[Plugin sender/control thread]
+    S <-->|authenticated local IPC| R[Worker IPC reader]
+    R --> WQ[(Bounded worker queue)]
+    WQ --> W[Worker session + VAD + Whisper]
+    W --> B[Final segment builder]
+    B --> S
+    S --> P[VLC caption presenter]
 
-    classDef forbidden fill:#fee2e2,stroke:#dc2626,color:#111;
-    class X forbidden;
+    A -. forbidden .-> X[Inference / blocking IPC / file I/O / blocking locks]
 ```
 
-**Invariant:** a captioning failure may remove captions, but it must not block, glitch, or crash VLC playback.
-
-## Playback and caption state
+## Caption-session lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> STARTING: eligible local/stream media starts
-    STARTING --> READY: worker handshake and STARTED
-    STARTING --> FAILED: worker/model/protocol failure
-    READY --> PLAYING: play
-    PLAYING --> PAUSED: pause (send PAUSE)
-    PAUSED --> PLAYING: resume (send RESUME)
-    PLAYING --> STOPPING: stop or media end
-    PAUSED --> STOPPING: stop or media end
-    STOPPING --> IDLE: captions cleared, IPC closed
-    PLAYING --> RESYNCING: seek / PTS discontinuity
-    PAUSED --> RESYNCING: seek / PTS discontinuity
-    RESYNCING --> STARTING: send STOP(SEEK) + new START epoch
-    FAILED --> IDLE: item stops or changes
+    IDLE --> STARTING: START/new media
+    STARTING --> PLAYING: STARTED
+    STARTING --> FAILED: fatal start failure
+    PLAYING --> PAUSED: PAUSE
+    PAUSED --> PLAYING: RESUME
+    PLAYING --> RESYNC: seek/discontinuity/media epoch
+    PAUSED --> RESYNC: seek/discontinuity/media epoch
+    RESYNC --> STARTING: STOP old + START fresh session ID
+    PLAYING --> STOPPING: STOP/media end
+    PAUSED --> STOPPING: STOP/media end
+    STOPPING --> IDLE
+    FAILED --> IDLE: teardown/recovery
 ```
 
-Seeking and discontinuity handling are **IN-SCOPE for MVP (Milestone 3)**: on seek or non-monotonic PTS, the plugin clears active captions, sends `STOP` (`SEEK_DISCONTINUITY`), resets the SPSC queue & VAD state, and re-syncs with a new `START` timeline epoch seamlessly without disabling captions or interrupting VLC playback.
-
-## Session startup sequence
+## Source seek epoch
 
 ```mermaid
 sequenceDiagram
-    participant VLC as VLC
-    participant CAP as Capture module
-    participant IPC as Sender/receiver
+    participant P as Plugin client
     participant W as Worker
-    participant WH as whisper.cpp
+    participant V as VLC presenter
 
-    VLC->>CAP: Open eligible local file and begin playback
-    CAP->>IPC: Create session ID and launch worker
-    IPC->>W: HELLO(protocol range, 32-byte token)
-    W-->>IPC: HELLO_ACK(capabilities, version)
-    IPC->>W: START(session, 16kHz mono S16LE, tiny.en, en)
-    W->>WH: Load validated local model
-    W-->>IPC: STARTED
-    loop while playing and PTS is monotonic
-        CAP->>CAP: Enqueue bounded PCM + PTS
-        IPC->>W: AUDIO(start PTS, duration, PCM)
-        W->>WH: VAD, rolling-window inference, deduplication
-        W-->>IPC: SEGMENT(final, start/end PTS, UTF-8 text)
-        IPC->>VLC: Schedule/display caption
-    end
-    VLC->>CAP: Pause, resume, seek, or end
-    alt Pause / Resume
-        CAP->>IPC: PAUSE / RESUME
-        IPC->>W: PAUSE / RESUME
-    else Seek / Discontinuity
-        CAP->>IPC: STOP(SEEK_DISCONTINUITY) + START(new epoch)
-        IPC->>W: Re-sync epoch & reset audio queue
-    end
-    IPC->>VLC: Update/clear captions
+    P->>W: STOP(SEEK_DISCONTINUITY, old session)
+    P->>V: clear generated captions
+    P->>W: START(new session, new origin)
+    W-->>P: STARTED(new session, source_active=1)
+    P->>W: TRANSLATE_CTRL (if enabled)
+    P->>W: POSITION(new session)
+    W-->>P: SEGMENT(new session)
+    Note over P: any old-session segment is stale and rejected
 ```
 
-## Backpressure behavior
+## Overload rule
 
 ```mermaid
-flowchart TD
-    IN[PCM arrives with media PTS] --> SPACE{Queue has capacity?}
-    SPACE -->|Yes| ENQ[Enqueue chunk]
-    SPACE -->|No| DROP[Drop newest unprocessed audio]
-    DROP --> COUNT[Increase audio_dropped_us\nand rate-limited diagnostic counter]
-    COUNT --> ENQ
-    ENQ --> SEND[Sender forwards chunks to worker]
-    SEND --> HEALTH{Worker available and valid?}
-    HEALTH -->|Yes| CAP[Receive timed captions]
-    HEALTH -->|No| DISABLE[Clear captions and disable caption session]
-
-    classDef safe fill:#ecfdf5,stroke:#059669,color:#111;
-    classDef warn fill:#fff7ed,stroke:#ea580c,color:#111;
-    class ENQ,SEND,CAP safe;
-    class DROP,COUNT,DISABLE warn;
+flowchart LR
+    PCM[PCM arrives] --> Q{bounded queue capacity?}
+    Q -->|yes| KEEP[enqueue]
+    Q -->|no| DROP[apply queue drop policy + account lost duration]
+    KEEP --> SEND[worker]
+    DROP --> SEND
+    SEND --> CAP[caption output]
 ```
 
-The queue is capped at 8 seconds of unprocessed audio (16 × 512 ms chunks). Loss under overload is explicit and measurable; slowing playback is never an overload strategy.
-
-## Protocol frame
-
-```mermaid
-block-beta
-  columns 6
-  block:header:6
-    A[magic:32 bits] B[major:16 bits] C[type:16 bits] D[payload length:32 bits] E[sequence:64 bits]
-  end
-  F[Payload: schema depends on message type]:6
-```
-
-```text
-magic: 0x564C4357 (VLCW)
-maximum payload: 1,048,576 bytes
-transport: Windows message-mode named pipe
-Linux port: Unix-domain SOCK_SEQPACKET, same frame format
-```
-
-The receiver validates protocol version, token, session ID, sequence, payload bounds, UTF-8, and timestamp invariants before acting on a message.
-
-## Delivery roadmap
-
-```mermaid
-gantt
-    title VLC-whisper delivery order
-    dateFormat  YYYY-MM-DD
-    axisFormat  %b
-    section Core scaffold
-    Pin target and toolchain                 :done, m0a, 2026-07-23, 7d
-    Cross-build worker and validate metadata :done, m0b, after m0a, 7d
-    section Worker proof
-    Offline inference and IPC contract       :done, m1a, after m0b, 14d
-    Fuzzing and diagnostics                  :done, m1b, after m1a, 7d
-    section VLC feasibility
-    PCM capture proof                        :done, m2a, after m1b, 7d
-    Timed caption presentation proof         :done, m2b, after m2a, 7d
-    section Local & Live MVP (Milestone 3)
-    Lifecycle, play/pause, seek re-sync      :m3a, after m2b, 14d
-    Local and stream media acceptance        :m3b, after m3a, 7d
-    section Release Discipline & Post-MVP (Milestone 4)
-    CI matrix, VM smoke tests, packaging     :m4a, after m3b, 14d
-    Settings GUI, multilingual, SPU native   :m4b, after m4a, 30d
-```
-
-Dates are illustrative sequencing anchors, not delivery commitments. The required gates are feasibility proof, bounded behavior, and Windows VLC end-to-end validation—not calendar completion.
-
-## Feature scope map
-
-```mermaid
-quadrantChart
-    title Feature placement by value and implementation risk
-    x-axis Lower user value --> Higher user value
-    y-axis Lower implementation risk --> Higher implementation risk
-    quadrant-1 Prove deliberately
-    quadrant-2 Schedule after MVP
-    quadrant-3 Avoid or defer
-    quadrant-4 MVP priority
-    Local English captions: [0.90, 0.25]
-    Pause and resume: [0.75, 0.25]
-    Worker crash safety: [0.85, 0.45]
-    Seeking support: [0.85, 0.35]
-    Network VOD: [0.65, 0.60]
-    IPTV livestreams: [0.65, 0.85]
-    Model and language GUI: [0.55, 0.55]
-    Large models and GPU variants: [0.50, 0.75]
-    Translation and speaker labels: [0.30, 0.70]
-```
-
-This map is intentionally a prioritization aid, not a scientific measurement. It reinforces that the smallest useful MVP is local English captioning with reliable failure behavior, play/pause sync, and seamless seek re-synchronization.
+Playback is never slowed to preserve caption completeness. Data loss must remain explicit in timeline/drop accounting.
