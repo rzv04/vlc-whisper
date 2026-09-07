@@ -135,8 +135,7 @@ static bool vw_local_agreement_append_segment(const vw_whisper_engine_t* engine,
     const char* token_text = whisper_full_get_token_text(engine->ctx, segment_index, token_index);
     if (!token_text || token_text[0] == '\0') continue;
     size_t bytes = strlen(token_text);
-    if (bytes >= VW_LOCAL_AGREEMENT_WORD_BYTES ||
-        vw_la_runtime.hypothesis_count >= VW_LOCAL_AGREEMENT_MAX_WORDS) {
+    if (bytes >= VW_LOCAL_AGREEMENT_WORD_BYTES || vw_la_runtime.hypothesis_count >= VW_LOCAL_AGREEMENT_MAX_WORDS) {
       return false;
     }
 
@@ -183,9 +182,9 @@ static void vw_local_agreement_finalize_hypothesis(void) {
   }
 
   vw_local_agreement_word_t committed[VW_LOCAL_AGREEMENT_MAX_WORDS];
-  size_t committed_count = vw_local_agreement_update(&vw_la_runtime.agreement, vw_la_runtime.hypothesis,
-                                                      vw_la_runtime.hypothesis_count, committed,
-                                                      VW_LOCAL_AGREEMENT_MAX_WORDS);
+  size_t committed_count =
+      vw_local_agreement_update(&vw_la_runtime.agreement, vw_la_runtime.hypothesis, vw_la_runtime.hypothesis_count,
+                                committed, VW_LOCAL_AGREEMENT_MAX_WORDS);
   vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT", "hypothesis_tokens=%zu committed_tokens=%zu",
                vw_la_runtime.hypothesis_count, committed_count);
   vw_la_runtime.hypothesis_count = 0;

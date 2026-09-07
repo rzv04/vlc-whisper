@@ -68,8 +68,8 @@ static uint64_t vw_worker_queue_audio_duration_us(const uint8_t* payload, uint32
 }
 
 static bool vw_worker_queue_is_lifecycle_control(uint16_t type) {
-  return type == VW_MSG_START_SESSION || type == VW_MSG_STOP_SESSION || type == VW_MSG_PAUSE ||
-         type == VW_MSG_RESUME || type == VW_MSG_SHUTDOWN;
+  return type == VW_MSG_START_SESSION || type == VW_MSG_STOP_SESSION || type == VW_MSG_PAUSE || type == VW_MSG_RESUME ||
+         type == VW_MSG_SHUTDOWN;
 }
 
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {
