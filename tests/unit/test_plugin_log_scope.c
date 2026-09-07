@@ -15,7 +15,8 @@ static void vw_test_first_sink(vw_log_level_t level, const char* event_id, const
   g_first_calls++;
 }
 
-static void vw_test_second_sink(vw_log_level_t level, const char* event_id, const char* formatted_msg, void* user_data) {
+static void vw_test_second_sink(vw_log_level_t level, const char* event_id, const char* formatted_msg,
+                                void* user_data) {
   (void)level;
   (void)event_id;
   (void)formatted_msg;
@@ -36,7 +37,8 @@ int main(void) {
   // Close the first-opened instance before the second. The second must remain registered and callable.
   vw_plugin_log_set_sink_scoped(NULL, NULL, first);
   vw_log_event(VW_LOG_LEVEL_INFO, "SCOPE_TEST", "second remains");
-  vw_test_check_true("out-of-order teardown removes only the closing instance", g_first_calls == 1 && g_second_calls == 2);
+  vw_test_check_true("out-of-order teardown removes only the closing instance",
+                     g_first_calls == 1 && g_second_calls == 2);
 
   vw_plugin_log_set_sink_scoped(NULL, NULL, second);
   vw_log_set_enabled(false);

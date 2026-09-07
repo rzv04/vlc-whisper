@@ -18,7 +18,8 @@ int main(void) {
     int write_fd_flags = fcntl(pipefd[1], F_GETFD, 0);
     vw_test_check_true("translation read pipe is nonblocking", read_flags >= 0 && (read_flags & O_NONBLOCK) != 0);
     vw_test_check_true("translation write pipe is nonblocking", write_flags >= 0 && (write_flags & O_NONBLOCK) != 0);
-    vw_test_check_true("translation read pipe is close-on-exec", read_fd_flags >= 0 && (read_fd_flags & FD_CLOEXEC) != 0);
+    vw_test_check_true("translation read pipe is close-on-exec",
+                       read_fd_flags >= 0 && (read_fd_flags & FD_CLOEXEC) != 0);
     vw_test_check_true("translation write pipe is close-on-exec",
                        write_fd_flags >= 0 && (write_fd_flags & FD_CLOEXEC) != 0);
     close(pipefd[0]);
