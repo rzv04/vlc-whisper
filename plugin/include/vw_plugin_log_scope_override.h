@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "vw_benchmark.h"
 #include "vw_caption_presenter.h"
 #include "vw_log.h"
 #include "vw_platform.h"
+#include "vw_queue.h"
 #include "vw_worker_client.h"
 
 typedef struct vlc_object_t vlc_object_t;
@@ -54,6 +56,42 @@ static inline void vw_plugin_presenter_release_preserving_caption(vw_caption_pre
   presenter->p_filter_ctx = NULL;
   presenter->spu_channel_id = -1;
   presenter->spu_channel_registered = false;
+}
+
+typedef void (*vw_plugin_close_audio_observer_fn)(const vw_audio_chunk_t* chunk, void* user_data);
+
+// Drains callback-queued live PCM through the worker client before media-end teardown, preserving counters and allowing
+// optional successful-send observation without touching the realtime producer.
+static inline bool vw_plugin_drain_close_audio(vw_worker_client_t* client, vw_spsc_queue_t* queue,
+                                               uint64_t* chunks_sent, vw_plugin_close_audio_observer_fn observer,
+                                               void* user_data) {
+  if (!client || !queue) return false;
+  vw_audio_chunk_t chunk;
+  while (vw_spsc_queue_pop(queue, &chunk)) {
+    if (!vw_worker_client_send_audio(client, &chunk)) return false;
+    if (chunks_sent) (*chunks_sent)++;
+    if (observer) observer(&chunk, user_data);
+  }
+  return true;
+}
+
+// Records each final close-path PCM chunk in the active benchmark after successful worker delivery while preserving
+// benchmark timing and audio-accounting consistency.
+static inline void vw_plugin_record_close_audio(const vw_audio_chunk_t* chunk, void* user_data) {
+  vw_benchmark_t* benchmark = (vw_benchmark_t*)user_data;
+  if (!chunk || !benchmark) return;
+  vw_benchmark_record_audio(benchmark, chunk->start_pts_us, chunk->duration_us, vw_platform_get_monotonic_time_us());
+}
+
+// Joins the sender thread, then drains any remaining live-session SPSC PCM to the worker while preserving chunk and
+// benchmark accounting before MEDIA_END.
+static inline void vw_close_join(vw_thread_t thread, vw_worker_client_t* client, vw_spsc_queue_t* queue,
+                                 uint64_t* chunks_sent, vw_benchmark_t* benchmark) {
+  vw_platform_thread_join(thread);
+  if (!client || !queue || !client->session_active || vw_worker_client_is_source_active(client)) return;
+  if (!vw_plugin_drain_close_audio(client, queue, chunks_sent, vw_plugin_record_close_audio, benchmark)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_CLOSE_DRAIN", "failed to deliver final queued PCM before media-end stop");
+  }
 }
 
 // Converts close-path STOP into MEDIA_END, orders SHUTDOWN after it, drains worker output to transport closure, and
@@ -126,6 +164,7 @@ static inline void vw_plugin_shutdown_scoped(vw_worker_client_t* client) {
 #ifdef VW_PLUGIN_LOG_SCOPE_OVERRIDE
 #define vw_log_set_sink(sink, user_data) vw_plugin_log_set_sink_scoped((sink), (user_data), obj)
 #define vw_caption_presenter_clear(presenter) vw_plugin_presenter_capture_clear((presenter))
+#define vw_platform_thread_join(t) vw_close_join((t), sys->client, sys->queue, &sys->chunks_sent, &sys->benchmark)
 #define vw_worker_client_stop_session(client, reason) vw_plugin_stop_session_scoped((client), (reason))
 #define vw_worker_client_shutdown(client) vw_plugin_shutdown_scoped((client))
 #endif

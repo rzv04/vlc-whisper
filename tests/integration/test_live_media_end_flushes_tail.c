@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "../../plugin/src/vw_queue.c"
 #include "vw_caption_presenter.h"
 #include "vw_test.h"
 #include "vw_test_worker_stubs.h"
@@ -64,7 +65,33 @@ int main(void) {
   vw_test_check_true("stub worker starts", started);
   if (started) {
     vw_test_check_true("live session starts", vw_worker_client_start_session(fixture.client, 0, "tiny", NULL));
-    vw_test_check_true("sub-threshold live audio is queued", vw_test_send_audio_chunks(fixture.client, 2, 0));
+
+    vw_spsc_queue_t* close_queue = vw_spsc_queue_create(4);
+    vw_test_check_true("close-path SPSC queue is created", close_queue != NULL);
+    if (close_queue) {
+      for (int i = 0; i < 2; i++) {
+        vw_audio_chunk_t chunk;
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.start_pts_us = (int64_t)i * 512000;
+        chunk.duration_us = 512000;
+        chunk.sample_rate = 16000;
+        chunk.channels = 1;
+        chunk.bytes = 16384;
+        vw_test_check_true("callback PCM enters close-path SPSC queue", vw_spsc_queue_push(close_queue, &chunk));
+      }
+
+      vw_test_check_true("queued callback audio has not reached worker before close drain",
+                         vw_test_whisper_transcribe_calls() == 0);
+      uint64_t close_chunks_sent = 0;
+      vw_test_check_true("close path drains queued PCM through worker client",
+                         vw_plugin_drain_close_audio(fixture.client, close_queue, &close_chunks_sent, NULL, NULL));
+      vw_test_check_true("both queued close-path chunks are delivered", close_chunks_sent == 2);
+      vw_audio_chunk_t leftover;
+      vw_test_check_true("close-path SPSC queue is empty before MEDIA_END",
+                         vw_spsc_queue_pop(close_queue, &leftover) == NULL);
+      vw_spsc_queue_destroy(close_queue);
+    }
+
     vw_platform_sleep_ms(75);
     vw_test_check_true("audio remains below progressive startup threshold before media end",
                        vw_test_whisper_transcribe_calls() == 0);
@@ -75,8 +102,8 @@ int main(void) {
     presenter.spu_channel_id = -1;
     presenter.model_progress_channel_id = -1;
 
-    // Mirror normal plugin close ordering: clear the presenter first, then issue the legacy STOP(0).
-    // The source-local close adapter must preserve enough context to turn this into MEDIA_END and render its tail.
+    // Mirror normal plugin close ordering after sender join/final SPSC drain: clear presenter, then issue legacy
+    // STOP(0). The source-local close adapter preserves enough context to turn this into MEDIA_END and render its tail.
     vw_caption_presenter_clear(&presenter);
     vw_test_check_true("normal close clears presenter before worker stop", g_presenter_clear_calls == 1);
     vw_test_check_true("presenter context is initially cleared", presenter.p_filter_ctx == NULL);
