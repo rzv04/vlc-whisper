@@ -12,7 +12,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <string.h>
 #include <unistd.h>
 #endif
 
@@ -49,19 +48,16 @@ static inline int vw_translate_make_nonblocking_pipe(int pipefd[2]) {
 }
 
 #ifndef _WIN32
-// Keeps SIGPIPE ignored for the translation process lifetime while preserving the source's existing sigaction-shaped
-// cleanup calls. Repeated concurrent calls are idempotent and never restore SIG_DFL underneath another request.
-static inline int vw_translate_keep_sigpipe_ignored(int signum, const struct sigaction* action,
-                                                    struct sigaction* old_action) {
-  if (signum != SIGPIPE) return sigaction(signum, action, old_action);
+// Keeps SIGPIPE ignored for the translation process lifetime. The existing source passes saved-disposition pointers,
+// but intercepted cleanup calls are intentionally idempotent and never restore SIG_DFL during concurrent requests.
+static inline int vw_translate_keep_sigpipe_ignored(int signum, const void* action, void* old_action) {
   (void)action;
-  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return -1;
-  if (old_action) {
-    memset(old_action, 0, sizeof(*old_action));
-    old_action->sa_handler = SIG_IGN;
-    if (sigemptyset(&old_action->sa_mask) != 0) return -1;
+  (void)old_action;
+  if (signum != SIGPIPE) {
+    errno = EINVAL;
+    return -1;
   }
-  return 0;
+  return signal(SIGPIPE, SIG_IGN) == SIG_ERR ? -1 : 0;
 }
 #endif
 
