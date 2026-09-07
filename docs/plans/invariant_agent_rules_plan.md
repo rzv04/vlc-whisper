@@ -26,13 +26,16 @@ Reduce defects in large/high-risk changes by making cross-component invariants, 
 Tests added by future work use PR #50's Jasmine-like convention: human-readable named behavioral checks accumulate failures and finish once, with seam/failure-path tests written before implementation for meaningful behavior changes.
 
 ## Documentation policy
-`docs/README.md` becomes the routing index. Agents read only documents/sections relevant to the changed contract; large historical/reference files are searched narrowly rather than loaded wholesale.
+`docs/README.md` is the routing index. Agents read only documents/sections relevant to the changed contract; large historical/reference files are searched narrowly rather than loaded wholesale.
 
 ## Acceptance
-- [ ] Root agent rules are concise and invariant-first.
-- [ ] Duplicate `.agents` rules are removed.
-- [ ] Task and PR templates require invariant/failure/seam evidence.
-- [ ] Canonical invariant and compact test docs exist.
-- [ ] Source-layout and user README are simplified without losing essential usage/build paths.
-- [ ] PR #50-style accumulating named test helper is available.
-- [ ] No sanitizer/static-analysis CI gates are added.
+- [x] Root agent rules are concise and invariant-first.
+- [x] Duplicate `.agents` rules are removed.
+- [x] Task and PR templates require invariant/failure/seam evidence.
+- [x] Canonical invariant and compact test docs exist.
+- [x] Source-layout and user README are simplified without losing essential usage/build paths.
+- [x] PR #50-style accumulating named test helper is available.
+- [x] No sanitizer/static-analysis CI gates are added.
+
+## Verification note
+This branch changes policy/docs plus `tests/include/vw_test.h`; it adds no production behavior and no CI workflow changes. PR #50's accumulating test-helper semantics were used directly. Repository pushes did not trigger a pull-request CI run, so no CI result is claimed here.
