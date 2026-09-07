@@ -82,7 +82,7 @@ dkms.conf
 # Local History for Visual Studio Code
 .history/
 
-# Built Visual Studio Code Extensions
+# Built Visual StudioCode Extensions
 *.vsix
 
 ### VisualStudioCode Patch ###
@@ -196,7 +196,7 @@ opencode.json
 
 .commandcode/
 .omp/
-.agents/
+.agents/skills/
 .opencode/
 .playwright-mcp/
 skills-lock.json
