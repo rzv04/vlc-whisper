@@ -10,9 +10,7 @@
 int main(void) {
   vw_test_check_true("worker signal policy installs successfully", vw_process_install_worker_signal_policy());
 #ifndef _WIN32
-  struct sigaction current;
-  vw_test_check_true("SIGPIPE disposition can be queried", sigaction(SIGPIPE, NULL, &current) == 0);
-  vw_test_check_true("worker keeps SIGPIPE ignored for process lifetime", current.sa_handler == SIG_IGN);
+  vw_test_check_true("worker keeps SIGPIPE ignored for process lifetime", signal(SIGPIPE, SIG_IGN) == SIG_IGN);
 #endif
   return vw_test_finish("test_worker_process_policy");
 }

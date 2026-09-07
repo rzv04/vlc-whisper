@@ -2,50 +2,41 @@
 #define VW_TRANSLATE_PIPE_POLICY_H_
 
 #ifndef _WIN32
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
-// Creates a translation transport pipe with nonblocking and close-on-exec semantics established before use. Failure
-// closes both descriptors so callers can never continue on an accidentally blocking pipe.
+// Creates a translation subprocess pipe whose descriptors are nonblocking and close-on-exec before either endpoint is
+// returned, failing closed and closing both descriptors when any required descriptor policy cannot be installed.
 static inline int vw_translate_make_nonblocking_pipe(int pipefd[2]) {
+#ifdef _WIN32
+  (void)pipefd;
+  return -1;
+#else
   if (!pipefd) {
     errno = EINVAL;
     return -1;
   }
-#ifdef __linux__
-  if (pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0) return 0;
-  if (errno != ENOSYS && errno != EINVAL) return -1;
-#endif
+  pipefd[0] = -1;
+  pipefd[1] = -1;
   if (pipe(pipefd) != 0) return -1;
-
-  int read_flags = fcntl(pipefd[0], F_GETFL, 0);
-  int write_flags = fcntl(pipefd[1], F_GETFL, 0);
-  int read_fd_flags = fcntl(pipefd[0], F_GETFD, 0);
-  int write_fd_flags = fcntl(pipefd[1], F_GETFD, 0);
-  if (read_flags < 0 || write_flags < 0 || read_fd_flags < 0 || write_fd_flags < 0 ||
-      fcntl(pipefd[0], F_SETFL, read_flags | O_NONBLOCK) != 0 ||
-      fcntl(pipefd[1], F_SETFL, write_flags | O_NONBLOCK) != 0 ||
-      fcntl(pipefd[0], F_SETFD, read_fd_flags | FD_CLOEXEC) != 0 ||
-      fcntl(pipefd[1], F_SETFD, write_fd_flags | FD_CLOEXEC) != 0) {
-    int saved_errno = errno;
-    close(pipefd[0]);
-    close(pipefd[1]);
-    pipefd[0] = -1;
-    pipefd[1] = -1;
-    errno = saved_errno;
-    return -1;
+  for (int i = 0; i < 2; i++) {
+    int fd_flags = fcntl(pipefd[i], F_GETFD, 0);
+    int status_flags = fcntl(pipefd[i], F_GETFL, 0);
+    if (fd_flags < 0 || status_flags < 0 || fcntl(pipefd[i], F_SETFD, fd_flags | FD_CLOEXEC) != 0 ||
+        fcntl(pipefd[i], F_SETFL, status_flags | O_NONBLOCK) != 0) {
+      int saved_errno = errno;
+      close(pipefd[0]);
+      close(pipefd[1]);
+      pipefd[0] = -1;
+      pipefd[1] = -1;
+      errno = saved_errno;
+      return -1;
+    }
   }
   return 0;
+#endif
 }
-
-#ifdef VW_TRANSLATE_PIPE_POLICY_OVERRIDE
-// Source-local libc substitution: vw_translate.c creates both curl pipes through the fail-closed helper above.
-#define pipe(pipefd) vw_translate_make_nonblocking_pipe(pipefd)
-#endif
-#endif
 
 #endif  // VW_TRANSLATE_PIPE_POLICY_H_

@@ -11,11 +11,7 @@
 // spawned curl children explicitly restore their default SIGPIPE disposition before exec.
 static inline bool vw_process_install_worker_signal_policy(void) {
 #ifndef _WIN32
-  struct sigaction action;
-  action.sa_handler = SIG_IGN;
-  action.sa_flags = 0;
-  if (sigemptyset(&action.sa_mask) != 0) return false;
-  return sigaction(SIGPIPE, &action, NULL) == 0;
+  return signal(SIGPIPE, SIG_IGN) != SIG_ERR;
 #else
   return true;
 #endif
