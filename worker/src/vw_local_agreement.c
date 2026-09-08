@@ -15,12 +15,28 @@ static int vw_local_agreement_words_equal(const vw_local_agreement_word_t* a, co
   return a && b && strcmp(a->text_utf8, b->text_utf8) == 0;
 }
 
+static int vw_local_agreement_same_occurrence(const vw_local_agreement_word_t* a,
+                                              const vw_local_agreement_word_t* b) {
+  if (!vw_local_agreement_words_equal(a, b)) return 0;
+
+  int64_t a_duration = a->end_pts_us - a->start_pts_us;
+  int64_t b_duration = b->end_pts_us - b->start_pts_us;
+  if (a_duration == 0 || b_duration == 0) {
+    return a->start_pts_us == b->start_pts_us && a->end_pts_us == b->end_pts_us;
+  }
+
+  int64_t overlap_start = a->start_pts_us > b->start_pts_us ? a->start_pts_us : b->start_pts_us;
+  int64_t overlap_end = a->end_pts_us < b->end_pts_us ? a->end_pts_us : b->end_pts_us;
+  if (overlap_end <= overlap_start) return 0;
+
+  int64_t overlap_duration = overlap_end - overlap_start;
+  int64_t shorter_duration = a_duration < b_duration ? a_duration : b_duration;
+  return overlap_duration >= (shorter_duration + 1) / 2;
+}
+
 static size_t vw_local_agreement_strip_committed_overlap(const vw_local_agreement_t* state,
                                                          const vw_local_agreement_word_t* words, size_t count) {
   if (!state || !words || count == 0 || !state->has_committed || state->committed_tail_count == 0) return 0;
-  int64_t distance = words[0].start_pts_us - state->last_committed_end_us;
-  if (distance < 0) distance = -distance;
-  if (distance > VW_LOCAL_AGREEMENT_OVERLAP_US) return 0;
 
   size_t limit = count;
   if (limit > state->committed_tail_count) limit = state->committed_tail_count;
@@ -29,7 +45,7 @@ static size_t vw_local_agreement_strip_committed_overlap(const vw_local_agreemen
     size_t tail_start = state->committed_tail_count - n;
     int match = 1;
     for (size_t i = 0; i < n; i++) {
-      if (!vw_local_agreement_words_equal(&state->committed_tail[tail_start + i], &words[i])) {
+      if (!vw_local_agreement_same_occurrence(&state->committed_tail[tail_start + i], &words[i])) {
         match = 0;
         break;
       }
