@@ -17,14 +17,22 @@
 #include "vw_worker_queue.h"
 #include "whisper.h"
 
+typedef enum vw_local_agreement_pending_control {
+  VW_LOCAL_AGREEMENT_PENDING_NONE = 0,
+  VW_LOCAL_AGREEMENT_PENDING_START,
+  VW_LOCAL_AGREEMENT_PENDING_STOP,
+} vw_local_agreement_pending_control_t;
+
 typedef struct vw_local_agreement_runtime {
   bool live_session;
   bool window_pts_valid;
   bool collecting_hypothesis;
   bool hypothesis_invalid;
+  bool pending_start_live_session;
   int expected_segments;
   int64_t window_pts_us;
   vw_segment_builder_t* builder;
+  vw_local_agreement_pending_control_t pending_control;
   vw_local_agreement_t agreement;
   vw_local_agreement_word_t hypothesis[VW_LOCAL_AGREEMENT_MAX_WORDS];
   size_t hypothesis_count;
@@ -213,20 +221,20 @@ bool vw_local_agreement_worker_queue_pop(vw_worker_queue_t* queue, vw_worker_fra
   if (!popped || !out) return popped;
   vw_local_agreement_runtime_init_once();
 
+  // Stage session-mode transitions only. The worker validates session IDs and payload semantics after
+  // dequeue; the staged transition is applied by vw_local_agreement_builder_clear() only on an accepted
+  // START/STOP path. The next dequeue discards any staged intent left by a rejected or duplicate control.
+  vw_la_runtime.pending_control = VW_LOCAL_AGREEMENT_PENDING_NONE;
+  vw_la_runtime.pending_start_live_session = false;
   if (out->type == VW_MSG_START_SESSION && out->payload && out->payload_len > 0) {
     vw_msg_start_t start;
     memset(&start, 0, sizeof(start));
     if (vw_protocol_decode_payload(VW_MSG_START_SESSION, out->payload, out->payload_len, &start)) {
-      vw_local_agreement_runtime_reset_hypothesis();
-      vw_la_runtime.live_session = (start.source_kind == VW_SOURCE_LIVE_AUDIO);
-      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LOCAL_AGREEMENT", "session gate active=%d",
-                   vw_la_runtime.live_session ? 1 : 0);
+      vw_la_runtime.pending_control = VW_LOCAL_AGREEMENT_PENDING_START;
+      vw_la_runtime.pending_start_live_session = (start.source_kind == VW_SOURCE_LIVE_AUDIO);
     }
-  } else if (out->type == VW_MSG_PAUSE || out->type == VW_MSG_RESUME) {
-    vw_local_agreement_runtime_reset_hypothesis();
-  } else if (out->type == VW_MSG_STOP_SESSION || out->type == VW_MSG_SHUTDOWN) {
-    vw_local_agreement_runtime_reset_hypothesis();
-    vw_la_runtime.live_session = false;
+  } else if (out->type == VW_MSG_STOP_SESSION) {
+    vw_la_runtime.pending_control = VW_LOCAL_AGREEMENT_PENDING_STOP;
   }
   return popped;
 }
@@ -234,7 +242,21 @@ bool vw_local_agreement_worker_queue_pop(vw_worker_queue_t* queue, vw_worker_fra
 void vw_local_agreement_builder_clear(vw_segment_builder_t* builder) {
   vw_local_agreement_runtime_init_once();
   vw_la_runtime.builder = builder;
+
+  vw_local_agreement_pending_control_t accepted_control = vw_la_runtime.pending_control;
+  bool accepted_start_live_session = vw_la_runtime.pending_start_live_session;
+  vw_la_runtime.pending_control = VW_LOCAL_AGREEMENT_PENDING_NONE;
+  vw_la_runtime.pending_start_live_session = false;
+
   vw_local_agreement_runtime_reset_hypothesis();
+  if (accepted_control == VW_LOCAL_AGREEMENT_PENDING_START) {
+    vw_la_runtime.live_session = accepted_start_live_session;
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LOCAL_AGREEMENT", "session gate active=%d",
+                 vw_la_runtime.live_session ? 1 : 0);
+  } else if (accepted_control == VW_LOCAL_AGREEMENT_PENDING_STOP) {
+    vw_la_runtime.live_session = false;
+    vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_LOCAL_AGREEMENT", "session gate stopped");
+  }
   vw_segment_builder_clear(builder);
 }
 
