@@ -19,34 +19,28 @@ typedef struct vw_worker_queue vw_worker_queue_t;  // opaque
 // frame cadence to absorb Whisper batch inference compute spikes without dropping audio frames).
 #define VW_WORKER_FRAME_QUEUE_CAPACITY 512U
 
-// Allocates a bounded FIFO queue holding IPC frames with owned payload buffers. Capacity limits
-// outstanding frames; returns NULL on allocation failure. Not realtime: uses a mutex internally.
+// Allocates a bounded mutex-backed frame queue with owned payload slots. Returns NULL for zero capacity or allocation
+// failure; worker code may call it outside realtime callbacks.
 vw_worker_queue_t* vw_worker_queue_create(size_t capacity);
 
-// Frees the queue and every payload still queued in it. Safe on NULL. Caller must ensure no thread
-// pushes or pops concurrently while the queue is being destroyed.
+// Frees the queue and every queued payload. Safe on NULL; callers must guarantee no concurrent producer or consumer
+// accesses while destruction is in progress.
 void vw_worker_queue_destroy(vw_worker_queue_t* q);
 
-// Pushes one frame, taking ownership of payload (freed if the frame is dropped). On overflow, drops
-// the oldest queued audio frame; control frames are never dropped to make room for audio. On an
-// all-control overflow, evicts only PAUSE/RESUME (stateless no-ops), a same-type control the
-// incoming supersedes, or — for SHUTDOWN — any control; a required incoming (START/STOP) evicts the
-// oldest non-SHUTDOWN control, and a queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming.
-// Returns true if accepted; false when the frame is dropped (a counted AUDIO drop, or a control
-// dropped because nothing evictable existed: a soft incoming with no soft/same-type queued, or a
-// required incoming into an all-SHUTDOWN queue — never at the cost of a queued required transition).
+// Takes ownership of one frame and enqueues it under the bounded overflow policy. Returns false only when the incoming
+// frame is dropped; detailed eviction rules live in the implementation.
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len);
 
-// Pops the oldest frame into out, transferring payload ownership to the caller, who must free it
-// when done. Returns false when the queue is empty; never blocks.
+// Pops the oldest frame and transfers payload ownership to the caller. Returns false when empty and never blocks beyond
+// the queue's short internal mutex critical section.
 bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out);
 
-// Worker-facing pop variant: after HELLO, lifecycle controls preempt queued PCM; obsolete audio
-// preceding the promoted transition is dropped and accounted while unrelated controls survive.
+// Pops with worker lifecycle priority after HELLO, promoting session controls ahead of queued PCM and accounting any
+// obsolete audio discarded before the promoted transition.
 bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* out);
 
-// Returns the total microseconds of audio dropped by overflow or lifecycle-backlog invalidation, via
-// a relaxed atomic load so any thread may read it without taking the queue lock.
+// Returns total microseconds of audio discarded by queue overflow or lifecycle invalidation using a relaxed atomic
+// load, so readers do not need the queue mutex.
 uint64_t vw_worker_queue_get_dropped_audio_us(const vw_worker_queue_t* q);
 
 #endif  // VW_WORKER_QUEUE_H_
