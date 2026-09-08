@@ -13,6 +13,7 @@
 #include "vw_protocol_types.h"
 #include "vw_protocol_util.h"
 #include "vw_segment_builder.h"
+#include "vw_vad.h"
 #include "vw_whisper_engine.h"
 #include "vw_worker_queue.h"
 #include "whisper.h"
@@ -58,6 +59,10 @@ static void vw_local_agreement_runtime_reset_hypothesis(void) {
   vw_la_runtime.hypothesis_count = 0;
 }
 
+static void vw_local_agreement_clear_previous_hypothesis(void) {
+  (void)vw_local_agreement_update(&vw_la_runtime.agreement, NULL, 0, NULL, 0);
+}
+
 static bool vw_local_agreement_rebuild_last_text(vw_whisper_engine_t* engine) {
   if (!engine || !engine->ctx || !engine->last_text || engine->last_text_bytes == 0) return false;
   engine->last_text[0] = '\0';
@@ -84,13 +89,26 @@ static bool vw_local_agreement_rebuild_last_text(vw_whisper_engine_t* engine) {
   return true;
 }
 
+bool vw_local_agreement_vad_detect_speech(const float* pcm, size_t sample_count, vw_vad_context_t* ctx) {
+  bool speech = vw_vad_detect_speech(pcm, sample_count, ctx);
+  vw_local_agreement_runtime_init_once();
+  if (vw_la_runtime.live_session && !speech) {
+    vw_local_agreement_clear_previous_hypothesis();
+    vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT", "VAD-skipped cadence; previous hypothesis cleared");
+  }
+  return speech;
+}
+
 // Worker-only remap for the experiment. Non-live sessions delegate to the production engine unchanged; live
 // sessions use the same deterministic decode parameters but enable whisper.cpp token timestamps so LocalAgreement
 // can measure and commit authentic tokenizer pieces rather than interpolated pseudo-word boundaries.
 bool vw_local_agreement_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm32, size_t sample_count) {
   vw_local_agreement_runtime_init_once();
   if (!vw_la_runtime.live_session) return vw_whisper_engine_transcribe_pcm(engine, pcm32, sample_count);
-  if (!engine || !engine->ctx || !pcm32 || sample_count == 0) return false;
+  if (!engine || !engine->ctx || !pcm32 || sample_count == 0) {
+    vw_local_agreement_clear_previous_hypothesis();
+    return false;
+  }
 
   struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   wparams.strategy = WHISPER_SAMPLING_GREEDY;
@@ -125,8 +143,16 @@ bool vw_local_agreement_transcribe_pcm(vw_whisper_engine_t* engine, const float*
   } else {
     engine->total_inference_us += (uint64_t)inference_elapsed_us;
   }
-  if (inference_result != 0) return false;
-  return vw_local_agreement_rebuild_last_text(engine);
+  if (inference_result != 0) {
+    vw_local_agreement_clear_previous_hypothesis();
+    vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT", "failed inference cadence; previous hypothesis cleared");
+    return false;
+  }
+  if (!vw_local_agreement_rebuild_last_text(engine)) {
+    vw_local_agreement_clear_previous_hypothesis();
+    return false;
+  }
+  return true;
 }
 
 static bool vw_local_agreement_append_segment(const vw_whisper_engine_t* engine, int segment_index,
@@ -172,10 +198,6 @@ static size_t vw_local_agreement_commit_chunk_words(const vw_local_agreement_wor
     fit++;
   }
   return fit;
-}
-
-static void vw_local_agreement_clear_previous_hypothesis(void) {
-  (void)vw_local_agreement_update(&vw_la_runtime.agreement, NULL, 0, NULL, 0);
 }
 
 static void vw_local_agreement_finalize_hypothesis(void) {
