@@ -56,10 +56,28 @@ static void test_committed_overlap_is_not_reemitted(void) {
   EXPECT(vw_local_agreement_update(&state, first, 3, out, 8) == 0);
   EXPECT(vw_local_agreement_update(&state, second, 3, out, 8) == 2);
 
-  vw_local_agreement_word_t third[] = {token("one", 200000, 410000), token(" two", 410000, 620000),
-                                       token(" four", 620000, 850000), token(" five", 850000, 1100000)};
+  vw_local_agreement_word_t third[] = {token("one", 10000, 215000), token(" two", 215000, 425000),
+                                       token(" four", 425000, 655000), token(" five", 655000, 900000)};
   EXPECT(vw_local_agreement_update(&state, third, 4, out, 8) == 1);
   EXPECT(strcmp(out[0].text_utf8, " four") == 0);
+}
+
+static void test_adjacent_repeated_token_is_preserved(void) {
+  vw_local_agreement_t state;
+  vw_local_agreement_init(&state);
+  vw_local_agreement_word_t out[4];
+
+  vw_local_agreement_word_t first[] = {token("no", 0, 200000)};
+  vw_local_agreement_word_t second[] = {token("no", 10000, 210000)};
+  EXPECT(vw_local_agreement_update(&state, first, 1, out, 4) == 0);
+  EXPECT(vw_local_agreement_update(&state, second, 1, out, 4) == 1);
+  EXPECT(strcmp(out[0].text_utf8, "no") == 0);
+
+  vw_local_agreement_word_t repeated_first[] = {token(" no", 240000, 440000)};
+  vw_local_agreement_word_t repeated_second[] = {token(" no", 250000, 450000)};
+  EXPECT(vw_local_agreement_update(&state, repeated_first, 1, out, 4) == 0);
+  EXPECT(vw_local_agreement_update(&state, repeated_second, 1, out, 4) == 1);
+  EXPECT(strcmp(out[0].text_utf8, " no") == 0);
 }
 
 static void test_reset_prevents_cross_epoch_confirmation(void) {
@@ -109,6 +127,7 @@ int main(void) {
   test_first_pass_hidden_then_common_prefix_commits();
   test_divergence_replaces_unconfirmed_tail();
   test_committed_overlap_is_not_reemitted();
+  test_adjacent_repeated_token_is_preserved();
   test_reset_prevents_cross_epoch_confirmation();
   test_empty_pass_breaks_consecutive_agreement();
   test_format_commit_preserves_raw_token_pieces();
