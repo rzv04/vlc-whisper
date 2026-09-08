@@ -35,17 +35,28 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 ## Required cases
 
 - Start local English media, captions appear after bounded warm-up, and final captions have valid ordered PTS.
-- Live/non-seekable PCM (`START.source_kind == VW_SOURCE_LIVE_AUDIO`) becomes inference-eligible after 2 seconds, grows its retained context by 1 second per pass to the 8-second maximum, then uses a 1-second steady-state hop. During the growing phase, segments ending within the newest 500 ms are not emitted as immutable captions.
-- A seekable local file whose source decoder fails to open or seek may fall back to PCM forwarding, but it retains `VW_SOURCE_LOCAL_FILE` classification and therefore preserves the legacy 8-second startup / 2-second hop rather than entering progressive live scheduling.
+- Live/non-seekable PCM (`START.source_kind == VW_SOURCE_LIVE_AUDIO`) becomes inference-eligible after 2 seconds, grows its retained context by 1 second per pass to the 8-second maximum, then uses a 1-second steady-state hop. On `main`, the growing phase has a 500 ms right-edge holdback before immediate finalization; this experimental branch instead gates live output with LocalAgreement-2, so raw first-pass hypotheses never reach the caption builder.
+- In the LocalAgreement experiment, the first non-empty live hypothesis is hidden. A later pass commits only the exact raw Whisper-token prefix shared with the immediately preceding non-empty hypothesis; an empty inference pass breaks consecutiveness.
+- LocalAgreement committed-overlap suppression requires matching raw token text plus substantial overlap of the authentic absolute token timestamp intervals. A genuinely new adjacent repetition such as `no, no` must survive and require its own two-pass confirmation.
+- LocalAgreement uses authentic `whisper_full_get_token_t0/t1()` timing for committed text. Live latency metrics must therefore use the confirmed token run's actual first/last token PTS rather than interpolation across a segment.
+- LocalAgreement state resets on accepted session transitions, pause/discontinuity paths, and empty/invalid hypothesis passes. A stale or duplicate STOP must not disable agreement for the active session before the worker validates its session ID.
+- A seekable local file whose source decoder fails to open or seek may fall back to PCM forwarding, but it retains `VW_SOURCE_LOCAL_FILE` classification and therefore preserves the legacy 8-second startup / 2-second hop rather than entering progressive live scheduling or LocalAgreement.
 - Pause stops AUDIO forwarding and clears partial state; resume does not reuse a stale worker session.
 - End/stop clears captions and closes worker cleanly.
 - User seeks, changes rate, replaces media, or creates non-monotonic PTS: generated captions clear, VLC keeps playing, a single diagnostic appears, no crash. Every accepted live or source seek creates a fresh caption-session ID so buffered pre-seek source and translated cues are stale by construction.
 - Worker absent, wrong version, invalid token, model missing/corrupt, pipe disconnect, bad payload, invalid UTF-8, or worker nonzero exit: safe disable, no playback impact.
-- Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises.
+- Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises. Worker lifecycle controls must preempt stale PCM in the enlarged 512-frame queue.
 - Existing subtitle track and VLC-whisper behavior follow the documented coexistence policy.
 - Lua settings acceptance: opening the single dialog reports bundled/per-user model presence; `tiny.en` and `base.en`
   force `en` on Apply while the full language list remains visible; existing files offer re-download without blocking
   VLC; language choices persist after closing and reopening the dialog.
+
+### Experimental LocalAgreement automated coverage
+
+- `tests/unit/test_local_agreement.c`: first-pass withholding, exact common-prefix commitment, divergence replacement, committed-overlap removal for the same acoustic occurrence, preservation of adjacent repeated tokens at non-overlapping timestamps, reset semantics, empty-pass consecutiveness break, bounded formatting, raw-token whitespace preservation, and CJK token concatenation.
+- `tests/unit/test_worker_queue.c`: 512-frame capacity, ordinary FIFO/overflow ownership, lifecycle-prioritized worker pop, stale PCM invalidation before a promoted transition, and `dropped_audio_us` accounting.
+- Worker integration targets continue compiling `vw_worker.c` through the LocalAgreement remap layer, so live source classification exercises token-timestamp decoding and immutable commit delivery while local/lookahead paths delegate to the production engine/builder behavior.
+- Manual live/network A/B runs compare this branch against current `main` using first sent-caption elapsed time and live utterance latency p50/p95. Expected confirmation cost is approximately one 1-second update interval when two successive hypotheses agree; that is an estimate, not a benchmark result.
 
 ### Automated failure-path coverage
 
@@ -66,7 +77,7 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 - `tests/unit/vw_test_worker_client.c` (14c receive-frame block): `vw_worker_client_receive_frame` decodes `CAPTION_SEGMENT`/`STATUS`/`ERROR` in order, drains and skips an unknown `PAUSE` frame, times out with 0 against a silent server (transport stays usable), and returns -1 at EOF; segment text is copied into caller-owned storage.
 - `tests/integration/test_worker_lifecycle.c` (14c additions): worker with zeroed `model_path` rejects `START` through the client API (E_MODEL_MISSING error path); model-gated section (when `models/ggml-tiny.en.bin` exists and not under Valgrind) streams four 512 ms silence chunks through `STARTED`/`AUDIO`/`STOP`/`SHUTDOWN` and exits 0.
 - `tests/integration/test_worker_ipc.c` (14c): unchanged asserts re-run against the worker reader-thread split, proving the split preserves lifecycle semantics.
-- `tests/unit/test_caption_presenter.c` (15): presenter display/show_segment/clear against VLC symbol stubs (NULL-filter standalone mode). Step 15 wiring itself is module-internal (sender-thread dispatch to OSD). Live-VLC acceptance now validates progressive live scheduling rather than the old batch-only warm-up: completed speech may produce captions from the growing 2→8 second context, while any trailing segment within the 500 ms right-edge guard is withheld until later context; automated suite remains regression-only for this path.
+- `tests/unit/test_caption_presenter.c` (15): presenter display/show_segment/clear against VLC symbol stubs (NULL-filter standalone mode). Step 15 wiring itself is module-internal (sender-thread dispatch to OSD). Live-VLC acceptance now validates progressive live scheduling rather than the old batch-only warm-up: completed speech may produce captions from the growing 2→8 second context, while any trailing segment within the 500 ms right-edge guard is withheld until later context on `main`; the LocalAgreement experiment uses consecutive-hypothesis confirmation instead.
 - `tests/unit/vw_test_worker_client.c` (16): fake server now expects `PAUSE` (USER_PAUSE) then `RESUME` (USER_RESUME) control frames between AUDIO and STOP, verifying the client pause/resume API and that the session stays active through both.
 - `tests/integration/test_worker_lifecycle.c` (16): model-gated section sends PAUSE/RESUME mid-stream before STOP/SHUTDOWN, proving the worker survives both controls with exit 0.
 - `tests/unit/vw_test_worker_client.c` (17): fake server decodes the `STOP` payload and asserts `reason == VW_CTRL_REASON_SEEK_DISCONTINUITY`.
@@ -107,8 +118,10 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 Define the reference machine before claiming “real time”: CPU model/core count, RAM, Windows build, VLC build, model hash, worker flags, and fixture. Record:
 
 - Real-time factor = inference processing time divided by audio duration; target steady-state below 1.0 for tiny.en on reference hardware.
-- End-to-caption latency: target p95 below 5 seconds for live/non-seekable media under the 2-second progressive startup, 1-second steady-state hop, and 500 ms growing-window edge holdback, measured from segment end PTS to display scheduling. Seekable local-file PCM fallback keeps the legacy 8-second/2-second cadence and is benchmarked separately from true live mode.
-- No unbounded queue; backlog hard limit 8 seconds (16 × 512 ms chunks); zero intentional playback stalls.
+- Current `main` live baseline: first inference after about 2 seconds, 1-second update/steady hop, context growing to 8 seconds, and a 500 ms growing-window edge holdback before immediate finalization.
+- LocalAgreement experiment: first inference timing is unchanged, but the first hypothesis is hidden and typical first stable output is expected roughly one update interval later when two passes agree. Measure this rather than claiming a startup-latency improvement over `main`.
+- End-to-caption latency: target p95 below 5 seconds for the production baseline. For the experimental branch, report measured first-caption elapsed and live utterance p50/p95 separately; WER may remain high and no latency/quality estimate is a release claim until A/B data exists.
+- No unbounded queue; the worker inbound queue is 512 frames (~10.2 seconds at 20 ms cadence), while the plugin SPSC audio backlog remains 8 seconds. Lifecycle controls preempt stale queued PCM rather than waiting behind the worker backlog.
 
 These targets are engineering gates, not a guarantee for every PC or noisy source.
 
@@ -119,6 +132,7 @@ Every merge: format check, C compilation with warnings-as-errors, unit/protocol 
 Release requires all gates green, manual local-file acceptance on clean Windows, documented known failures, protocol/version manifest, model hash verification, and review of diagnostics to ensure no PCM/transcript/path leakage.
 
 **Validation note for this change:** `test_worker_client_seek_epoch` is wired into CTest and release packaging now fails closed on worker/model composition. The branch's final format/build/CTest/Valgrind run and Windows installer/VM smoke remain separate release-validation steps rather than being claimed by this documentation update.
+
 # Test harness safety
 
 Unix-domain integration tests use unique absolute paths under `/tmp`, derived from the process ID. This prevents a
