@@ -8,10 +8,16 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include <stdbool.h>
+
 #ifndef _WIN32
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <spawn.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #endif
 
@@ -57,6 +63,51 @@ static inline int vw_translate_keep_sigpipe_ignored(int signum, const void* acti
   }
   return signal(SIGPIPE, SIG_IGN) == SIG_ERR ? -1 : 0;
 }
+
+#ifdef VW_TRANSLATE_TESTING
+// Injects deterministic F_SETFL failure for selected parent nonblocking setup calls while forwarding every other
+// fcntl operation unchanged to the operating system during translation transport regression tests.
+static inline int vw_translate_test_fcntl(int fd, int cmd, ...) {
+  bool has_arg = cmd == F_SETFD || cmd == F_SETFL;
+  int arg = 0;
+  if (has_arg) {
+    va_list args;
+    va_start(args, cmd);
+    arg = va_arg(args, int);
+    va_end(args);
+  }
+  if (cmd == F_SETFL && (arg & O_NONBLOCK) != 0) {
+    static unsigned nonblocking_calls = 0;
+    nonblocking_calls++;
+    const char* fail_call = getenv("VW_TEST_TRANSLATE_FAIL_NONBLOCKING_CALL");
+    if (fail_call && fail_call[0]) {
+      if (strcmp(fail_call, "all") == 0) {
+        errno = EIO;
+        return -1;
+      }
+      char* end = NULL;
+      long target = strtol(fail_call, &end, 10);
+      if (end && *end == '\0' && target > 0 && nonblocking_calls == (unsigned)target) {
+        errno = EIO;
+        return -1;
+      }
+    }
+  }
+  if (has_arg) return fcntl(fd, cmd, arg);
+  return fcntl(fd, cmd);
+}
+
+// Redirects test-only curl process creation to a deterministic executable supplied through the environment while
+// preserving production spawn attributes, file actions, arguments, and inherited environment semantics.
+static inline int vw_translate_test_posix_spawn(pid_t* pid, const char* path,
+                                                const posix_spawn_file_actions_t* actions,
+                                                const posix_spawnattr_t* attr, char* const argv[],
+                                                char* const envp[]) {
+  const char* override = getenv("VW_TEST_TRANSLATE_EXECUTABLE");
+  const char* executable = override && override[0] ? override : path;
+  return posix_spawn(pid, executable, actions, attr, argv, envp);
+}
+#endif
 #endif
 
 #ifdef VW_TRANSLATE_PIPE_POLICY_OVERRIDE
@@ -67,6 +118,11 @@ static inline int vw_translate_keep_sigpipe_ignored(int signum, const void* acti
 #define set_nonblocking vw_translate_set_nonblocking
 #define pipe(pipefd) vw_translate_make_cloexec_pipe((pipefd))
 #define sigaction(signum, action, old_action) vw_translate_keep_sigpipe_ignored((signum), (action), (old_action))
+#ifdef VW_TRANSLATE_TESTING
+#define fcntl(...) vw_translate_test_fcntl(__VA_ARGS__)
+#define posix_spawn(pid, path, actions, attr, argv, envp) \
+  vw_translate_test_posix_spawn((pid), (path), (actions), (attr), (argv), (envp))
+#endif
 #endif
 #endif
 
