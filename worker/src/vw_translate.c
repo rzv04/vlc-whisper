@@ -829,9 +829,25 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     return false;
   }
 
-  set_nonblocking(pipe_out[0]);
+  bool nonblocking_ok = set_nonblocking(pipe_out[0]);
   if (input_payload) {
-    set_nonblocking(pipe_in[1]);
+    nonblocking_ok = set_nonblocking(pipe_in[1]) && nonblocking_ok;
+  }
+  if (!nonblocking_ok) {
+    close(pipe_out[0]);
+    pipe_out[0] = -1;
+    if (input_payload) {
+      close(pipe_in[1]);
+      pipe_in[1] = -1;
+    }
+    kill(pid, SIGKILL);
+    int reap_status = 0;
+    pid_t reaped = 0;
+    do {
+      reaped = waitpid(pid, &reap_status, 0);
+    } while (reaped < 0 && errno == EINTR);
+    sigaction(SIGPIPE, &sa_old, NULL);
+    return false;
   }
 
   size_t payload_len = input_payload ? strlen(input_payload) : 0;
