@@ -100,8 +100,7 @@ static inline int vw_translate_test_fcntl(int fd, int cmd, ...) {
 // Redirects test-only curl process creation to a deterministic executable supplied through the environment while
 // preserving production spawn attributes, file actions, arguments, and inherited environment semantics.
 static inline int vw_translate_test_posix_spawn(pid_t* pid, const char* path, const posix_spawn_file_actions_t* actions,
-                                                const posix_spawnattr_t* attr, char* const argv[],
-                                                char* const envp[]) {
+                                                const posix_spawnattr_t* attr, char* const argv[], char* const envp[]) {
   const char* override = getenv("VW_TEST_TRANSLATE_EXECUTABLE");
   const char* executable = override && override[0] ? override : path;
   return posix_spawn(pid, executable, actions, attr, argv, envp);
