@@ -72,6 +72,42 @@ static bool vw_worker_queue_is_lifecycle_control(uint16_t type) {
          type == VW_MSG_SHUTDOWN;
 }
 
+static bool vw_worker_queue_control_applies_to_preceding_audio(const vw_worker_queue_t* q, size_t lifecycle) {
+  const vw_worker_frame_t* control = &q->slots[lifecycle % q->capacity];
+  if (control->type == VW_MSG_SHUTDOWN) return true;
+
+  size_t preceding_audio = q->head;
+  for (size_t i = q->tail; i < lifecycle; i++) {
+    if (q->slots[i % q->capacity].type == VW_MSG_AUDIO_PCM) preceding_audio = i;
+  }
+  if (preceding_audio == q->head) return true;
+
+  vw_msg_audio_t audio;
+  const vw_worker_frame_t* audio_frame = &q->slots[preceding_audio % q->capacity];
+  if (!audio_frame->payload ||
+      !vw_protocol_decode_payload(VW_MSG_AUDIO_PCM, audio_frame->payload, audio_frame->payload_len, &audio)) {
+    return false;
+  }
+
+  if (control->type == VW_MSG_START_SESSION) {
+    vw_msg_start_t start;
+    if (!control->payload ||
+        !vw_protocol_decode_payload(VW_MSG_START_SESSION, control->payload, control->payload_len, &start)) {
+      return false;
+    }
+    // A START for the same session is a duplicate and must not invalidate valid queued PCM. A different session is
+    // a replacement epoch, so the preceding audio is stale and may be dropped before promoting the START.
+    return memcmp(start.session_id.bytes, audio.session_id.bytes, VW_SESSION_ID_BYTES) != 0;
+  }
+
+  vw_msg_control_t lifecycle_control;
+  if (!control->payload ||
+      !vw_protocol_decode_payload(control->type, control->payload, control->payload_len, &lifecycle_control)) {
+    return false;
+  }
+  return memcmp(lifecycle_control.session_id.bytes, audio.session_id.bytes, VW_SESSION_ID_BYTES) == 0;
+}
+
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {
   if (!q) {
     free(payload);
@@ -221,14 +257,14 @@ bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* ou
     return false;
   }
 
-  // Preserve HELLO ordering for authentication. After that, session lifecycle controls must not sit
-  // behind the enlarged PCM backlog. Promote the earliest transition; AUDIO older than that control
-  // belongs to the prior playback state, so discard and account it while preserving other controls
-  // and every frame queued after the transition.
+  // Preserve HELLO ordering for authentication. After that, promote only a lifecycle control that is
+  // consistent with the nearest preceding AUDIO epoch. Invalid/wrong-session controls stay FIFO and
+  // therefore cannot destroy valid audio before the worker performs its authoritative validation.
   if (q->slots[q->tail % q->capacity].type != VW_MSG_HELLO) {
     size_t lifecycle = q->head;
     for (size_t i = q->tail; i < q->head; i++) {
-      if (vw_worker_queue_is_lifecycle_control(q->slots[i % q->capacity].type)) {
+      if (vw_worker_queue_is_lifecycle_control(q->slots[i % q->capacity].type) &&
+          vw_worker_queue_control_applies_to_preceding_audio(q, i)) {
         lifecycle = i;
         break;
       }
