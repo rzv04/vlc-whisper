@@ -52,6 +52,7 @@ vlc-whisper/
 │   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
 │   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
 │   │   ├── vw_whisper_engine.h                # C wrapper around whisper.cpp: segment-level timing & no_speech_prob accessors
+│   │   ├── vw_local_agreement.h               # Experimental LocalAgreement-2 token agreement state and commit formatting
 │   │   ├── vw_vad.h                           # Silero VAD GGML context management, chunk finding & RMS Energy fallback
 │   │   ├── vw_hallucination_filter.h          # Non-speech sound tag and isolated punctuation filter
 │   │   ├── vw_segment_builder.h               # Final-subtitles dedup (no expansion/revision), timed segments
@@ -68,6 +69,8 @@ vlc-whisper/
 │   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
 │   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
 │   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, confidence & segment accessors
+│   │   ├── vw_local_agreement.c               # Experimental exact-prefix agreement and timestamp-aware overlap suppression
+│   │   ├── vw_local_agreement_hooks.c         # Live-only worker interposition for token timestamps and immutable commits
 │   │   ├── vw_vad.c                           # Silero GGML VAD integration, chunk boundary finding & RMS energy fallback
 │   │   ├── vw_hallucination_filter.c          # Sound descriptor tag stripping and isolated punctuation filter
 │   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
@@ -116,6 +119,7 @@ vlc-whisper/
 │   │   ├── test_vad.c                         # Silero GGML VAD, chunk boundary & RMS Energy fallback tests
 │   │   ├── test_hallucination_filter.c        # Non-speech tag & isolated punctuation filter tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
+│   │   ├── test_local_agreement.c             # LocalAgreement prefix, reset, CJK/raw-token, and repeated-token tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
 │   │   ├── test_benchmark.c                   # Per-session metric and temporary report tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
@@ -197,6 +201,9 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_source_decoder_mf.c` | Windows Media Foundation native audio demuxer & resampler        |
 | `vw_source_decoder_ffmpeg.c` | Linux FFmpeg native audio demuxer & resampler                |
 | `vw_whisper_engine.c`  | Whisper C API adapter: model load/unload, inference timing, per-segment accessors |
+| `vw_local_agreement.h` | Experimental bounded LocalAgreement-2 state over raw Whisper text tokens and authentic token PTS |
+| `vw_local_agreement.c` | Exact two-pass prefix agreement plus timestamp-interval overlap suppression that preserves adjacent repeated tokens |
+| `vw_local_agreement_hooks.c` | Live-only worker remaps: token-timestamp decode, accepted-control gating, immutable commit delivery |
 | `vw_vad.c`             | Voice-activity detection state and window decisions                |
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
 | `vw_segment_builder.c` | Ordered timed segments, final-subtitles dedup, dynamic queue growth |
@@ -210,6 +217,13 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_translate.c`       | HTTP client (WinHTTP/curl), URL encode, HTML unescape, Web RPC (MkEWBc), GTX, and Mobile scrape endpoints |
 | `test_model_download.c` | SHA-256 NIST vectors, catalog lookup, pct math, local success, abort cleanup, same-destination locking, and retry-then-fail paths |
 | `test_translate.c`     | URL encoding, HTML unescaping, Web RPC JSON parser, GTX array parser, and Mobile scrape parser verification |
+
+The LocalAgreement experiment is intentionally live-only. The first live hypothesis stays hidden; subsequent passes
+commit only the exact raw-token prefix shared by consecutive hypotheses. Committed-tail suppression additionally
+requires matching token text and substantial overlap of the authentic absolute timestamp intervals, so a newly spoken
+adjacent repetition such as `no, no` is not erased merely because it occurs close to the preceding cue. START/STOP mode
+changes are staged at dequeue and applied only when the worker reaches its already-validated `builder_clear()` path;
+a stale or duplicate control therefore cannot disable LocalAgreement for the active session.
 
 The builder exposes `vw_segment_builder_push_hypothesis` (whole-phrase final-subtitles dedup: exact,
 fragment, and expanded superstring hypotheses are dropped; queue grows dynamically; history commits after a
@@ -245,7 +259,7 @@ Payload structs are constructed at call sites with C99 designated initializers (
 
 ## Tests
 
-- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, caption timing, platform abstraction, worker-client source seek epoch regression.
+- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, LocalAgreement token-prefix/overlap behavior, caption timing, platform abstraction, worker-client source seek epoch regression.
 - `tests/integration/`: worker process, pipe handshake, lifecycle/errors/cleanup.
 - `tests/e2e/`: repeatable manual test of the pinned VLC build and local English video.
 - `tests/fixtures/`: legal, small, deterministic offline input data only.
