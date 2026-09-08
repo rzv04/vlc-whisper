@@ -15,8 +15,7 @@ static int vw_local_agreement_words_equal(const vw_local_agreement_word_t* a, co
   return a && b && strcmp(a->text_utf8, b->text_utf8) == 0;
 }
 
-static int vw_local_agreement_same_occurrence(const vw_local_agreement_word_t* a,
-                                              const vw_local_agreement_word_t* b) {
+static int vw_local_agreement_same_occurrence(const vw_local_agreement_word_t* a, const vw_local_agreement_word_t* b) {
   if (!vw_local_agreement_words_equal(a, b)) return 0;
 
   int64_t a_duration = a->end_pts_us - a->start_pts_us;
