@@ -89,7 +89,7 @@ static bool vw_local_agreement_rebuild_last_text(vw_whisper_engine_t* engine) {
   return true;
 }
 
-bool vw_local_agreement_vad_detect_speech(const float* pcm, size_t sample_count, vw_vad_context_t* ctx) {
+bool vw_local_agreement_vad_detect_speech(const float* pcm, size_t sample_count, struct whisper_vad_context* ctx) {
   bool speech = vw_vad_detect_speech(pcm, sample_count, ctx);
   vw_local_agreement_runtime_init_once();
   if (vw_la_runtime.live_session && !speech) {
