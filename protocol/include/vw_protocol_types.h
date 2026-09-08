@@ -55,6 +55,8 @@
 // Source kind enum
 typedef enum vw_source_kind { VW_SOURCE_LIVE_AUDIO = 0, VW_SOURCE_LOCAL_FILE = 1 } vw_source_kind_t;
 
+#define VW_SAMPLE_FORMAT_S16LE 1U
+
 // Error codes for VW_MSG_ERROR frames
 typedef enum vw_error_code {
   E_PROTOCOL_VERSION = 1,

@@ -36,6 +36,14 @@ static void vw_audio_buffer_advance_pts(vw_audio_buffer_t* buf, int64_t samples)
 bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, size_t sample_count, int64_t pts_us) {
   if (!buf || !buf->samples || !pcm16 || sample_count == 0) return false;
 
+  if (buf->count > 0 && buf->start_pts_us >= 0) {
+    int64_t expected_pts_us = buf->start_pts_us + (int64_t)((buf->count * 125U + (size_t)buf->start_pts_frac_us) / 2U);
+    // A 16 kHz output sample spans 62.5 µs. Rational resampling can round adjacent VLC blocks to opposite sides of
+    // that phase boundary, so tolerate one output sample before treating the new PTS as a real discontinuity.
+    int64_t pts_delta_us = pts_us - expected_pts_us;
+    if (pts_delta_us < -63 || pts_delta_us > 63) vw_audio_buffer_clear(buf);
+  }
+
   // Set initial start PTS if buffer is currently empty
   if (buf->count == 0 || buf->start_pts_us < 0) {
     buf->start_pts_us = pts_us;

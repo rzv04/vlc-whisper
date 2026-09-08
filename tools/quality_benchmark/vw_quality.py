@@ -74,6 +74,8 @@ def score_pair(reference: str, hypothesis: str) -> ErrorCounts:
     hyp_words = word_tokens(hypothesis)
     ref_chars = character_tokens(reference)
     hyp_chars = character_tokens(hypothesis)
+    if not ref_words or not ref_chars:
+        raise ValueError("reference must contain scoreable text")
     return ErrorCounts(
         word_errors=edit_distance(ref_words, hyp_words),
         reference_words=len(ref_words),

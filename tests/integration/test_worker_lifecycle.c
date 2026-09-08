@@ -82,7 +82,7 @@ int main(void) {
                               .sample_format = 1,
                               .model_id = "ggml-tiny.en.bin",
                               .language = "en",
-                              .source_kind = VW_SOURCE_LOCAL_FILE};
+                              .source_kind = VW_SOURCE_LIVE_AUDIO};
 
   uint8_t payload_buf[1024];
   size_t written = 0;

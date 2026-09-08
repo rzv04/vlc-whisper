@@ -56,7 +56,7 @@ Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capa
 
 ### START
 
-Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (=1, S16LE), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. `STARTED` either confirms effective settings or responds with `ERROR`. The VLC plugin generates a fresh random session ID for an initial playback start and for every accepted live or source seek epoch; restarting a caption session does not require restarting the worker process or authenticated transport.
+Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (`VW_SAMPLE_FORMAT_S16LE` = 1), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. Validation requires the exact audio tuple, a supported concrete language, nonempty terminated model ID, and a terminated URL whose declared length matches its bytes. Live starts require an empty URL; local-file starts require a nonempty URL. `STARTED` either confirms effective settings or responds with `ERROR`. The VLC plugin generates a fresh random session ID for an initial playback start and for every accepted live or source seek epoch; restarting a caption session does not require restarting the worker process or authenticated transport.
 
 ### POSITION (v1.1)
 

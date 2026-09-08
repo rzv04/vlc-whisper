@@ -23,6 +23,8 @@
 #include <winhttp.h>
 #else
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -629,9 +631,11 @@ static bool win32_http_request(const char* host, const char* path, const char* b
     if (written <= 0 || (size_t)written >= sizeof(wheaders) / sizeof(wheaders[0])) goto done;
   }
   if (!set_winhttp_remaining_timeouts(session, deadline_us, 3U)) goto done;
+  LPCWSTR headers = wheaders[0] ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS;
+  DWORD headers_len = wheaders[0] ? (DWORD)wcslen(wheaders) : 0;
+  LPVOID req_data = body ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA;
   DWORD body_len = body ? (DWORD)strlen(body) : 0;
-  if (!WinHttpSendRequest(request, wheaders[0] ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS, (DWORD)-1L, (LPVOID)body,
-                          body_len, body_len, 0)) {
+  if (!WinHttpSendRequest(request, headers, headers_len, req_data, body_len, body_len, 0)) {
     goto done;
   }
   if (!set_winhttp_remaining_timeouts(session, deadline_us, 2U) || !WinHttpReceiveResponse(request, NULL)) goto done;
@@ -676,17 +680,33 @@ static bool set_cloexec(int fd) {
   return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
+static bool set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
 static bool posix_http_request(const char* base_url, const char* post_body, const char* query_text,
                                const char* content_type, char* out_buf, size_t buf_size, int64_t deadline_us) {
   if (!base_url || !out_buf || buf_size < 2) return false;
   uint32_t timeout_ms = remaining_timeout_ms(deadline_us);
   if (timeout_ms == 0) return false;
 
-  int pipe_out[2];
-  if (pipe(pipe_out) != 0) return false;
+  // Ignore SIGPIPE so premature exit of curl child during pipe write never terminates the worker.
+  struct sigaction sa_ign;
+  struct sigaction sa_old;
+  memset(&sa_ign, 0, sizeof(sa_ign));
+  sa_ign.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &sa_ign, &sa_old);
+
+  int pipe_out[2] = {-1, -1};
+  if (pipe(pipe_out) != 0) {
+    sigaction(SIGPIPE, &sa_old, NULL);
+    return false;
+  }
   if (!set_cloexec(pipe_out[0]) || !set_cloexec(pipe_out[1])) {
     close(pipe_out[0]);
     close(pipe_out[1]);
+    sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
 
@@ -696,6 +716,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     if (pipe(pipe_in) != 0) {
       close(pipe_out[0]);
       close(pipe_out[1]);
+      sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
     if (!set_cloexec(pipe_in[0]) || !set_cloexec(pipe_in[1])) {
@@ -703,6 +724,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
       close(pipe_in[1]);
       close(pipe_out[0]);
       close(pipe_out[1]);
+      sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
   }
@@ -731,6 +753,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
         close(pipe_in[0]);
         close(pipe_in[1]);
       }
+      sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
     argv[argc++] = "-H";
@@ -758,6 +781,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
       close(pipe_in[0]);
       close(pipe_in[1]);
     }
+    sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
   posix_spawn_file_actions_addclose(&actions, pipe_out[0]);
@@ -768,68 +792,203 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     posix_spawn_file_actions_adddup2(&actions, pipe_in[0], STDIN_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipe_in[0]);
   }
+
+  posix_spawnattr_t attr;
+  bool attr_init = false;
+  if (posix_spawnattr_init(&attr) == 0) {
+    attr_init = true;
+    sigset_t sigdef;
+    sigemptyset(&sigdef);
+    sigaddset(&sigdef, SIGPIPE);
+    posix_spawnattr_setsigdefault(&attr, &sigdef);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGDEF);
+  }
+
   pid_t pid = 0;
-  int spawn_status = posix_spawn(&pid, VW_CURL_EXECUTABLE, &actions, NULL, (char* const*)argv, environ);
+  int spawn_status =
+      posix_spawn(&pid, VW_CURL_EXECUTABLE, &actions, attr_init ? &attr : NULL, (char* const*)argv, environ);
   posix_spawn_file_actions_destroy(&actions);
+  if (attr_init) {
+    posix_spawnattr_destroy(&attr);
+  }
+
   close(pipe_out[1]);
-  if (input_payload) close(pipe_in[0]);
+  pipe_out[1] = -1;
+  if (input_payload) {
+    close(pipe_in[0]);
+    pipe_in[0] = -1;
+  }
   if (spawn_status != 0) {
     close(pipe_out[0]);
-    if (input_payload) close(pipe_in[1]);
+    pipe_out[0] = -1;
+    if (input_payload) {
+      close(pipe_in[1]);
+      pipe_in[1] = -1;
+    }
+    sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
 
+  bool nonblocking_ok = set_nonblocking(pipe_out[0]);
   if (input_payload) {
-    size_t payload_len = strlen(input_payload);
-    size_t written = 0;
-    while (written < payload_len) {
-      ssize_t n = write(pipe_in[1], input_payload + written, payload_len - written);
-      if (n > 0) {
-        written += (size_t)n;
-      } else if (n < 0 && errno == EINTR) {
-        continue;
-      } else {
-        break;
-      }
+    nonblocking_ok = set_nonblocking(pipe_in[1]) && nonblocking_ok;
+  }
+  if (!nonblocking_ok) {
+    close(pipe_out[0]);
+    pipe_out[0] = -1;
+    if (input_payload) {
+      close(pipe_in[1]);
+      pipe_in[1] = -1;
     }
-    close(pipe_in[1]);
-    if (written != payload_len) {
-      close(pipe_out[0]);
-      waitpid(pid, NULL, 0);
-      return false;
-    }
+    kill(pid, SIGKILL);
+    int reap_status = 0;
+    pid_t reaped = 0;
+    do {
+      reaped = waitpid(pid, &reap_status, 0);
+    } while (reaped < 0 && errno == EINTR);
+    sigaction(SIGPIPE, &sa_old, NULL);
+    return false;
   }
 
+  size_t payload_len = input_payload ? strlen(input_payload) : 0;
+  size_t written = 0;
+  bool in_open = (input_payload != NULL);
+  bool out_open = true;
+  bool write_failed = false;
   bool overflow = false;
   size_t total_read = 0;
-  for (;;) {
-    char extra;
-    void* target = total_read + 1 < buf_size ? (void*)(out_buf + total_read) : (void*)&extra;
-    size_t capacity = total_read + 1 < buf_size ? buf_size - 1 - total_read : 1U;
-    ssize_t n = read(pipe_out[0], target, capacity);
-    if (n > 0) {
-      if (total_read + 1 >= buf_size) {
-        overflow = true;
-        break;
-      }
-      total_read += (size_t)n;
-      continue;
+
+  if (in_open && payload_len == 0) {
+    close(pipe_in[1]);
+    pipe_in[1] = -1;
+    in_open = false;
+  }
+
+  while (in_open || out_open) {
+    int64_t now_us = get_monotonic_us();
+    if (now_us > deadline_us) break;
+    int64_t rem_us = deadline_us - now_us;
+    int rem_ms = (int)(rem_us / 1000LL);
+    if (rem_ms <= 0) break;
+    if (rem_ms > 200) rem_ms = 200;
+
+    struct pollfd pfds[2];
+    nfds_t nfds = 0;
+    int in_idx = -1;
+    int out_idx = -1;
+
+    if (in_open) {
+      pfds[nfds].fd = pipe_in[1];
+      pfds[nfds].events = POLLOUT;
+      pfds[nfds].revents = 0;
+      in_idx = (int)nfds++;
     }
-    if (n == 0) break;
-    if (errno == EINTR) continue;
-    overflow = true;
-    break;
+    if (out_open) {
+      pfds[nfds].fd = pipe_out[0];
+      pfds[nfds].events = POLLIN;
+      pfds[nfds].revents = 0;
+      out_idx = (int)nfds++;
+    }
+
+    int prc = poll(pfds, nfds, rem_ms);
+    if (prc < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (prc == 0) continue;
+
+    if (out_idx >= 0 && (pfds[out_idx].revents & (POLLIN | POLLHUP | POLLERR))) {
+      while (out_open) {
+        char extra = '\0';
+        void* target = total_read + 1U < buf_size ? (void*)(out_buf + total_read) : (void*)&extra;
+        size_t capacity = total_read + 1U < buf_size ? buf_size - 1U - total_read : 1U;
+        ssize_t n = read(pipe_out[0], target, capacity);
+        if (n > 0) {
+          if (total_read + 1U >= buf_size) {
+            overflow = true;
+          } else {
+            total_read += (size_t)n;
+          }
+        } else if (n == 0) {
+          close(pipe_out[0]);
+          pipe_out[0] = -1;
+          out_open = false;
+          break;
+        } else {
+          if (errno == EINTR) continue;
+          if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+          close(pipe_out[0]);
+          pipe_out[0] = -1;
+          out_open = false;
+          break;
+        }
+      }
+    }
+
+    if (in_open && in_idx >= 0) {
+      if (pfds[in_idx].revents & (POLLERR | POLLHUP)) {
+        close(pipe_in[1]);
+        pipe_in[1] = -1;
+        in_open = false;
+        if (written < payload_len) write_failed = true;
+      } else if (pfds[in_idx].revents & POLLOUT) {
+        while (in_open && written < payload_len) {
+          ssize_t n = write(pipe_in[1], input_payload + written, payload_len - written);
+          if (n > 0) {
+            written += (size_t)n;
+            if (written >= payload_len) {
+              close(pipe_in[1]);
+              pipe_in[1] = -1;
+              in_open = false;
+              break;
+            }
+          } else if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            write_failed = true;
+            close(pipe_in[1]);
+            pipe_in[1] = -1;
+            in_open = false;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (pipe_in[1] >= 0) {
+    close(pipe_in[1]);
+    pipe_in[1] = -1;
+  }
+  if (pipe_out[0] >= 0) {
+    close(pipe_out[0]);
+    pipe_out[0] = -1;
   }
   out_buf[total_read] = '\0';
-  close(pipe_out[0]);
+  sigaction(SIGPIPE, &sa_old, NULL);
 
   int wait_status = 0;
-  pid_t waited;
-  do {
-    waited = waitpid(pid, &wait_status, 0);
-  } while (waited < 0 && errno == EINTR);
-  return !overflow && total_read > 0 && waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0 &&
-         get_monotonic_us() <= deadline_us;
+  pid_t waited = 0;
+  while (1) {
+    waited = waitpid(pid, &wait_status, WNOHANG);
+    if (waited == pid) break;
+    if (waited < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (get_monotonic_us() > deadline_us + 100000LL) {
+      kill(pid, SIGKILL);
+      do {
+        waited = waitpid(pid, &wait_status, 0);
+      } while (waited < 0 && errno == EINTR);
+      break;
+    }
+    struct timespec ts = {0, 5000000L};
+    nanosleep(&ts, NULL);
+  }
+
+  return !overflow && !write_failed && total_read > 0 && waited == pid && WIFEXITED(wait_status) &&
+         WEXITSTATUS(wait_status) == 0 && get_monotonic_us() <= deadline_us;
 }
 #endif
 

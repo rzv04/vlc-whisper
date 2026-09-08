@@ -28,6 +28,19 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
     atomic_store(cap->reset_pending, false);
   }
 
+  float current_rate = 1.0f;
+  if (cap->playback_rate) {
+    current_rate = atomic_load(cap->playback_rate);
+  }
+
+  // Rate-based throttling/dropping (VW-019): when playback rate is high (>4.0x or >16.0x), audio blocks
+  // arrive at excessive speeds. Drop audio to prevent SPSC queue overflow and worker protocol crashes.
+  if (current_rate > 4.0f) {
+    cap->total_input_frames += input->frame_count;
+    cap->last_pts_us = input->pts_us;
+    return true;
+  }
+
   // A source-rate change starts a new rational conversion phase.
   if (cap->resample_source_rate != input->sample_rate) {
     cap->resample_source_rate = input->sample_rate;
