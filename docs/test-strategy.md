@@ -67,7 +67,7 @@ The WER/CER benchmark under `tools/quality_benchmark/` is deliberately separate 
 - `tests/unit/test_whisper_engine.c`: invalid model path initialization failure (NULL), model file presence check, and model-gated skip (exit 77). Under Valgrind/memcheck the heavy model-gated section is also skipped (exit 77): loading the 77MB model plus multi-threaded whisper inference is impractically slow under Valgrind and whisper's GPU-less Vulkan fallback emits false-positive `close(-1)` warnings, so the memcheck gate remains fast and clean.
 - `tests/unit/test_worker_config.c`: concrete Whisper language validation rejects `auto` and unsupported codes; valid language selections remain accepted.
 - `tests/unit/test_caption_presenter.c`: adjacent cues preserve the one-second floor by allowing overlap when clipping would make the preceding cue unreadable.
-- `tests/unit/test_translate.c`: one global 800 ms deadline is consumed across fallback tiers rather than reset for each request.
+- `tests/unit/test_translate.c`: one global 800 ms deadline is consumed across fallback tiers rather than reset for each request; POSIX post-spawn `O_NONBLOCK` setup failure is injected and must close parent pipes, terminate/reap curl, and fail before the cue deadline can be bypassed.
 - `tests/integration/test_worker_lifecycle.c`: wrong-token HELLO rejection (worker exits 1), first-frame-not-HELLO rejection (worker exits 1), client NULL-arg validation (NULL endpoint/token), connect failure with no listener.
 - `tests/integration/test_worker_ipc.c`: `START` with an unsupported sample rate rejected with an `E_AUDIO_FORMAT` error reply; clean `SHUTDOWN` exit.
 - `tests/unit/test_protocol_start_failure_paths.c`: exact 16 kHz mono S16LE validation, concrete language and terminated model fields, source-kind/URL consistency, and declared URL length equality.
@@ -156,7 +156,7 @@ The postmortem contract suite added these explicit red tests before implementati
 - `tests/unit/test_worker_config_failure_paths.c` enforces reject-on-overflow semantics for identity-bearing worker CLI values (`--pipe`, `--vad-model`, `--log-file`) rather than silent truncation.
 - `tests/integration/test_queue_audio_timeline.c` composes worker-queue eviction with an already-populated audio buffer and requires the dropped media-time gap not to be collapsed. The assertion deliberately permits multiple future implementations: rejecting the discontinuous append, re-anchoring, or explicitly representing/filling the gap can satisfy the observable timeline invariant.
 
-The protocol, queue timeline, decoder stall/error, live-tail, fresh-session, and benchmark integrity contracts were confirmed red before implementation and green afterward. Security-scoped ledger items remain outside this change.
+The protocol, queue timeline, decoder stall/error, live-tail, fresh-session, translation subprocess setup, and benchmark integrity contracts were confirmed red before implementation and green afterward. Security-scoped ledger items remain outside this change.
 
 ## P1 Defect Regression Test Suite
 
