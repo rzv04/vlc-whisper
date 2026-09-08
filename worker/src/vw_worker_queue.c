@@ -67,6 +67,11 @@ static uint64_t vw_worker_queue_audio_duration_us(const uint8_t* payload, uint32
   return audio.duration_us > 0 ? (uint64_t)audio.duration_us : 0;
 }
 
+static bool vw_worker_queue_is_lifecycle_control(uint16_t type) {
+  return type == VW_MSG_START_SESSION || type == VW_MSG_STOP_SESSION || type == VW_MSG_PAUSE || type == VW_MSG_RESUME ||
+         type == VW_MSG_SHUTDOWN;
+}
+
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {
   if (!q) {
     free(payload);
@@ -137,6 +142,7 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   // (START/STOP) — the oldest non-SHUTDOWN control, since the newest session directive supersedes
   // the oldest. A queued SHUTDOWN is never evicted by a non-SHUTDOWN incoming. A required incoming
   // is dropped only when every queued control is SHUTDOWN (the worker is exiting anyway, so the
+  // directive is moot).
   size_t evict_ctrl = 0;
   bool evict_ctrl_found = false;
   if (type == VW_MSG_SHUTDOWN) {
@@ -199,6 +205,65 @@ bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out) {
     return false;
   }
   *out = q->slots[q->tail % q->capacity];
+  memset(&q->slots[q->tail % q->capacity], 0, sizeof(q->slots[q->tail % q->capacity]));
+  q->tail++;
+  pthread_mutex_unlock(&q->mutex);
+  return true;
+}
+
+bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* out) {
+  if (!q || !out) {
+    return false;
+  }
+  pthread_mutex_lock(&q->mutex);
+  if (q->head == q->tail) {
+    pthread_mutex_unlock(&q->mutex);
+    return false;
+  }
+
+  // Preserve HELLO ordering for authentication. After that, session lifecycle controls must not sit
+  // behind the enlarged PCM backlog. Promote the earliest transition; AUDIO older than that control
+  // belongs to the prior playback state, so discard and account it while preserving other controls
+  // and every frame queued after the transition.
+  if (q->slots[q->tail % q->capacity].type != VW_MSG_HELLO) {
+    size_t lifecycle = q->head;
+    for (size_t i = q->tail; i < q->head; i++) {
+      if (vw_worker_queue_is_lifecycle_control(q->slots[i % q->capacity].type)) {
+        lifecycle = i;
+        break;
+      }
+    }
+    if (lifecycle > q->tail && lifecycle < q->head) {
+      *out = q->slots[lifecycle % q->capacity];
+      size_t write = q->tail;
+      const size_t old_head = q->head;
+      for (size_t i = q->tail; i < lifecycle; i++) {
+        vw_worker_frame_t* frame = &q->slots[i % q->capacity];
+        if (frame->type == VW_MSG_AUDIO_PCM) {
+          atomic_fetch_add_explicit(&q->dropped_audio_us,
+                                    vw_worker_queue_audio_duration_us(frame->payload, frame->payload_len),
+                                    memory_order_relaxed);
+          free(frame->payload);
+          continue;
+        }
+        if (write != i) q->slots[write % q->capacity] = *frame;
+        write++;
+      }
+      for (size_t i = lifecycle + 1; i < old_head; i++) {
+        if (write != i) q->slots[write % q->capacity] = q->slots[i % q->capacity];
+        write++;
+      }
+      for (size_t i = write; i < old_head; i++) {
+        memset(&q->slots[i % q->capacity], 0, sizeof(q->slots[i % q->capacity]));
+      }
+      q->head = write;
+      pthread_mutex_unlock(&q->mutex);
+      return true;
+    }
+  }
+
+  *out = q->slots[q->tail % q->capacity];
+  memset(&q->slots[q->tail % q->capacity], 0, sizeof(q->slots[q->tail % q->capacity]));
   q->tail++;
   pthread_mutex_unlock(&q->mutex);
   return true;

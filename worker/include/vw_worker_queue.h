@@ -41,8 +41,12 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
 // when done. Returns false when the queue is empty; never blocks.
 bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out);
 
-// Returns the total microseconds of audio dropped by the overflow policy, via a relaxed atomic load
-// so any thread may read it without taking the queue lock.
+// Worker-facing pop variant: after HELLO, lifecycle controls preempt queued PCM; obsolete audio
+// preceding the promoted transition is dropped and accounted while unrelated controls survive.
+bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* out);
+
+// Returns the total microseconds of audio dropped by overflow or lifecycle-backlog invalidation, via
+// a relaxed atomic load so any thread may read it without taking the queue lock.
 uint64_t vw_worker_queue_get_dropped_audio_us(const vw_worker_queue_t* q);
 
 #endif  // VW_WORKER_QUEUE_H_
