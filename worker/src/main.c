@@ -1,11 +1,23 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 // clang-format off
 #include <windows.h>
 #include <shellapi.h>
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
 // clang-format on
 #endif
 
@@ -57,7 +69,7 @@ static void vw_worker_free_utf8_arguments(int argc, char** argv) {
 }
 
 // Opens a UTF-8 log path through the Unicode Windows filesystem API.
-static FILE* vw_worker_open_log_utf8(const char* path) {
+static FILE* vw_worker_open_log_utf8(const char* path, bool exclusive) {
   if (!path) return NULL;
   int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
   if (chars <= 0) return NULL;
@@ -67,15 +79,21 @@ static FILE* vw_worker_open_log_utf8(const char* path) {
     free(wide_path);
     return NULL;
   }
-  FILE* file = _wfopen(wide_path, L"w");
+  FILE* file;
+  if (exclusive) {
+    int fd = _wopen(wide_path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+    file = fd >= 0 ? _fdopen(fd, "w") : NULL;
+    if (!file && fd >= 0) _close(fd);
+  } else {
+    file = _wfopen(wide_path, L"w");
+  }
   free(wide_path);
   return file;
 }
 #endif
 
-// Optional lifecycle log file: written to the platform temp directory, truncated every run so a single
-// file holds the last worker session. Override with --log-file <path>. Content is the same privacy-safe
-// vw_log_event stream (no PCM/transcript/token); pipe names and paths are kept.
+// Optional lifecycle log file: written to a per-process platform temp path. Override with --log-file <path>. Content is
+// the same privacy-safe vw_log_event stream (no PCM/transcript/token); pipe names and paths are kept.
 static const char* vw_worker_default_log_dir(void) {
 #ifdef _WIN32
   static char utf8_dir[VW_PATH_MAX_BYTES];
@@ -99,27 +117,34 @@ static const char* vw_worker_default_log_dir(void) {
 #endif
 }
 
-// Opens the log file in append-free truncate mode ("w": last run wins). A NULL config path selects
-// the platform temp dir; failure to open falls back to stderr-only logging (never fatal).
+// Opens the default per-process log exclusively; explicit --log-file preserves user-selected overwrite semantics.
 static void vw_worker_setup_log_file(const vw_worker_config_t* config) {
   if (!config->logging_enabled) return;
   char path[1024];
-  if (config->log_file[0]) {
+  bool default_log = config->log_file[0] == '\0';
+  if (!default_log) {
     snprintf(path, sizeof(path), "%s", config->log_file);
   } else {
     const char* dir = vw_worker_default_log_dir();
-    snprintf(path, sizeof(path), "%s%cvlc-whisper-worker.log", dir,
+    snprintf(path, sizeof(path), "%s%cvlc-whisper-worker-%lu.log", dir,
 #ifdef _WIN32
-             '\\'
+             '\\', (unsigned long)GetCurrentProcessId()
 #else
-             '/'
+             '/', (unsigned long)getpid()
 #endif
     );
   }
 #ifdef _WIN32
-  FILE* f = vw_worker_open_log_utf8(path);
+  FILE* f = vw_worker_open_log_utf8(path, default_log);
 #else
-  FILE* f = fopen(path, "w");
+  FILE* f;
+  if (default_log) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    f = fd >= 0 ? fdopen(fd, "w") : NULL;
+    if (!f && fd >= 0) close(fd);
+  } else {
+    f = fopen(path, "w");
+  }
 #endif
   if (f) {
     vw_log_set_file(f);

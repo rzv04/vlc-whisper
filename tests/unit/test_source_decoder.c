@@ -17,6 +17,10 @@ int main(void) {
 
   // Test 2: Non-existent file path
   assert(vw_source_decoder_open("file:///non_existent_path_12345.mp4", NULL) == NULL);
+#ifdef _WIN32
+  // Percent-decoded NUL must be rejected before Media Foundation sees the path.
+  assert(vw_source_decoder_open("file:///C:/media%00evil.mp4", NULL) == NULL);
+#endif
 
   // Test 3: Valid media file open, read, seek, close (if test fixture exists)
   const char* fixture_paths[] = {"samples/audio/harvard.wav",

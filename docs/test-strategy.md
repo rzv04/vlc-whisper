@@ -158,6 +158,42 @@ The postmortem contract suite added these explicit red tests before implementati
 
 The protocol, queue timeline, decoder stall/error, live-tail, fresh-session, translation subprocess setup, and benchmark integrity contracts were confirmed red before implementation and green afterward. Security-scoped ledger items remain outside this change.
 
+## Milestone 5 P2 regression coverage
+
+The P2 pass is based on `milestone-5` commit `e70ea36`, not `main`. Important new checks were executed failing
+before their corresponding fixes: negative PCM anchors; old-vout flush ownership; live benchmark reanchoring;
+FFmpeg path, pre-roll, and resampler-init failures; requested session language; large/truncated IPC records;
+constrained translation scratch space; VAD trailing silence; and slow close-path caption/accounting delivery.
+The translation frame-size guard fails compilation against the baseline; the VAD seam fails the endpoint assertion.
+The later translation-timeout fallback check also reproduced dropped close-path captions before its drain fix.
+A final-inference metric assertion reproduced the missing tail STATUS before adding its emission.
+
+- `vw_decoder_paths`, `vw_decoder_preroll`, `vw_decoder_failure`: invalid paths never reach FFmpeg, seek output
+  begins at/after the target, and injected resampler-init failure preserves readable pre-seek state.
+- `test_worker_p2_contracts`: incompatible HELLO, duplicate START, authenticated malformed traffic, and failed
+  inference must yield deterministic error/exit outcomes without requiring downloaded models.
+- `test_live_media_end_flushes_tail`: injects 3.5 seconds of inference, checks translated final speech and benchmark
+  accounting through the real worker/client/plugin-close seam. `vw_tail_translation_timeout` delays the offline HTTP
+  seam past its cue budget and requires source-only delivery rather than caption loss. Neither contacts the network.
+- `vw_test_ipc_transport`: 960,000-byte round trip, fatal truncated record even after stale timeout errno,
+  signal-interrupted accept, and a stalled peer under one logical-send deadline.
+- `vw_test_translate_stack` and `test_vad_trailing_silence`: deterministic, model-free resource/boundary regressions.
+- Existing platform, client compatibility, model-directory, buffer, presenter, session-reset, and benchmark tests
+  retain focused regression assertions for their P2 fixes.
+
+Verification requires the full native debug configure/build/CTest suite, changed-source clang-format verification,
+and CTest Valgrind memcheck before commit. Model-gated tests may skip inference when local model files are absent;
+that is not equivalent to validating ASR accuracy or GPU inference. MinGW cross-compilation checks Windows code,
+but Media Foundation pre-roll, named-pipe continuation, and Windows log collision behavior still need Windows runtime
+smoke coverage. No Wine or Windows runtime is available in this VM. macOS/BSD credential handling is source-reviewed,
+not runtime-verified here. The 120-second close watchdog is a documented lifecycle ceiling, not a UI responsiveness test.
+
+Verified on this Linux VM on 2026-09-09: native debug configure/build succeeded; CTest finished with 48 passed,
+one model-dependent skip, and zero failures. The full Valgrind pass had the same skip and no reported memory-check
+defects. All Windows CPU MinGW targets (including test executables) compiled; all nine Python quality-tool tests
+passed. Changed C/header formatting and `git diff --check` passed. These results do not replace the platform/model
+runtime checks listed above.
+
 ## P1 Defect Regression Test Suite
 
 Regression coverage has been established for reconciled P1 defects:

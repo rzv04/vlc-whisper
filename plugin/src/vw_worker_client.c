@@ -227,7 +227,6 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   }
   if (ack_ok) {
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
-    if (ack.selected_minor > VW_PROTOCOL_VERSION_MINOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
   if (ack_ok) {
@@ -276,6 +275,11 @@ void vw_worker_client_disconnect(vw_worker_client_t* client) {
 bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,
                                     const char* source_url) {
   if (!client || !client->pipe_handle) return false;
+  if (model_id && strlen(model_id) >= sizeof(((vw_msg_start_t*)0)->model_id)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_MODEL_ID", "model identifier too long (%zu bytes); rejecting",
+                 strlen(model_id));
+    return false;
+  }
   client->session_active = false;
   client->worker_source_active = false;
 
@@ -558,6 +562,11 @@ bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action
   // Model provisioning is worker-scoped, not caption-session-scoped: a missing selected model can reject START,
   // while the same authenticated worker must still accept DOWNLOAD/ABORT with a zero session id.
   if (!client || !client->pipe_handle) return false;
+  if (model_id && strlen(model_id) >= sizeof(((vw_msg_model_ctrl_t*)0)->model_id)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_MODEL_ID", "model identifier too long (%zu bytes); rejecting",
+                 strlen(model_id));
+    return false;
+  }
   vw_msg_model_ctrl_t msg;
   memset(&msg, 0, sizeof(msg));
   msg.action = action;

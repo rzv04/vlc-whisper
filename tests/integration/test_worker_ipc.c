@@ -5,6 +5,9 @@
 #include <string.h>
 #define _XOPEN_SOURCE 500
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "vw_ipc_transport.h"
 #include "vw_protocol_codec.h"
@@ -24,7 +27,8 @@ int main(void) {
   memset(&config, 0, sizeof(config));
 #ifdef _WIN32
   // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
-  strncpy(config.pipe_name, "\\\\.\\pipe\\test_ipc_socket", sizeof(config.pipe_name) - 1);
+  snprintf(config.pipe_name, sizeof(config.pipe_name), "\\\\.\\pipe\\test_ipc_socket-%lu",
+           (unsigned long)GetCurrentProcessId());
 #else
   snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-ipc-%ld.sock", (long)getpid());
 #endif

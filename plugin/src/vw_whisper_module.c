@@ -1045,6 +1045,8 @@ static void* vw_plugin_sender_main(void* arg) {
       if (!vw_plugin_respawn_worker(sys, paused, true)) {
         break;
       }
+      last_source_seek_us = -1;
+      vw_benchmark_reset_live_clock(&sys->benchmark);
       continue;
     }
     // No worker (failed config respawn, or initial session start rejected): idle safely. All
@@ -1104,6 +1106,8 @@ static void* vw_plugin_sender_main(void* arg) {
               free(raw_uri);
 
               if (strcmp(normalized_uri, sys->active_source_url) != 0) {
+                last_source_seek_us = -1;
+                vw_benchmark_reset_live_clock(&sys->benchmark);
                 vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_MEDIA_SWAP",
                              "media swap detected: '%s' -> '%s'; restarting session", sys->active_source_url,
                              normalized_uri);
@@ -1233,6 +1237,7 @@ static void* vw_plugin_sender_main(void* arg) {
                    is_source_mode ? "source" : "live");
       vw_caption_presenter_blank(&sys->presenter);
       vw_audio_chunk_t stale;
+      vw_benchmark_reset_live_clock(&sys->benchmark);
       while (vw_spsc_queue_pop(sys->queue, &stale)) {
       }
       // Request callback to reset resampler accumulator/PTS (no cross-thread field writes, VW-019).
@@ -1746,16 +1751,10 @@ static int vw_plugin_open(vlc_object_t* obj) {
   if (sys->worker_path[0] == '\0' && vw_plugin_resolve_worker_path(sys->worker_path, sizeof(sys->worker_path))) {
     // Resolved to a concrete path next to the plugin or VLC executable.
   }
-#ifdef _WIN32
   if (sys->worker_path[0] == '\0') {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_UNAVAILABLE",
-                 "worker discovery failed on Windows; captions disabled, passthrough only (no bare fallback)");
+                 "worker discovery failed; captions disabled, passthrough only");
   }
-#else
-  if (sys->worker_path[0] == '\0') {
-    snprintf(sys->worker_path, sizeof(sys->worker_path), "%s", "vlc-whisper-worker");
-  }
-#endif
   bool open_worker_path_configured = worker_path_configured;
   free(configured);
   // path surfaces as E_MODEL_MISSING at session start — do not pre-check existence here. An
@@ -1857,6 +1856,8 @@ static void vw_plugin_close(vlc_object_t* obj) {
       vw_platform_thread_join(sys->sender_thread);
     }
     // Clear VLC overlays while the filter/vout hierarchy is still in the close call's lifetime.
+    vw_plugin_bind_close_accounting(&sys->benchmark, &sys->frames_received, &sys->segments_received,
+                                    &sys->status_received, &sys->errors_received);
     vw_caption_presenter_clear(&sys->presenter);
     if (sys->client) {
       if (!atomic_load(&sys->worker_dead)) {

@@ -548,30 +548,45 @@ bool vw_translate_parse_rpc_response(const char* raw, char* out, size_t out_size
 
 static bool build_rpc_body(const char* text, const char* src_lang, const char* dst_lang, char* out, size_t out_size) {
   if (!text || !src_lang || !dst_lang || !out || out_size == 0) return false;
-  char escaped_text[VW_TRANSLATE_MAX_TEXT_BYTES * 6U + 1U];
+  char* escaped_text = NULL;
+  char* inner = NULL;
+  char* escaped_inner = NULL;
+  char* rpc = NULL;
+  char* encoded = NULL;
   char escaped_src[128];
   char escaped_dst[128];
-  if (!json_escape_string(text, escaped_text, sizeof(escaped_text)) ||
+  bool ok = false;
+  escaped_text = (char*)malloc(VW_TRANSLATE_MAX_TEXT_BYTES * 6U + 1U);
+  inner = (char*)malloc(VW_TRANSLATE_RPC_JSON_BYTES);
+  escaped_inner = (char*)malloc(VW_TRANSLATE_RPC_JSON_BYTES * 2U);
+  rpc = (char*)malloc(VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U);
+  encoded = (char*)malloc(VW_TRANSLATE_RPC_BODY_BYTES - 16U);
+  if (!escaped_text || !inner || !escaped_inner || !rpc || !encoded) goto done;
+  if (!json_escape_string(text, escaped_text, VW_TRANSLATE_MAX_TEXT_BYTES * 6U + 1U) ||
       !json_escape_string(src_lang, escaped_src, sizeof(escaped_src)) ||
       !json_escape_string(dst_lang, escaped_dst, sizeof(escaped_dst))) {
-    return false;
+    goto done;
   }
 
-  char inner[VW_TRANSLATE_RPC_JSON_BYTES];
-  int inner_len =
-      snprintf(inner, sizeof(inner), "[[\"%s\",\"%s\",\"%s\",true],[null]]", escaped_text, escaped_src, escaped_dst);
-  if (inner_len < 0 || (size_t)inner_len >= sizeof(inner)) return false;
+  int inner_len = snprintf(inner, VW_TRANSLATE_RPC_JSON_BYTES, "[[\"%s\",\"%s\",\"%s\",true],[null]]", escaped_text,
+                           escaped_src, escaped_dst);
+  if (inner_len < 0 || (size_t)inner_len >= VW_TRANSLATE_RPC_JSON_BYTES) goto done;
 
-  char escaped_inner[VW_TRANSLATE_RPC_JSON_BYTES * 2U];
-  if (!json_escape_string(inner, escaped_inner, sizeof(escaped_inner))) return false;
-  char rpc[VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U];
-  int rpc_len = snprintf(rpc, sizeof(rpc), "[[[\"MkEWBc\",\"%s\",null,\"generic\"]]]", escaped_inner);
-  if (rpc_len < 0 || (size_t)rpc_len >= sizeof(rpc)) return false;
+  if (!json_escape_string(inner, escaped_inner, VW_TRANSLATE_RPC_JSON_BYTES * 2U)) goto done;
+  int rpc_len =
+      snprintf(rpc, VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U, "[[[\"MkEWBc\",\"%s\",null,\"generic\"]]]", escaped_inner);
+  if (rpc_len < 0 || (size_t)rpc_len >= VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U) goto done;
 
-  char encoded[VW_TRANSLATE_RPC_BODY_BYTES - 16U];
-  if (!vw_url_encode(rpc, encoded, sizeof(encoded))) return false;
+  if (!vw_url_encode(rpc, encoded, VW_TRANSLATE_RPC_BODY_BYTES - 16U)) goto done;
   int body_len = snprintf(out, out_size, "f.req=%s", encoded);
-  return body_len >= 0 && (size_t)body_len < out_size;
+  ok = body_len >= 0 && (size_t)body_len < out_size;
+done:
+  free(encoded);
+  free(rpc);
+  free(escaped_inner);
+  free(inner);
+  free(escaped_text);
+  return ok;
 }
 
 #ifdef VW_TRANSLATE_TESTING
@@ -1047,59 +1062,74 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
   const char* tl = (dst_lang && is_valid_lang_tag(dst_lang, false)) ? dst_lang : "en";
   int64_t started_us = get_monotonic_us();
   int64_t deadline_us = started_us + (int64_t)VW_TRANSLATE_TIMEOUT_MS * 1000LL;
+  char* response = NULL;
+  char* rpc_body = NULL;
+  char* route_path = NULL;
+  bool translated = false;
 
   char enc_sl[32];
   char enc_tl[32];
   if (!vw_url_encode(sl, enc_sl, sizeof(enc_sl)) || !vw_url_encode(tl, enc_tl, sizeof(enc_tl))) {
     goto failed;
   }
-  char response[VW_TRANSLATE_MAX_RESPONSE_BYTES];
-
-  char rpc_body[VW_TRANSLATE_RPC_BODY_BYTES];
-  if (build_rpc_body(text, sl, tl, rpc_body, sizeof(rpc_body))) {
+  response = (char*)malloc(VW_TRANSLATE_MAX_RESPONSE_BYTES);
+  rpc_body = (char*)malloc(VW_TRANSLATE_RPC_BODY_BYTES);
+  route_path = (char*)malloc(VW_TRANSLATE_MAX_URL_BYTES);
+  if (!response || !rpc_body || !route_path) goto failed;
+  if (build_rpc_body(text, sl, tl, rpc_body, VW_TRANSLATE_RPC_BODY_BYTES)) {
     const char* rpc_path =
         "/_/TranslateWebserverUi/data/batchexecute?rpcids=MkEWBc&bl=boq_translate-webserver_20221005.09_p0&soc-app=1&"
         "soc-platform=1&soc-device=1&rt=c";
     if (http_request("translate.google.com", rpc_path, rpc_body, NULL,
-                     "application/x-www-form-urlencoded;charset=UTF-8", response, sizeof(response), deadline_us) &&
+                     "application/x-www-form-urlencoded;charset=UTF-8", response, VW_TRANSLATE_MAX_RESPONSE_BYTES,
+                     deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_rpc_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_WEB_RPC;
       if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-      return true;
+      translated = true;
+      goto done;
     }
   }
 
   if (remaining_timeout_ms(deadline_us) > 0) {
-    char gtx_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written =
-        snprintf(gtx_path, sizeof(gtx_path), "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t", enc_sl, enc_tl);
-    if (written >= 0 && (size_t)written < sizeof(gtx_path) &&
-        http_request("translate.googleapis.com", gtx_path, NULL, text, NULL, response, sizeof(response), deadline_us) &&
+    int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t",
+                           enc_sl, enc_tl);
+    if (written >= 0 && (size_t)written < VW_TRANSLATE_MAX_URL_BYTES &&
+        http_request("translate.googleapis.com", route_path, NULL, text, NULL, response,
+                     VW_TRANSLATE_MAX_RESPONSE_BYTES, deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_gtx_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_GTX;
       if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-      return true;
+      translated = true;
+      goto done;
     }
   }
 
   if (remaining_timeout_ms(deadline_us) > 0) {
-    char mobile_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written = snprintf(mobile_path, sizeof(mobile_path), "/m?sl=%s&tl=%s", enc_sl, enc_tl);
-    if (written >= 0 && (size_t)written < sizeof(mobile_path) &&
-        http_request("translate.google.com", mobile_path, NULL, text, NULL, response, sizeof(response), deadline_us) &&
+    int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/m?sl=%s&tl=%s", enc_sl, enc_tl);
+    if (written >= 0 && (size_t)written < VW_TRANSLATE_MAX_URL_BYTES &&
+        http_request("translate.google.com", route_path, NULL, text, NULL, response, VW_TRANSLATE_MAX_RESPONSE_BYTES,
+                     deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_mobile_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
       if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-      return true;
+      translated = true;
+      goto done;
     }
   }
 
 failed:
-  out_text[0] = '\0';
-  if (out_tier) *out_tier = VW_TRANSLATE_TIER_NONE;
-  if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-  return false;
+done:
+  free(route_path);
+  free(rpc_body);
+  free(response);
+  if (!translated) {
+    out_text[0] = '\0';
+    if (out_tier) *out_tier = VW_TRANSLATE_TIER_NONE;
+    if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
+  }
+  return translated;
 }

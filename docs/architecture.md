@@ -41,6 +41,32 @@ caption receiver thread (step 15) -- timed segments --> caption presenter (C)
 | Caption receiver/presenter         | Validate worker messages, schedule/show/clear captions                                                                                                                                                                                                                              | Trust malformed text/timestamps or block VLC playback                   |
 | Supervisor                         | Worker start/stop/restart policy and status                                                                                                                                                                                                                                         | Restart endlessly or conceal a fatal compatibility error                |
 
+## Milestone 5 P2 reliability boundaries
+
+The P2 reconciliation against `milestone-5` is tracked in [issues.md](issues.md). It hardens existing components;
+it introduces no inference backend, network permission, realtime work, or wire-version change.
+
+- Caption SPU channel IDs belong to the held video output. Blanking and output replacement flush that output's
+  private channel before releasing its reference, never an unrelated channel on a newly discovered output.
+- Media swaps and worker recovery discard the previous source-seek filter anchor. Discontinuities also invalidate
+  the live benchmark clock mapping; the next live audio chunk reanchors latency without erasing aggregate counters.
+- Decoder seek pre-roll is discarded at sample granularity before returning PCM. FFmpeg prepares replacement
+  resampling state before seeking, so resampler initialization failure leaves the previous decoder usable.
+  Failed source seeks retain the decoded anchor and do not invalidate translation; repeated implicit retries are suppressed.
+- Negative internal PCM timestamps remain valid buffer anchors. VAD trailing silence is capped at 300 ms from
+  the raw speech endpoint, including end padding. Inference failure is fatal rather than a successful silent drain.
+- Teardown joins the sender, drains queued live PCM, then orders `STOP(MEDIA_END)` before `SHUTDOWN`. The worker
+  sends final speech through the same opt-in asynchronous translation path, including source-only timeout fallback,
+  and finishes accepted translation work before closing IPC. Each translation request retains its 800 ms budget.
+  The plugin receives through EOF and accounts close-path frames, captions, translation results, and presentation
+  in the existing benchmark. EOF is the completion barrier, not a three-second inference assumption or frame-count cap.
+  A **120-second hung-worker watchdog** bounds this receive phase: filter teardown can wait that long on a stuck
+  worker, and exceeding it can still lose the tail. This is outside the realtime audio callback; it does not promise
+  cancellation of an in-flight Whisper call. Process cleanup retains its separate bounded termination policy.
+- Large translation scratch buffers are heap-owned on the worker translation thread, preserving operation on a
+  128 KiB thread stack. Default diagnostic logs use exclusive per-process files; caller-selected log paths retain
+  their explicit overwrite semantics. POSIX worker launch accepts only absolute executable paths, never `PATH` lookup.
+
 ## Time and buffering
 
 All protocol times are signed 64-bit microseconds (`pts_us`). VLC 3.0's audio output stamps audio-filter block PTS in the **system-date domain** (µs since boot on Windows; `aout_DecPlay` compares block PTS against `mdate()`), so the wire carries that domain. The caption presenter schedules SPU subpictures in the OSD clock domain (`i_start = mdate()`) — the clock the 3.0.23 Windows build renders filter-pushed subpictures against; media-domain scheduling (`b_subtitle = true`, picture-PTS clock) is the 17c target, currently blocked on the subtitle clock silently dropping such subpictures (evidence chain in `docs/plans/step17b_plan.md` §3 and `docs/vlc-api-essentials.md` §7). The sender marks presenter calls as media-timeline scheduling only in look-ahead source mode, where segment PTS and `INPUT_GET_TIME` are both media-relative; live/network PCM mode disables lead arithmetic so late system-date cues render immediately at `mdate()` instead of being mistaken for future media cues. Before each live cue is submitted, the presenter queues a caption-channel flush followed by the replacement subpicture; VLC's ordered vout control queue prevents rapidly arriving live segments from remaining visible together. Source-mode cues skip this flush and coexist for future scheduling. PCM is canonical 16 kHz, mono, signed 16-bit little-endian before it leaves the plugin; conversion belongs off the realtime callback if VLC cannot deliver it already.

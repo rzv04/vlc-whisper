@@ -172,6 +172,10 @@ void vw_benchmark_record_frame(vw_benchmark_t* benchmark) {
   if (benchmark && benchmark->active) benchmark->worker_frames_received++;
 }
 
+void vw_benchmark_reset_live_clock(vw_benchmark_t* benchmark) {
+  if (benchmark) benchmark->live_clock_valid = false;
+}
+
 void vw_benchmark_record_caption_received(vw_benchmark_t* benchmark, const vw_caption_segment_t* segment,
                                           int64_t now_us, bool source_mode) {
   if (!benchmark || !benchmark->active || !segment) return;

@@ -781,6 +781,12 @@ Returns the version string of the compiled whisper.cpp library.
 
 The worker wraps `whisper.cpp` behind a dedicated C17 engine abstraction:
 
+Milestone 5 session handling applies the validated `START.language` through the engine language setter before
+acknowledging the session. A false inference result produces fatal `E_INTERNAL` and a nonzero worker exit, rather
+than draining the failed audio as if transcription succeeded. The same rule applies to media-end tail inference.
+The VAD wrapper limits silence after the raw speech endpoint to 4,800 samples (300 ms at 16 kHz), including padding;
+this does not change whisper.cpp's public API or introduce a new transcription policy.
+
 ### Types
 
 ```c

@@ -98,6 +98,11 @@ This document outlines the ordered sequence of deliverables for building `vlc-wh
 
 ## Milestone 5: Quality Corpus, Optional Transcription Pass & Reliability Gate (Planned)
 
+P2 hardening progress: the `milestone-5`-based reconciliation fixes active P2 session, seek/timeline, decoder,
+transport, translation-resource, and close-tail defects with deterministic regressions. The full inventory and
+remaining platform smoke coverage are in [issues.md](issues.md) and [test-strategy.md](test-strategy.md).
+This does not complete the corpus, optional quality pass, P1/P3 inventory, or the final clean-machine release gate.
+
 Milestone 5 is intentionally narrow. Before expanding the feature surface, VLC-Whisper must first establish a trustworthy quality baseline, may then perform one corpus-gated transcription-quality pass if the measurements justify it, and must finish with a dedicated bug-hunt/reliability pass. Local-file seeking, live/non-seekable behavior, caption stability, privacy, and playback safety remain regression constraints throughout.
 
 ### Phase 1 — Finish the quality corpus

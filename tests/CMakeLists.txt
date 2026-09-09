@@ -58,6 +58,16 @@ else()
 endif()
 
 add_vw_test(test_source_decoder unit/test_source_decoder.c ${VW_SOURCE_DECODER_SRCS})
+if(NOT WIN32 AND FFMPEG_FOUND)
+    add_vw_test(vw_test_decoder_boundaries integration/vw_test_decoder_boundaries.c ${VW_SOURCE_DECODER_SRCS})
+    target_compile_definitions(vw_test_decoder_boundaries PRIVATE VW_WITH_FFMPEG)
+    target_link_libraries(vw_test_decoder_boundaries PRIVATE PkgConfig::FFMPEG)
+    target_link_options(vw_test_decoder_boundaries PRIVATE
+        -Wl,--wrap=av_seek_frame -Wl,--wrap=swr_init -Wl,--wrap=avformat_open_input)
+    foreach(vw_case paths preroll failure)
+        add_test(NAME vw_decoder_${vw_case} COMMAND vw_test_decoder_boundaries ${vw_case})
+    endforeach()
+endif()
 if(FFMPEG_FOUND AND NOT WIN32)
     target_compile_definitions(test_source_decoder PRIVATE -DVW_WITH_FFMPEG)
     target_link_libraries(test_source_decoder PRIVATE PkgConfig::FFMPEG)
@@ -71,6 +81,7 @@ target_link_libraries(test_worker_config_failure_paths PRIVATE whisper)
 add_vw_test(test_audio_buffer unit/test_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c)
 add_vw_test(test_vad unit/test_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c)
 target_link_libraries(test_vad PRIVATE whisper)
+add_vw_test(test_vad_trailing_silence unit/vw_test_vad_trailing_silence.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c)
 
 add_vw_test(test_whisper_engine unit/test_whisper_engine.c ${CMAKE_SOURCE_DIR}/worker/src/vw_whisper_engine.c
             ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
@@ -84,8 +95,17 @@ endif()
 
 add_vw_test(test_translate unit/test_translate.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c)
 target_compile_definitions(test_translate PRIVATE VW_TRANSLATE_TESTING=1)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_translate PRIVATE -Wframe-larger-than=131072 -Werror=frame-larger-than=131072)
+endif()
+add_vw_test(vw_test_translate_stack unit/vw_test_translate_stack.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c)
+target_compile_definitions(vw_test_translate_stack PRIVATE VW_TRANSLATE_TESTING=1)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vw_test_translate_stack PRIVATE -Wframe-larger-than=131072 -Werror=frame-larger-than=131072)
+endif()
 if(WIN32)
     target_link_libraries(test_translate PRIVATE winhttp)
+    target_link_libraries(vw_test_translate_stack PRIVATE winhttp)
 endif()
 
 add_vw_test(test_translate_async unit/test_translate_async.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c
@@ -154,8 +174,14 @@ add_vw_stub_worker_contract_test(test_source_error_never_becomes_clean_eof
                                  integration/test_source_error_never_becomes_clean_eof.c)
 add_vw_stub_worker_contract_test(test_live_media_end_flushes_tail
                                  integration/test_live_media_end_flushes_tail.c)
+target_link_options(test_live_media_end_flushes_tail PRIVATE -Wl,--wrap=vw_whisper_engine_transcribe_pcm)
+target_compile_definitions(test_live_media_end_flushes_tail PRIVATE VW_TRANSLATE_TESTING)
+target_sources(test_live_media_end_flushes_tail PRIVATE ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
+add_test(NAME vw_tail_translation_timeout COMMAND test_live_media_end_flushes_tail timeout)
 add_vw_stub_worker_contract_test(test_new_session_resets_all_session_state
                                  integration/test_new_session_resets_all_session_state.c)
+add_vw_stub_worker_contract_test(test_worker_p2_contracts
+                                 integration/vw_test_worker_p2_contracts.c)
 
 add_vw_test(test_oversized_uri_rejected_before_truncation unit/test_oversized_uri_rejected_before_truncation.c)
 target_compile_definitions(test_oversized_uri_rejected_before_truncation
@@ -200,6 +226,11 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 target_link_libraries(test_plugin_load PRIVATE ${CMAKE_DL_LIBS})
 add_test(NAME test_plugin_load COMMAND test_plugin_load $<TARGET_FILE:vlc_whisper_plugin>)
+
+# Transport framing regressions: preserve seqpacket/message framing while chunking legal large payloads.
+if(NOT WIN32)
+    add_vw_test(vw_test_ipc_transport unit/vw_test_ipc_transport.c)
+endif()
 
 if(VALGRIND_PROGRAM)
     get_property(_vw_tests DIRECTORY PROPERTY TESTS)
