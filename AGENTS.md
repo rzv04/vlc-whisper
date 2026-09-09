@@ -8,6 +8,7 @@
 2. Read only the relevant sections linked by `docs/README.md`; do not load every large reference document by default.
 3. For meaningful/high-risk work, use `ai/task-template.md` and save the plan under `docs/plans/`.
 4. If a local dependency graph exists, use it to find affected callers/boundaries, then verify against source.
+5. First build tests before implementing any major code changes, not after. Verify red test results before coding.
 
 ## Hard invariants
 
@@ -31,7 +32,9 @@ For every meaningful behavior change:
 4. **Use explicit states:** widen APIs instead of adding caller heuristics when the old contract cannot represent the new behavior.
 5. **Search by invariant after the fix:** inspect every producer, copy, serializer, validator, and consumer of the affected identity/state/metric—not only the original call site.
 6. **Exercise lifecycle edges when affected:** START, STOP, pause/resume, seek, media swap, EOF/tail flush, worker failure/respawn, and overload/drop behavior.
-7. **Turn regressions into specs:** a fixed ledger defect gets a named regression test where practical; do not weaken a test to make implementation green.
+7. **Turn regressions into specs:** a fixed ledger defect gets a named regression test where practical; do not weaken
+   a test to make implementation green. When fixing issues, high-priority and important issues MUST receive regression
+   tests. The agent should very clearly state that it did side effects like these regression tests after fixing issues.
 
 ## Test style
 
@@ -41,7 +44,12 @@ New behavioral/failure-path tests follow the PR #50 Jasmine-like convention: use
 
 Update only documentation whose contract changed. Keep canonical facts in one place and link instead of copying. Architecture -> `docs/architecture.md`; invariants -> `docs/invariants.md`; protocol/API -> `docs/api-contracts.md`; tests -> `docs/test-strategy.md`; user-visible setup/config -> `README.md`; roadmap status -> `docs/roadmap.md`. Historical/reference docs are not mandatory reading unless relevant.
 
-Header declarations need a brief useful behavior/ownership comment. Commits use Conventional Commits and repository `.github/` contribution templates.
+Header declarations need a brief useful behavior/ownership comment.
+
+## Pull requests & issues
+
+Any pull request or issue created shall have the appropriate GitHub labels included (e.g., bug, enhancement, risk
+level). Commits use Conventional Commits and repository `.github/` contribution templates.
 
 ## Verification
 
