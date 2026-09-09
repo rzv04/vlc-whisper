@@ -14,21 +14,55 @@ static vw_local_agreement_word_t token(const char* text, int64_t start, int64_t 
   return out;
 }
 
+static vw_local_agreement_word_t segment_token(const char* text, int64_t start, int64_t end, uint32_t segment_index) {
+  vw_local_agreement_word_t out = token(text, start, end);
+  out.segment_index = segment_index;
+  return out;
+}
+
 static void test_first_pass_hidden_then_common_prefix_commits(void) {
   vw_local_agreement_t state;
   vw_local_agreement_init(&state);
   vw_local_agreement_word_t out[VW_LOCAL_AGREEMENT_MAX_WORDS];
-  vw_local_agreement_word_t first[] = {token("good", 0, 300000), token(" morning", 300000, 700000),
-                                       token(" everyone", 700000, 1100000)};
-  EXPECT(vw_local_agreement_update(&state, first, 3, out, VW_LOCAL_AGREEMENT_MAX_WORDS) == 0);
+  vw_local_agreement_word_t first[] = {segment_token("good", 0, 300000, 0),
+                                       segment_token(" morning", 300000, 700000, 0),
+                                       segment_token(" everyone", 700000, 1100000, 1),
+                                       segment_token(" today", 1100000, 1400000, 1)};
+  EXPECT(vw_local_agreement_update(&state, first, 4, out, VW_LOCAL_AGREEMENT_MAX_WORDS) == 0);
 
-  vw_local_agreement_word_t second[] = {token("good", 0, 300000), token(" morning", 300000, 720000),
-                                        token(" everybody", 720000, 1200000)};
-  size_t committed = vw_local_agreement_update(&state, second, 3, out, VW_LOCAL_AGREEMENT_MAX_WORDS);
+  vw_local_agreement_t base = state;
+  vw_local_agreement_word_t second[] = {segment_token("good", 0, 300000, 0),
+                                        segment_token(" morning", 300000, 720000, 0),
+                                        segment_token(" everyone", 720000, 1200000, 1),
+                                        segment_token(" tomorrow", 1200000, 1500000, 1)};
+
+  vw_local_agreement_t full = base;
+  size_t committed = vw_local_agreement_update(&full, second, 4, out, VW_LOCAL_AGREEMENT_MAX_WORDS);
+  EXPECT(committed == 3);
+  EXPECT(out[2].segment_index == 1);
+
+  vw_local_agreement_t partial = base;
+  committed = vw_local_agreement_update(&partial, second, 4, out, 2);
   EXPECT(committed == 2);
   EXPECT(strcmp(out[0].text_utf8, "good") == 0);
   EXPECT(strcmp(out[1].text_utf8, " morning") == 0);
-  EXPECT(state.last_committed_end_us == 720000);
+  EXPECT(out[0].segment_index == 0);
+  EXPECT(out[1].segment_index == 0);
+  EXPECT(partial.last_committed_end_us == 720000);
+  EXPECT(partial.previous_count == 2);
+  EXPECT(strcmp(partial.previous[0].text_utf8, " everyone") == 0);
+  EXPECT(strcmp(partial.previous[1].text_utf8, " tomorrow") == 0);
+
+  // A later inference may confirm the remaining stable segment, but the unstable suffix must not self-confirm.
+  vw_local_agreement_word_t third[] = {segment_token("good", 0, 300000, 0),
+                                       segment_token(" morning", 300000, 720000, 0),
+                                       segment_token(" everyone", 730000, 1210000, 1),
+                                       segment_token(" later", 1210000, 1510000, 1)};
+  committed = vw_local_agreement_update(&partial, third, 4, out, VW_LOCAL_AGREEMENT_MAX_WORDS);
+  EXPECT(committed == 1);
+  EXPECT(strcmp(out[0].text_utf8, " everyone") == 0);
+  EXPECT(out[0].segment_index == 1);
+  EXPECT(partial.last_committed_end_us == 1210000);
 }
 
 static void test_divergence_replaces_unconfirmed_tail(void) {

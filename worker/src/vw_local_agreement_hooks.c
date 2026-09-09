@@ -183,6 +183,7 @@ static bool vw_local_agreement_append_segment(const vw_whisper_engine_t* engine,
     out->text_utf8[bytes] = '\0';
     out->start_pts_us = vw_saturating_add_i64(vw_la_runtime.window_pts_us, token_t0 * 10000LL);
     out->end_pts_us = vw_saturating_add_i64(vw_la_runtime.window_pts_us, token_t1 * 10000LL);
+    out->segment_index = (uint32_t)segment_index;
     if (out->start_pts_us < 0 || out->end_pts_us < out->start_pts_us) return false;
   }
   return true;
@@ -199,43 +200,70 @@ static void vw_local_agreement_finalize_hypothesis(void) {
     return;
   }
 
-  // Agreement is transactional with immutable caption delivery. Compute against a copy so a rejected builder push
-  // cannot advance the committed tail/frontier and permanently suppress text that was never shown.
-  vw_local_agreement_t candidate_agreement = vw_la_runtime.agreement;
+  const size_t hypothesis_count = vw_la_runtime.hypothesis_count;
+  const vw_local_agreement_t base_agreement = vw_la_runtime.agreement;
+  vw_local_agreement_t full_preview = base_agreement;
   vw_local_agreement_word_t committed[VW_LOCAL_AGREEMENT_MAX_WORDS];
-  size_t committed_count = vw_local_agreement_update(
-      &candidate_agreement, vw_la_runtime.hypothesis, vw_la_runtime.hypothesis_count, committed,
-      VW_LOCAL_AGREEMENT_MAX_WORDS);
-  vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT", "hypothesis_tokens=%zu committed_tokens=%zu",
-               vw_la_runtime.hypothesis_count, committed_count);
-  vw_la_runtime.hypothesis_count = 0;
+  size_t committed_count = vw_local_agreement_update(&full_preview, vw_la_runtime.hypothesis, hypothesis_count,
+                                                     committed, VW_LOCAL_AGREEMENT_MAX_WORDS);
+  size_t committed_total = 0;
 
   if (committed_count == 0) {
     // No visible output is involved, so it is safe and necessary to retain the newest hidden hypothesis state.
-    vw_la_runtime.agreement = candidate_agreement;
+    vw_la_runtime.agreement = full_preview;
+    vw_la_runtime.hypothesis_count = 0;
     return;
   }
   if (!vw_la_runtime.builder) {
     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_LOCAL_AGREEMENT", "confirmed tokens withheld; builder unavailable");
+    vw_la_runtime.hypothesis_count = 0;
     return;
   }
 
-  char text[VW_SEGMENT_BUILDER_MAX_TEXT_BYTES];
-  int64_t start_pts_us = 0;
-  int64_t end_pts_us = 0;
-  if (!vw_local_agreement_format_commit(committed, committed_count, text, sizeof(text), &start_pts_us, &end_pts_us) ||
-      end_pts_us <= start_pts_us) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_LOCAL_AGREEMENT",
-                 "confirmed token batch could not form one immutable cue; agreement state unchanged");
-    return;
-  }
-  if (!vw_segment_builder_push_hypothesis(vw_la_runtime.builder, text, start_pts_us, end_pts_us)) {
-    vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT",
-                 "builder rejected confirmed token batch; agreement state unchanged");
-    return;
+  while (committed_total < committed_count) {
+    size_t run_count = 1;
+    uint32_t segment_index = committed[committed_total].segment_index;
+    while (committed_total + run_count < committed_count &&
+           committed[committed_total + run_count].segment_index == segment_index) {
+      run_count++;
+    }
+
+    // Derive each cumulative accepted-state snapshot from the same pre-inference base. Feeding the same hypothesis
+    // through a partially updated state would make its remaining suffix agree with itself and violate LocalAgreement-2.
+    size_t accepted_total = committed_total + run_count;
+    vw_local_agreement_t accepted = base_agreement;
+    vw_local_agreement_word_t accepted_words[VW_LOCAL_AGREEMENT_MAX_WORDS];
+    size_t accepted_count = vw_local_agreement_update(&accepted, vw_la_runtime.hypothesis, hypothesis_count,
+                                                      accepted_words, accepted_total);
+    if (accepted_count != accepted_total) {
+      vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_LOCAL_AGREEMENT",
+                   "bounded agreement snapshot mismatch; confirmed segment run withheld");
+      break;
+    }
+
+    char text[VW_SEGMENT_BUILDER_MAX_TEXT_BYTES];
+    int64_t start_pts_us = 0;
+    int64_t end_pts_us = 0;
+    if (!vw_local_agreement_format_commit(committed + committed_total, run_count, text, sizeof(text), &start_pts_us,
+                                          &end_pts_us) ||
+        end_pts_us <= start_pts_us) {
+      vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_LOCAL_AGREEMENT",
+                   "confirmed segment run could not form one immutable cue; remaining agreement unchanged");
+      break;
+    }
+    if (!vw_segment_builder_push_hypothesis(vw_la_runtime.builder, text, start_pts_us, end_pts_us)) {
+      vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT",
+                   "builder rejected confirmed segment run; remaining agreement unchanged");
+      break;
+    }
+
+    vw_la_runtime.agreement = accepted;
+    committed_total = accepted_total;
   }
 
-  vw_la_runtime.agreement = candidate_agreement;
+  vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_LOCAL_AGREEMENT", "hypothesis_tokens=%zu committed_tokens=%zu",
+               hypothesis_count, committed_total);
+  vw_la_runtime.hypothesis_count = 0;
 }
 
 bool vw_local_agreement_worker_queue_pop(vw_worker_queue_t* queue, vw_worker_frame_t* out) {

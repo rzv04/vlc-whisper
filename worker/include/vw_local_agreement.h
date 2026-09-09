@@ -11,10 +11,11 @@
 #define VW_LOCAL_AGREEMENT_RETAIN_US 100000LL
 
 // Historical "word" naming is retained for branch-local API stability; each entry is now one raw Whisper text token
-// (including any leading-space/subword bytes) with authentic whisper.cpp token timestamps.
+// (including any leading-space/subword bytes) with authentic token timestamps and its originating Whisper segment.
 typedef struct vw_local_agreement_word {
   int64_t start_pts_us;
   int64_t end_pts_us;
+  uint32_t segment_index;
   char text_utf8[VW_LOCAL_AGREEMENT_WORD_BYTES];
 } vw_local_agreement_word_t;
 
@@ -35,8 +36,8 @@ void vw_local_agreement_init(vw_local_agreement_t* state);
 // from one acoustic epoch can never confirm text in another.
 void vw_local_agreement_reset(vw_local_agreement_t* state);
 
-// Applies exact LocalAgreement-2 to one timestamped Whisper-token hypothesis, returning newly confirmed tokens in
-// caller storage; the first hypothesis confirms nothing and output is bounded by output_capacity.
+// Applies exact LocalAgreement-2 to one timestamped hypothesis. output_capacity bounds that pass's committed prefix;
+// derive cumulative snapshots from the same pre-pass state rather than feeding the same hypothesis repeatedly.
 size_t vw_local_agreement_update(vw_local_agreement_t* state, const vw_local_agreement_word_t* hypothesis,
                                  size_t hypothesis_count, vw_local_agreement_word_t* output, size_t output_capacity);
 

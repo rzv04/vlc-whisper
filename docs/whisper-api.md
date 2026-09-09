@@ -581,7 +581,7 @@ whisper_full_get_token_t1(ctx, segment, token);
 whisper_token_eot(ctx);
 ```
 
-Agreement units are the **actual raw Whisper text tokens**, including leading-space and subword bytes. The implementation does not split rendered text with `isspace()` and therefore does not collapse a Chinese or Japanese segment into a single pseudo-word.
+Agreement units are the **actual raw Whisper text tokens**, including leading-space and subword bytes. The implementation does not split rendered text with `isspace()` and therefore does not collapse a Chinese or Japanese segment into a single pseudo-word. Each collected token also retains its originating Whisper segment index strictly as presentation metadata; segment identity does not participate in LocalAgreement equality, so harmless segment-boundary jitter across passes cannot block text confirmation.
 
 Token timestamps are authentic whisper.cpp token boundaries. Each centisecond timestamp becomes an absolute worker PTS as:
 
@@ -602,7 +602,7 @@ After a token run is committed, a later rolling window may reproduce that same a
 
 Proximity alone is insufficient. Therefore a legitimate adjacent repetition such as `no, no` is preserved when the second `no` occupies a new non-overlapping acoustic interval.
 
-Confirmed output is transactional with immutable delivery. `vw_local_agreement_update()` runs against a temporary agreement-state copy; a zero-confirmation result may publish that hidden-state update immediately, but a result containing confirmed tokens advances the real committed tail/frontier only after the entire confirmed run formats into one cue and `vw_segment_builder_push_hypothesis()` accepts it. If formatting or builder acceptance fails, the real agreement state is unchanged so the same acoustic text remains eligible for later confirmation rather than being silently stripped as already committed.
+Confirmed output is transactional with immutable delivery. The hook first previews the stable raw-token prefix against a temporary agreement-state copy. If that prefix spans multiple Whisper segments, it is then published one segment run at a time using the existing `output_capacity` bound: a successful `vw_segment_builder_push_hypothesis()` advances the real agreement state by exactly that cue, while a rejected later run leaves that suffix uncommitted and eligible for confirmation on a later pass. This preserves phrase-by-phrase timing and conversational silence gaps without adding rollback state or making segment identity part of the agreement rule.
 
 START/STOP live-mode changes are staged when dequeued but applied only when the worker reaches its already-validated segment-builder clear path. A stale or duplicate control cannot disable LocalAgreement before the worker's session-ID validation.
 

@@ -284,6 +284,58 @@ bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* ou
       }
     }
     if (lifecycle > q->tail && lifecycle < q->head) {
+      uint16_t lifecycle_type = q->slots[lifecycle % q->capacity].type;
+      if (lifecycle_type == VW_MSG_PAUSE || lifecycle_type == VW_MSG_RESUME) {
+        vw_msg_control_t lifecycle_control;
+        size_t latest_position = q->head;
+        vw_worker_frame_t* control = &q->slots[lifecycle % q->capacity];
+        if (control->payload &&
+            vw_protocol_decode_payload(lifecycle_type, control->payload, control->payload_len, &lifecycle_control)) {
+          for (size_t i = q->tail; i < lifecycle; i++) {
+            if (q->slots[i % q->capacity].type != VW_MSG_POSITION) continue;
+            vw_session_id_t position_session;
+            if (vw_worker_queue_frame_session_id(&q->slots[i % q->capacity], &position_session) &&
+                memcmp(position_session.bytes, lifecycle_control.session_id.bytes, VW_SESSION_ID_BYTES) == 0) {
+              latest_position = i;
+            }
+          }
+        }
+        if (latest_position < lifecycle) {
+          // POSITION carries playhead/seek state that PAUSE/RESUME do not. Apply only the newest same-session
+          // snapshot first, while discarding stale PCM and older POSITION frames ahead of the lifecycle transition.
+          *out = q->slots[latest_position % q->capacity];
+          size_t write = q->tail;
+          const size_t old_head = q->head;
+          for (size_t i = q->tail; i < lifecycle; i++) {
+            vw_worker_frame_t* frame = &q->slots[i % q->capacity];
+            if (i == latest_position) continue;
+            if (frame->type == VW_MSG_AUDIO_PCM) {
+              atomic_fetch_add_explicit(&q->dropped_audio_us,
+                                        vw_worker_queue_audio_duration_us(frame->payload, frame->payload_len),
+                                        memory_order_relaxed);
+              free(frame->payload);
+              continue;
+            }
+            if (frame->type == VW_MSG_POSITION) {
+              free(frame->payload);
+              continue;
+            }
+            if (write != i) q->slots[write % q->capacity] = *frame;
+            write++;
+          }
+          for (size_t i = lifecycle; i < old_head; i++) {
+            if (write != i) q->slots[write % q->capacity] = q->slots[i % q->capacity];
+            write++;
+          }
+          for (size_t i = write; i < old_head; i++) {
+            memset(&q->slots[i % q->capacity], 0, sizeof(q->slots[i % q->capacity]));
+          }
+          q->head = write;
+          pthread_mutex_unlock(&q->mutex);
+          return true;
+        }
+      }
+
       *out = q->slots[lifecycle % q->capacity];
       size_t write = q->tail;
       const size_t old_head = q->head;
@@ -297,8 +349,8 @@ bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* ou
           continue;
         }
         if (frame->type == VW_MSG_POSITION) {
-          // The promoted transition is newer state for this epoch. Do not replay an older paused/rate/position flag
-          // after PAUSE/RESUME/STOP/START has already been accepted by the worker.
+          // STOP/replacement START/SHUTDOWN supersede position state. For PAUSE/RESUME, any preserved same-session
+          // POSITION was already returned above, so no stale snapshot can replay after the lifecycle transition.
           free(frame->payload);
           continue;
         }
