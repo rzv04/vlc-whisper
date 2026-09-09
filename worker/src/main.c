@@ -59,7 +59,7 @@ static void vw_worker_free_utf8_arguments(int argc, char** argv) {
 // Opens a UTF-8 log path through the Unicode Windows filesystem API.
 static FILE* vw_worker_open_log_utf8(const char* path) {
   if (!path) return NULL;
-  int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0, NULL, NULL);
+  int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
   if (chars <= 0) return NULL;
   wchar_t* wide_path = (wchar_t*)malloc((size_t)chars * sizeof(wchar_t));
   if (!wide_path) return NULL;
