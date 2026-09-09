@@ -18,7 +18,7 @@ All project-authored C is C17. The plugin does not link Whisper; the worker owns
 
 ## Critical boundaries
 
-**Plugin callback:** capture/normalize/enqueue bounded data only. No inference, blocking IPC/locks, filesystem work, or unbounded allocation.
+**Plugin callback:** capture/normalize/enqueue bounded data only. No inference, blocking IPC/locks, filesystem work, or heap allocation.
 
 **Worker lifecycle:** `vw_worker.*` owns caption-session state; decoder EOF/AGAIN/error semantics belong to the decoder API, not caller heuristics.
 

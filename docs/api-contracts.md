@@ -100,7 +100,7 @@ vlc-whisper-worker --pipe <path> --token <64_hex> [--model <path>]
   [--log-file <path>] [--enable-logging]
 ```
 
-Required identity arguments reject overflow/truncation. `--log-file` implies diagnostics. VAD resolution prefers explicit path, then model-related/install/user candidates, then documented fallback behavior. Backend reporting uses actual inference outcome.
+The required contract is reject-on-overflow for every identity argument. On this PR base, `--pipe`, `--vad-model`, and `--log-file` still use truncating copies; these are known defects tracked by the master ledger and PR #50, so the current parser must not be described or reviewed as compliant until those fixes land. `--log-file` implies diagnostics. VAD resolution prefers explicit path, then model-related/install/user candidates, then documented fallback behavior. Backend reporting uses actual inference outcome.
 
 ## Logging/privacy
 

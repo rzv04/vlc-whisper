@@ -1,11 +1,11 @@
 # VLC-Whisper Agent Rules
 
-`AGENTS.md` is the canonical agent/contributor rule file. Read `docs/README.md` for targeted documentation routing and `docs/invariants.md` for system contracts.
+`AGENTS.md` is the canonical agent/contributor rule file. Read `docs/invariants.md` for system contracts, then open only the technical reference relevant to the changed behavior.
 
 ## Before changing code
 
 1. Read the affected code, its callers/consumers, and the relevant contract. Do not plan from memory.
-2. Read only the relevant sections linked by `docs/README.md`; do not load every large reference document by default.
+2. Read only the relevant documentation; do not load every large reference document by default.
 3. For meaningful/high-risk work, use `ai/task-template.md` and save the plan under `docs/plans/`.
 4. If a local dependency graph exists, use it to find affected callers/boundaries, then verify against source.
 5. First build tests before implementing any major code changes, not after. Verify red test results before coding.
@@ -14,13 +14,15 @@
 
 - **C17:** project-authored C is C17; no project-authored C++. Use 2-space Google-style formatting, 120 columns, `vw_` namespacing, and `clang-format`.
 - **Playback first:** caption failure may disable captions; it must not stall/crash VLC or corrupt playback.
-- **Realtime callback:** VLC audio callbacks may only do bounded non-blocking capture/queue work. No inference, IPC/filesystem I/O, blocking locks/waits, or unbounded allocation.
+- **Realtime callback:** VLC audio callbacks may only do bounded non-blocking capture/queue work. No inference, IPC/filesystem I/O, blocking locks/waits, or heap allocation.
 - **Timeline:** media/caption time is signed 64-bit microseconds. Preserve PTS continuity explicitly; gaps/discontinuities must never be silently collapsed.
 - **State semantics:** never collapse semantically different states (for example AGAIN/EOF/ERROR) into one successful-looking value or infer terminal state from a heuristic when the producer can report it explicitly.
 - **Lifecycle ownership:** session-scoped state must have one authoritative owner/reset/finalize path. Any new session field must define START, STOP, seek, media swap, EOF, failure, and respawn behavior.
 - **Identity:** paths, URIs, model/session/corpus IDs, endpoints, and other identity-bearing values are reject-on-overflow. Only presentation/diagnostic text may truncate.
 - **Metrics:** each metric/state field has one authoritative producer, units, reset domain, and fallback policy. Never derive a plausible substitute silently.
-- **Privacy/network:** transcription audio remains local. Authenticated local IPC only. Model downloads and explicitly enabled translation may use documented worker network paths; no cloud transcription, telemetry, remote logging, or transcript/PCM persistence.
+- **Privacy/network:** transcription audio remains local. Authenticated local IPC only. Model downloads and explicitly enabled translation may use documented worker network paths; no cloud transcription, telemetry, remote logging, or implicit runtime transcript/PCM persistence. Explicit user-initiated local subtitle exports and git-ignored developer benchmark text artifacts are allowed; captured runtime PCM is not persisted.
+
+These rules are normative for new/changed code. A known violation in the current base remains a tracked defect, not compliant precedent; do not document an unmerged fix as current behavior.
 
 ## Invariant-first change workflow
 

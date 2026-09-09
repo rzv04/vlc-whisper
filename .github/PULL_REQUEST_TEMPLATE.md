@@ -25,7 +25,7 @@ New C contract tests use human-readable named accumulating expectations (`vw_tes
 - [ ] Session fields define/reset the affected START/STOP/seek/swap/EOF/respawn transitions.
 - [ ] Identity-bearing values reject overflow; no silent path/URI/ID truncation.
 - [ ] Changed metrics identify authoritative producer, units, reset domain, and fallback.
-- [ ] VLC audio callback still has no inference, IPC/filesystem I/O, blocking wait/lock, or unbounded allocation.
+- [ ] VLC audio callback still has no inference, IPC/filesystem I/O, blocking wait/lock, or heap allocation.
 - [ ] Relevant external/API failures have explicit handling and failure-path coverage.
 - [ ] A fixed known defect has a named regression where practical.
 - [ ] Privacy/network behavior remains within `docs/invariants.md`.

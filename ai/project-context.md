@@ -1,6 +1,6 @@
 # VLC-Whisper Agent Context
 
-Keep this file small. Root `AGENTS.md` is the policy source of truth; `docs/README.md` routes technical references; `docs/invariants.md` defines cross-component contracts.
+Keep this file small. Root `AGENTS.md` is the policy source of truth; `docs/invariants.md` defines cross-component contracts. Open only the technical reference needed for the changed behavior.
 
 ## Mission
 
@@ -15,9 +15,9 @@ Seekable local media may use worker-side source decoding/look-ahead. The plugin 
 ## Non-negotiables
 
 - Project C is C17; pinned third-party code stays isolated.
-- Audio callback work is bounded/non-blocking: no inference, IPC/filesystem I/O, blocking lock/wait, or unbounded allocation.
+- Audio callback work is bounded/non-blocking: no inference, IPC/filesystem I/O, blocking lock/wait, or heap allocation.
 - Media/caption timestamps are signed 64-bit microseconds; gaps and discontinuities remain explicit.
-- Authenticated local IPC; no cloud transcription, telemetry, or transcript/PCM persistence.
+- Authenticated local IPC; no cloud transcription, telemetry, or implicit runtime transcript/PCM persistence. Explicit local subtitle exports and git-ignored developer benchmark text artifacts are allowed; captured runtime PCM is not persisted.
 - Identity values reject overflow rather than truncate.
 - Session state has explicit reset/finalize ownership.
 - Distinct transient/EOF/error states stay distinct.
@@ -28,7 +28,7 @@ Seekable local media may use worker-side source decoding/look-ahead. The plugin 
 1. Root `AGENTS.md`.
 2. Changed code + callers/consumers.
 3. `docs/invariants.md`.
-4. Only the relevant reference selected via `docs/README.md`.
+4. Only the technical reference relevant to the changed contract.
 5. Exact dependency pin/source when external semantics matter.
 
 Do not load historical plans, the full roadmap, decision log, issue ledger, or all API references unless the task actually depends on them.

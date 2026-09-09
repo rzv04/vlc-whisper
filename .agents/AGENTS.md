@@ -5,7 +5,7 @@ Use the repository-root `AGENTS.md` as the single source of truth for coding, in
 Before substantial work:
 
 1. Read root `AGENTS.md`.
-2. Use `docs/README.md` to open only the documentation relevant to the changed contract.
+2. Read the changed code and only the technical documentation relevant to that contract.
 3. Use `docs/invariants.md` for cross-component invariants.
 4. Use `ai/task-template.md` for meaningful/high-risk implementation plans.
 5. Load a skill under `.agents/skills/` only when that skill is directly needed for the task.

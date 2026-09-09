@@ -6,7 +6,7 @@ VLC-Whisper is an ensemble: a native C VLC integration and a separate local work
 
 | Component | Owns | Must not do |
 | --- | --- | --- |
-| VLC audio filter | PCM capture/normalization, timestamp observation, bounded enqueue | infer, block on IPC/locks, touch filesystem, allocate unboundedly |
+| VLC audio filter | PCM capture/normalization, timestamp observation, bounded enqueue | infer, block on IPC/locks, touch filesystem, heap-allocate |
 | Plugin sender/control thread | worker launch/handshake, queue drain, control frames, worker replies, caption dispatch, bounded metrics | block the VLC audio callback |
 | Worker IPC reader + queue | receive/validate frames, bounded handoff | infer or delay transport reads on long computation |
 | Worker main/session loop | lifecycle, source decode, VAD/windowing, inference, segment construction, translation coordination | control VLC/render directly |
@@ -52,7 +52,7 @@ IDLE -> STARTING -> PLAYING <-> PAUSED
 
 Seek/discontinuity/source-epoch reset clears stale captions and buffered state, sends `STOP(SEEK_DISCONTINUITY)`, and starts a fresh caption session. In source look-ahead mode the worker process/IPC transport can remain alive while the caption epoch changes; translation settings are reapplied after the fresh `START`.
 
-EOF/media end must flush eligible residual speech exactly once before final session teardown. Worker failure/respawn must rebuild state rather than reuse stale session fields. The canonical lifecycle contract is summarized in `invariants.md`.
+The required lifecycle contract is that EOF/media end flushes eligible residual speech exactly once before final session teardown. The current PR base does not yet guarantee that behavior for live/non-seekable `MEDIA_END`; the runtime fix and regression are tracked in PR #50. Until that lands, treat tail flush as a known lifecycle defect rather than established behavior. Worker failure/respawn must rebuild state rather than reuse stale session fields.
 
 ## Source modes
 
@@ -75,7 +75,7 @@ Network use is worker-confined:
 - model download: explicit user action, catalog URL, SHA-256 verification, temp file + atomic publish;
 - translation: explicit opt-in, finalized text only, bounded async queue/deadline.
 
-No cloud transcription, telemetry, PCM egress, or transcript/PCM persistence by default.
+No cloud transcription, telemetry, PCM egress, or implicit runtime transcript persistence. Explicit user-initiated subtitle exports and local git-ignored developer benchmark text artifacts are permitted; captured runtime PCM is not persisted.
 
 ## Dependency discipline
 

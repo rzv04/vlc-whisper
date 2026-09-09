@@ -1,6 +1,6 @@
 # Contributing to VLC-Whisper
 
-Start with root `AGENTS.md`. It is the canonical coding/invariant rule set. Use `docs/README.md` to open only the technical references relevant to your change.
+Start with root `AGENTS.md`. It is the canonical coding/invariant rule set. Open only the technical references relevant to your change.
 
 ## Before implementation
 
@@ -22,13 +22,14 @@ A fixed known defect should gain a named regression where practical. Do not weak
 ## Core code rules
 
 - Project-authored C is C17, 2-space Google style, 120 columns, `vw_` namespacing.
-- VLC audio callbacks perform bounded non-blocking capture/queue work only.
+- VLC audio callbacks perform bounded non-blocking capture/queue work only, with zero heap allocation.
 - Preserve signed 64-bit media PTS and explicit discontinuities.
 - Distinct transient/EOF/error states stay distinct.
 - Identity-bearing values reject overflow instead of truncating.
 - Session-scoped state defines reset/finalize behavior for affected lifecycle transitions.
 - Metrics have one authoritative producer, units, reset domain, and fallback policy.
 - Transcription remains local; only documented explicit model-download/opt-in translation network paths are allowed.
+- No implicit runtime transcript/PCM persistence; explicit local subtitle exports and git-ignored developer benchmark text artifacts are allowed.
 
 ## Verification
 

@@ -6,7 +6,7 @@ Authoritative behavior comes from the exact vendored VLC 3.0.23 headers/source u
 
 The plugin is a native VLC audio filter. Project-owned worker code must not link VLC. Include `<vlc_common.h>` before other VLC headers and preserve any required include ordering from the pinned headers/build.
 
-`filter_t::pf_audio_filter` runs synchronously on VLC's audio path. It may inspect/normalize/copy bounded PCM and enqueue it, but must not infer, block on IPC/locks, access files, or allocate unboundedly. The filter is passthrough: audio format/output behavior must remain compatible with VLC's chain so captioning cannot alter playback.
+`filter_t::pf_audio_filter` runs synchronously on VLC's audio path. It may inspect/normalize/copy bounded PCM and enqueue it, but must not infer, block on IPC/locks, access files, or heap-allocate. The filter is passthrough: audio format/output behavior must remain compatible with VLC's chain so captioning cannot alter playback.
 
 ## `block_t` timing gotcha
 

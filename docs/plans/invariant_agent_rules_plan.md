@@ -19,14 +19,14 @@ Reduce defects in large/high-risk changes by making cross-component invariants, 
 | Failure states | Typed/explicit success, retry, EOF, recoverable, fatal semantics; no heuristic collapsing |
 | Identity | Reject overflow/truncation for paths, URIs, IDs, endpoints, language/model identifiers |
 | Metrics | One authoritative producer, units, reset domain, fallback policy |
-| Realtime | No blocking I/O/locks, inference, filesystem work, or unbounded allocation in VLC audio callbacks |
+| Realtime | No blocking I/O/locks, inference, filesystem work, or heap allocation in VLC audio callbacks |
 | Regression | Fixed ledger defects gain named behavioral tests where practical |
 
 ## Test policy
 Tests added by future work use PR #50's Jasmine-like convention: human-readable named behavioral checks accumulate failures and finish once, with seam/failure-path tests written before implementation for meaningful behavior changes.
 
 ## Documentation policy
-`docs/README.md` is the routing index. Agents read only documents/sections relevant to the changed contract; large historical/reference files are searched narrowly rather than loaded wholesale.
+Agents start from root `AGENTS.md` and `docs/invariants.md`, then read only documents/sections relevant to the changed contract; large historical/reference files are searched narrowly rather than loaded wholesale.
 
 ## Acceptance
 - [x] Root agent rules are concise and invariant-first.

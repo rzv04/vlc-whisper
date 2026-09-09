@@ -1,6 +1,6 @@
 # Engineering Invariants
 
-Compact contract reference for high-risk changes. `AGENTS.md` owns workflow; this file owns behavior that must remain true.
+Compact contract reference for high-risk changes. `AGENTS.md` owns workflow; this file defines the required engineering contract. Known violations in the current base are defects to track and fix, not behavior to normalize or document as compliant.
 
 | Invariant | Required behavior |
 | --- | --- |
@@ -11,9 +11,18 @@ Compact contract reference for high-risk changes. `AGENTS.md` owns workflow; thi
 | Identity integrity | Paths, URIs, IDs, endpoints, model/language/corpus identifiers reject overflow; they do not truncate. |
 | Failure classification | External failures map explicitly to retry, recover, fail-session, or fail-process/startup. |
 | Metric ownership | Every metric has one producer, units, reset scope, and fallback rule. |
-| Realtime safety | VLC audio callbacks do bounded non-blocking capture/enqueue work only. |
-| Privacy/network | Audio transcription stays local; network paths are explicit, documented, and opt-in/user-initiated. |
+| Realtime safety | VLC audio callbacks do bounded non-blocking capture/enqueue work with zero heap allocation. |
+| Privacy/network | Audio transcription stays local; no implicit runtime transcript/PCM persistence. Explicit user subtitle exports and git-ignored developer benchmark text artifacts are allowed. |
 | Regression permanence | Fixed ledger defects gain named behavioral regressions where practical. |
+
+## Known deviations on this PR base
+
+These requirements are not claims that every inherited `main` path already complies:
+
+- worker CLI parsing still truncates some oversized identity arguments (`--pipe`, `--vad-model`, `--log-file`); the reject-on-overflow runtime fix/regression is tracked in PR #50;
+- live/non-seekable `MEDIA_END` can still discard residual buffered speech instead of flushing it exactly once; the runtime fix/regression is tracked in PR #50.
+
+Remove a deviation only after its implementation and regression coverage have landed in the target branch.
 
 ## Cross-component changes
 
@@ -46,7 +55,7 @@ Prefer fail-closed over plausible-but-unverified transcript or benchmark output.
 
 Metrics document producer, units, lifetime/reset scope, and time domain. Codec round trips do not prove a metric is meaningful; test its producer.
 
-Audio callbacks must not infer, block on IPC/locks, access files, perform potentially blocking logging, or allocate unboundedly. Realtime-adjacent instrumentation accumulates bounded in-memory state and publishes elsewhere.
+Audio callbacks must not infer, block on IPC/locks, access files, perform potentially blocking logging, or heap-allocate. Realtime-adjacent instrumentation accumulates bounded in-memory state and publishes elsewhere.
 
 ## Test contract
 
