@@ -35,6 +35,11 @@ int main(void) {
   oversized_url[sizeof(oversized_url) - 1U] = '\0';
   assert(!vw_worker_client_start_session(&bounded, 0, "tiny", oversized_url));
 
+  char oversized_model[VW_MAX_MODEL_ID_BYTES + 1U];
+  memset(oversized_model, 'm', sizeof(oversized_model));
+  oversized_model[sizeof(oversized_model) - 1U] = '\0';
+  assert(!vw_worker_client_send_model_ctrl(&bounded, VW_MODEL_ACTION_DOWNLOAD, oversized_model));
+
   printf("test_worker_client_compat PASSED.\n");
   return 0;
 }

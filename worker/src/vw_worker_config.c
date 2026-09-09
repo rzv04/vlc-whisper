@@ -40,7 +40,9 @@ static bool vw_worker_config_file_exists(const char* path) {
 static bool vw_worker_config_is_absolute_path(const char* path) {
   if (!path || !path[0]) return false;
 #ifdef _WIN32
-  return path[0] == '\\' || (path[1] != '\0' && path[1] == ':');
+  return (path[0] == '\\' && path[1] == '\\') ||
+         (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' &&
+          (path[2] == '\\' || path[2] == '/'));
 #else
   return path[0] == '/';
 #endif

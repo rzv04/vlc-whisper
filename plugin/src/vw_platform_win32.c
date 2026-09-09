@@ -151,14 +151,17 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
     char tmp_dir[MAX_PATH];
     if (GetTempPathA(MAX_PATH, tmp_dir) > 0) {
       char log_path[MAX_PATH];
-      int log_len = snprintf(log_path, sizeof(log_path), "%svlc-whisper-worker.log", tmp_dir);
+      // Use an instance-specific name and CREATE_NEW below. The atomic create prevents a local attacker from
+      // pre-placing a junction/symlink at the predictable legacy filename and redirecting worker diagnostics.
+      int log_len = snprintf(log_path, sizeof(log_path), "%svlc-whisper-worker-%lu-%lu.log", tmp_dir,
+                             (unsigned long)GetCurrentProcessId(), (unsigned long)GetTickCount());
       if (log_len >= 0 && (size_t)log_len < sizeof(log_path)) {
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
         sa.bInheritHandle = TRUE;
-        hLog = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, NULL);
+        hLog = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_NEW,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
         hStdin = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
                              FILE_ATTRIBUTE_NORMAL, NULL);
         if (hLog != INVALID_HANDLE_VALUE && hStdin != INVALID_HANDLE_VALUE) {

@@ -1,7 +1,10 @@
 #include "vw_vad.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define VW_VAD_MAX_TRAILING_SILENCE_SAMPLES 4800U  // 300 ms at the canonical 16 kHz sample rate
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -182,7 +185,10 @@ bool vw_vad_find_chunk_boundary(const float* pcm32, size_t sample_count, struct 
             }
           } else {
             if (sample_count >= raw_seg_end + VW_CHUNK_MIN_SILENCE_GAP || is_eof) {
+              size_t max_cut = raw_seg_end + VW_VAD_MAX_TRAILING_SILENCE_SAMPLES;
+              if (max_cut < raw_seg_end) max_cut = SIZE_MAX;
               chosen_cut = (seg_end_sample + sample_count) / 2;
+              if (chosen_cut > max_cut) chosen_cut = max_cut;
               if (chosen_cut > sample_count) chosen_cut = sample_count;
               if (chosen_cut < seg_end_sample) chosen_cut = seg_end_sample;
               break;

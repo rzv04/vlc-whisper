@@ -11,7 +11,12 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/un.h>
+#if defined(__APPLE__)
+#include <sys/ucred.h>
+#endif
+#include <time.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/types.h>
@@ -52,10 +57,35 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
   }
 
   struct pollfd pfd = {.fd = server_fd, .events = POLLIN};
-  if (poll(&pfd, 1, 10000) <= 0) {
+  struct timespec wait_started;
+  if (clock_gettime(CLOCK_MONOTONIC, &wait_started) != 0) {
     unlink(endpoint_name);
     close(server_fd);
     return NULL;
+  }
+  int wait_ms = 10000;
+  for (;;) {
+    int poll_result = poll(&pfd, 1, wait_ms);
+    if (poll_result > 0) break;
+    if (poll_result == 0 || errno != EINTR) {
+      unlink(endpoint_name);
+      close(server_fd);
+      return NULL;
+    }
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+      unlink(endpoint_name);
+      close(server_fd);
+      return NULL;
+    }
+    int64_t elapsed_ms =
+        (int64_t)(now.tv_sec - wait_started.tv_sec) * 1000 + (int64_t)(now.tv_nsec - wait_started.tv_nsec) / 1000000;
+    if (elapsed_ms >= 10000) {
+      unlink(endpoint_name);
+      close(server_fd);
+      return NULL;
+    }
+    wait_ms = 10000 - (int)elapsed_ms;
   }
 
   int client_fd = accept(server_fd, NULL, NULL);
@@ -69,6 +99,22 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
   struct ucred peer;
   socklen_t peer_size = sizeof(peer);
   if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &peer, &peer_size) != 0 || peer.uid != geteuid()) {
+    close(client_fd);
+    unlink(endpoint_name);
+    return NULL;
+  }
+#elif defined(__APPLE__)
+  struct xucred peer;
+  socklen_t peer_size = sizeof(peer);
+  if (getsockopt(client_fd, 0, LOCAL_PEERCRED, &peer, &peer_size) != 0 || peer.cr_uid != geteuid()) {
+    close(client_fd);
+    unlink(endpoint_name);
+    return NULL;
+  }
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+  uid_t peer_uid;
+  gid_t peer_gid;
+  if (getpeereid(client_fd, &peer_uid, &peer_gid) != 0 || peer_uid != geteuid()) {
     close(client_fd);
     unlink(endpoint_name);
     return NULL;
@@ -136,18 +182,64 @@ vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
+#ifndef MSG_DONTWAIT
+#define MSG_DONTWAIT 0
+#endif
+
+#define VW_IPC_MAX_RECORD_BYTES 65536U
+
+// Preserve SOCK_SEQPACKET record boundaries and detect a record larger than the
+// caller's buffer instead of silently discarding its tail.
+static ssize_t vw_ipc_recv_record(int fd, void* buffer, size_t buffer_size) {
+  struct iovec iov = {.iov_base = buffer, .iov_len = buffer_size};
+  struct msghdr message = {.msg_iov = &iov, .msg_iovlen = 1};
+  ssize_t bytes = recvmsg(fd, &message, 0);
+  if (bytes >= 0 && (message.msg_flags & MSG_TRUNC)) {
+    errno = EMSGSIZE;
+    return -EMSGSIZE;
+  }
+  return bytes;
+}
+
+static int64_t vw_ipc_monotonic_us(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+  return (int64_t)now.tv_sec * 1000000LL + (int64_t)now.tv_nsec / 1000LL;
+}
 
 bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
-  if (!handle) return false;
+  if (!handle || (!data && size != 0)) return false;
   int fd = (int)(intptr_t)handle->pipe_handle;
-  ssize_t bytes = send(fd, data, size, MSG_NOSIGNAL);
-  return bytes == (ssize_t)size;
+  const unsigned char* bytes = (const unsigned char*)data;
+  int64_t deadline_us = vw_ipc_monotonic_us();
+  if (deadline_us < 0) return false;
+  deadline_us += 3000000LL;
+  while (size > 0) {
+    size_t record_size = size < VW_IPC_MAX_RECORD_BYTES ? size : VW_IPC_MAX_RECORD_BYTES;
+    for (;;) {
+      int64_t now_us = vw_ipc_monotonic_us();
+      if (now_us < 0 || now_us >= deadline_us) return false;
+      int64_t remaining_us = deadline_us - now_us;
+      int timeout_ms = (int)((remaining_us + 999) / 1000);
+      struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+      int poll_result = poll(&pfd, 1, timeout_ms);
+      if (poll_result < 0 && errno == EINTR) continue;
+      if (poll_result == 0 || poll_result < 0) return false;
+      ssize_t sent = send(fd, bytes, record_size, MSG_NOSIGNAL | MSG_DONTWAIT);
+      if (sent == (ssize_t)record_size) break;
+      if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
+      return false;
+    }
+    bytes += record_size;
+    size -= record_size;
+  }
+  return true;
 }
 
 int32_t vw_ipc_receive(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size) {
   if (!handle) return VW_IPC_RECV_FATAL;  // fatal: invalid handle
   int fd = (int)(intptr_t)handle->pipe_handle;
-  ssize_t bytes = recv(fd, buffer, buffer_size, 0);
+  ssize_t bytes = vw_ipc_recv_record(fd, buffer, buffer_size);
   if (bytes > 0) return (int32_t)bytes;
   if (bytes == 0) return VW_IPC_RECV_FATAL;  // EOF — peer closed connection (fatal)
   // bytes < 0: check for timeout vs real error
@@ -168,7 +260,7 @@ int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buf
   if (ret == 0) return VW_IPC_RECV_TIMEOUT;
   if (ret < 0) return VW_IPC_RECV_FATAL;
 
-  ssize_t bytes = recv(fd, buffer, buffer_size, 0);
+  ssize_t bytes = vw_ipc_recv_record(fd, buffer, buffer_size);
   if (bytes > 0) return (int32_t)bytes;
   if (bytes == 0) return VW_IPC_RECV_FATAL;
   if (errno == EAGAIN || errno == EWOULDBLOCK) return VW_IPC_RECV_TIMEOUT;

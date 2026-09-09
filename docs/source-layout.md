@@ -21,6 +21,17 @@ All project-authored source is C17. The pinned `whisper.cpp` dependency may cont
 
 ## Repository Tree
 
+Milestone 5 P2 regression additions preserve existing component ownership:
+
+- `tests/integration/vw_test_decoder_boundaries.c`: real FFmpeg fixture with link-time failure injection for path
+  rejection, seek pre-roll, and transactional resampler initialization.
+- `tests/integration/vw_test_worker_p2_contracts.c`: model-free authenticated worker protocol/session and fatal-exit checks.
+- `tests/unit/vw_test_ipc_transport.c`: POSIX record truncation, large-frame round trips, interrupted accept, and send deadlines.
+- `tests/unit/vw_test_translate_stack.c`: offline translation on a constrained 128 KiB pthread stack.
+- `tests/unit/vw_test_vad_trailing_silence.c`: deterministic Silero-result seam checking the raw speech endpoint cap.
+- Existing `test_live_media_end_flushes_tail.c` now exercises slow inference, translated/fallback tail delivery,
+  close-path accounting, and the plugin close adapter in `plugin/include/vw_plugin_log_scope_override.h`.
+
 The repository tree is subject to change.
 
 ```text

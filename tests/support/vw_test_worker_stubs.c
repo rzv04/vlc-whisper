@@ -17,18 +17,26 @@ struct vw_source_decoder {
 static vw_test_decoder_mode_t g_decoder_mode = VW_TEST_DECODER_DATA;
 static int g_decoder_read_calls = 0;
 static int g_transcribe_calls = 0;
+static char g_language[16];
+static bool g_whisper_failure = false;
 
 void vw_test_worker_stubs_reset(void) {
   g_decoder_mode = VW_TEST_DECODER_DATA;
   g_decoder_read_calls = 0;
   g_transcribe_calls = 0;
+  snprintf(g_language, sizeof(g_language), "%s", "en");
+  g_whisper_failure = false;
 }
 
 void vw_test_decoder_set_mode(vw_test_decoder_mode_t mode) { g_decoder_mode = mode; }
 
+void vw_test_whisper_set_failure(bool enabled) { g_whisper_failure = enabled; }
+
 int vw_test_decoder_read_calls(void) { return g_decoder_read_calls; }
 
 int vw_test_whisper_transcribe_calls(void) { return g_transcribe_calls; }
+
+const char* vw_test_whisper_language(void) { return g_language; }
 
 vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_backend_t backend, int gpu_device) {
   (void)model_path;
@@ -45,6 +53,7 @@ vw_whisper_engine_t* vw_whisper_engine_init(const char* model_path, vw_worker_ba
 bool vw_whisper_engine_set_language(vw_whisper_engine_t* engine, const char* language) {
   if (!engine || !language || !language[0] || strlen(language) >= sizeof(engine->language)) return false;
   snprintf(engine->language, sizeof(engine->language), "%s", language);
+  snprintf(g_language, sizeof(g_language), "%s", language);
   return true;
 }
 
@@ -66,6 +75,7 @@ void vw_whisper_engine_free(vw_whisper_engine_t* engine) { free(engine); }
 bool vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm32, size_t sample_count) {
   if (!engine || !pcm32 || sample_count == 0) return false;
   g_transcribe_calls++;
+  if (g_whisper_failure) return false;
   engine->last_inference_us = 1000;
   engine->total_inference_us += 1000;
   return true;

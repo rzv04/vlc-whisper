@@ -792,15 +792,17 @@ bool vw_model_download_default_dir(char* out, size_t out_size) {
 #else
   const char* xdg = getenv("XDG_DATA_HOME");
   char tmp[4096];
+  int tmp_written;
   if (xdg && xdg[0]) {
-    snprintf(tmp, sizeof(tmp), "%s/vlc-whisper/models", xdg);
+    tmp_written = snprintf(tmp, sizeof(tmp), "%s/vlc-whisper/models", xdg);
   } else {
     const char* home = getenv("HOME");
     if (home && home[0])
-      snprintf(tmp, sizeof(tmp), "%s/.local/share/vlc-whisper/models", home);
+      tmp_written = snprintf(tmp, sizeof(tmp), "%s/.local/share/vlc-whisper/models", home);
     else
-      snprintf(tmp, sizeof(tmp), "/tmp/vlc-whisper/models");
+      tmp_written = snprintf(tmp, sizeof(tmp), "/tmp/vlc-whisper/models");
   }
+  if (tmp_written < 0 || (size_t)tmp_written >= sizeof(tmp)) return false;
   int written = snprintf(out, out_size, "%s", tmp);
   if (written < 0 || (size_t)written >= out_size) return false;
 #endif

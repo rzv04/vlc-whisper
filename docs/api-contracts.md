@@ -12,6 +12,12 @@ All integers are unsigned/signed little-endian fixed-width fields. Text is stric
 - **Frame Read / Write Timeout**: 3 seconds (`vw_ipc_receive()` and `vw_ipc_send()` enforce 3,000 ms timeout per I/O call on both POSIX and Win32). Custom read timeouts can be specified via `vw_ipc_receive_timeout(handle, buffer, size, timeout_us)`.
 - **Receive Return Semantics**: `vw_ipc_receive()` and `vw_ipc_receive_timeout()` return `> 0` for bytes read, `-1` (`VW_IPC_RECV_TIMEOUT`) for a read timeout (connection remains open during video pause; the receiver should retry/keep waiting), and `-2` (`VW_IPC_RECV_FATAL`) for a fatal error or peer disconnect (EOF / broken pipe), after which the handle must be treated as dead.
 
+- **Record fragmentation**: one logical send can contain several transport records of at most 64 KiB, under one
+  three-second send deadline. Frame consumers assemble the existing header and declared payload without changing
+  the 1 MiB wire limit. Win32 `ERROR_MORE_DATA` preserves the returned bytes; POSIX `MSG_TRUNC` is fatal, never timeout.
+  Signal-interrupted POSIX accepts retry within the original ten-second deadline. Same-user peer credentials are
+  checked on Linux and supported BSD/macOS platforms in addition to the secret-token handshake.
+
 ## Terminology & Abbreviations
 
 | Term / Abbreviation | Definition                                                                                                                                                 |
@@ -50,6 +56,9 @@ Every payload begins with `session_id[16]`, except initial `HELLO`. A string is 
 
 Plugin to worker. Payload: `u16 min_major`, `u16 max_major`, `u8 token[32]`, `u16 client_version_len`, `client_version`. The worker must compare the token in constant time and reply within 3 seconds.
 
+The supported major must lie inside the offered inclusive range; otherwise the worker sends `E_PROTOCOL_VERSION`
+and exits nonzero. Same-major forward minor ACKs are accepted, with capabilities controlling optional messages.
+
 ### HELLO_ACK
 
 Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capability_flags`, `u16 worker_version_len`, `worker_version`. Required flag `PCM_S16LE_16K_MONO` (`1U << 0`); optional flags include `PARTIAL_SEGMENTS` (`1U << 1`), `SEEK_RESET` (`1U << 2`), `SOURCE_MODE` (`VW_CAPABILITY_SOURCE_MODE = 1U << 3`), and `TRANSLATION` (`VW_CAPABILITY_TRANSLATION = 1U << 4`). A plugin MUST NOT send `TRANSLATE_CTRL` unless the worker advertises `TRANSLATION`. For an older same-major worker without the flag, a disabled translation setting is a local no-op; attempting to enable translation fails locally without damaging the transport.
@@ -57,6 +66,10 @@ Worker to plugin. Payload: `u16 selected_major`, `u16 selected_minor`, `u32 capa
 ### START
 
 Plugin to worker. Payload: session ID, `i64 timeline_origin_pts_us`, `u32 sample_rate` (=16000), `u16 channels` (=1), `u16 sample_format` (`VW_SAMPLE_FORMAT_S16LE` = 1), model ID string (max 64), language string (`en`), source-kind enum (`LOCAL_FILE=1`, `LIVE_AUDIO=0`), and optional `u16 source_url_len`, `char source_url[1024]`. Validation requires the exact audio tuple, a supported concrete language, nonempty terminated model ID, and a terminated URL whose declared length matches its bytes. Live starts require an empty URL; local-file starts require a nonempty URL. `STARTED` either confirms effective settings or responds with `ERROR`. The VLC plugin generates a fresh random session ID for an initial playback start and for every accepted live or source seek epoch; restarting a caption session does not require restarting the worker process or authenticated transport.
+
+`START.language` is applied to the engine for each accepted session. Duplicate START for the same active session
+receives a recoverable `E_INTERNAL` reply without mutating that session. Client model IDs that do not fit the
+destination field, including its terminator, are rejected locally rather than truncated.
 
 ### POSITION (v1.1)
 
@@ -119,6 +132,13 @@ Plugin to worker. Payload: session ID, `u16 reason`.
 
 Plugin to worker. Payload: Empty (header only). Instructs worker to close transport handles and exit process cleanly with code `0`.
 
+`STOP(MEDIA_END)` and active live-session `SHUTDOWN` flush held-back PCM through normal final-caption translation
+before clearing the session. A final STATUS includes tail inference time. A timeout preserves the source-only caption.
+Seek STOP instead invalidates old work.
+The plugin close path waits for transport EOF (with a 120-second hung-worker watchdog) and includes drained frames
+in aggregate metrics. Fatal authenticated protocol, inference, or transport failures exit nonzero; inference failure
+reports `E_INTERNAL` when the connection remains writable. Authentication alone does not imply successful completion.
+
 ### STATUS (v1.3)
 
 Worker to plugin. Payload: session ID, `u32 state`, `i64 queued_audio_us`, `i64 inference_us`, `i64 dropped_audio_us`, `char resolved_backend[16]` — 60 bytes on the wire in v1.3.
@@ -137,6 +157,8 @@ Plugin to worker. Payload 49 bytes: session ID, `u8 action` (`DOWNLOAD=1`, `ABOR
   writing to `.part` and atomically renaming on success. Single-flight: a second `DOWNLOAD` while active yields an
   immediate `MODEL_PROGRESS` `FAILED` response. Unknown `model_id` → `MODEL_PROGRESS` `FAILED`. `ABORT` cancels
   the download thread and removes its partial file; worker shutdown or IPC disconnect performs the same cleanup.
+
+The client rejects a DOWNLOAD ID longer than 31 bytes before sending; it must not silently select a truncated ID.
 
 ### MODEL_PROGRESS (v1.4)
 

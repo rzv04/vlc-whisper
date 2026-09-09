@@ -142,13 +142,10 @@ bool vw_platform_spawn_process(const char* executable_path, const char* const ar
   if (!executable_path || !argv) return false;
 
   pid_t pid;
-  int ret;
-  if (!strchr(executable_path, '/')) {
-    ret = posix_spawnp(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
-  } else {
-    if (access(executable_path, F_OK) != 0) return false;
-    ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
-  }
+  // Worker launch paths are identities, so never search the caller's PATH.
+  if (executable_path[0] != '/') return false;
+  if (access(executable_path, F_OK) != 0) return false;
+  int ret = posix_spawn(&pid, executable_path, NULL, NULL, (char* const*)argv, environ);
   if (ret != 0) return false;
 
   if (out_process)

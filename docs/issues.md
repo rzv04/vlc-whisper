@@ -17,6 +17,80 @@ every ledger entry against current source, corrected four entries, closed two as
 - **P2 — High**: Timeline desynchronization, caption loss/truncation, state machine flaw, performance stall, or resource limits.
 - **P3 — Medium-Low**: Edge-case behavior, minor resource leak, telemetry inaccuracy, or code hygiene defect.
 
+## Milestone 5 P2 Reconciliation (baseline `e70ea36`)
+
+This section reconciles the open, non-stale P2 inventory against `milestone-5` at commit
+`e70ea36`. It supplements the historical audit below; it does **not** close issue #47 or
+claim that its P1/P3 findings are resolved.
+
+### Fixed in the milestone-5 working tree
+
+- **VW-021** — model-control identifiers are rejected before they can be silently truncated
+  (`plugin/src/vw_worker_client.c`); regression coverage is in `tests/unit/test_worker_client_compat.c`.
+- **VW-025** — large translation request/response buffers are heap allocated
+  (`worker/src/vw_translate.c`); `tests/unit/vw_test_translate_stack.c` exercises the fallback on a
+  128 KiB pthread stack, and the translation targets enforce a 128 KiB frame-size limit.
+- **VW-030** — VAD trailing silence is capped at 300 ms from the raw speech endpoint
+  (`worker/src/vw_vad.c`); `tests/unit/vw_test_vad_trailing_silence.c` is a deterministic regression test.
+- **VW-040** — same-major forward minor protocol versions are accepted
+  (`plugin/src/vw_worker_client.c`); `tests/unit/vw_test_worker_client.c` negotiates a future minor and correlated STARTED.
+- **VW-043** — POSIX worker launch rejects bare executable names and does not search `PATH`
+  (`plugin/src/vw_platform_linux.c`); covered by `tests/unit/test_platform.c`.
+- **VW-078** — inherited Windows worker logs use a per-process temporary name and exclusive creation
+  (`plugin/src/vw_platform_win32.c`); the worker default log is likewise exclusive in
+  `worker/src/main.c`. Windows runtime verification was not available on this Linux VM.
+- **VW-022** — benchmark live-clock invalidation on discontinuity, media swap, and worker recovery;
+  `tests/unit/test_benchmark.c` confirms the next chunk reanchors without losing aggregate metrics.
+- **VW-028** — negative internal PCM PTS remains a valid audio-buffer anchor; `tests/unit/test_audio_buffer.c`.
+- **VW-032 / VW-062** — FFmpeg trims seek pre-roll and initializes replacement resampling state before seeking;
+  `tests/integration/vw_test_decoder_boundaries.c` reproduces pre-roll and failed-initialization state corruption.
+- **VW-034 / VW-039** — START applies requested engine language and HELLO enforces the supported major range;
+  `test_new_session_resets_all_session_state.c` and `vw_test_worker_p2_contracts.c` cover the worker seam.
+- **VW-036 / VW-037** — Windows continuation reads and 64 KiB transport fragments preserve large logical payloads;
+  POSIX truncation is fatal even with stale timeout errno. `tests/unit/vw_test_ipc_transport.c` covers native
+  960,000-byte round trips, truncation, and the single three-second send deadline. Windows runtime remains unverified.
+- **VW-041 / VW-042** — supported BSD/macOS peer-UID validation and signal-interrupted accept retries;
+  the transport regression covers interrupted accept on Linux; BSD/macOS changes are source-reviewed only.
+- **VW-044** — Windows IPC/lifecycle/async-translation tests include process IDs in named-pipe names.
+- **VW-060 / VW-063** — media swap/recovery resets plugin seek filtering; failed decoder seeks no longer invalidate
+  translation and repeated implicit retries are suppressed. Existing seek/session regressions remain enabled.
+- **VW-061** — Media Foundation discards pre-target PCM before returning samples; MinGW compile verification only.
+- **VW-076** — blanking and vout replacement flush the old held output's private channel before release;
+  `tests/unit/test_caption_presenter.c` asserts flush ownership and ordering.
+- **Finding #11 / #14 / #15** — failed inference is fatal, authenticated fatal exits are nonzero, and duplicate active
+  START receives a deterministic recoverable error; `tests/integration/vw_test_worker_p2_contracts.c` covers malformed
+  authenticated traffic, incompatible HELLO, duplicate START, normal inference failure, and MEDIA_END inference failure.
+- **Findings #23 / #24** — both native path normalizers reject truncation and percent-decoded NUL before opening a file;
+  `vw_test_decoder_boundaries.c` checks rejection before FFmpeg I/O; Windows path rejection is cross-compiled only.
+- **Findings #27 / #28** — Windows drive-relative paths are not classified as absolute; Linux model-directory
+  construction rejects overflowing intermediate paths. `tests/unit/test_model_download.c` covers native overflow.
+- **Issue #53, all three P2 findings** — close waits for actual tail completion through IPC EOF (120-second watchdog),
+  records drained caption/frame/translation metrics, and routes media-end speech through enabled translation.
+  `test_live_media_end_flushes_tail` injects 3.5-second inference; `vw_tail_translation_timeout` confirms source-only
+  fallback survives translation timeout. Both are offline model-free regressions. Watchdog expiry can still lose a tail.
+
+### Already fixed on the milestone-5 baseline
+
+**VW-019, VW-020, VW-026, VW-064, VW-079, VW-080, VW-081** are already addressed by rate bounding, dedicated OSD
+flush handling, deadline-aware curl child cleanup, SIGPIPE suppression, full session reset, and typed decoder outcomes.
+**Findings #1, #2, #3, #5, #7, #9, #10, #20, #22, #26** already have the queue timeline, decoder AGAIN/EOF/error,
+basic live-tail flush, instance-owned logger, URI rejection, and CLI overflow fixes in `e70ea36`. This branch extends
+the basic tail flush for #53 rather than claiming those baseline changes as new work.
+
+### Intentional / stale classification
+
+**VW-077** is not being fixed: the model-progress channel is intentionally independent of caption
+blanking and media timeline state under the current architecture. It is therefore classified as an
+intentional design choice rather than an active milestone-5 defect; revisit only if that architecture
+contract changes.
+
+The struck-through **VW-024 / VW-038** and archived **VW-023 / VW-027 / VW-029 / VW-031 / VW-033 / VW-035**
+remain stale, fixed, or invalid as classified in the GitHub master ledger; they are not reopened without fresh evidence.
+This accounts for the P2 inventory in issue #47's body and continuation comments plus issue #53. The historical
+statuses below describe the original audit branch; this reconciliation is authoritative for the proposed P2 change.
+Issue #47 remains open for other priorities. Windows/MF and BSD/macOS runtime checks remain release-validation work,
+not claims of execution on this Linux VM. See [test-strategy.md](test-strategy.md) for verification scope.
+
 ---
 
 ## Priority 1 — Critical

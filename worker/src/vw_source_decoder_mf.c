@@ -18,6 +18,7 @@ struct vw_source_decoder {
   IMFSourceReader* p_reader;
   int64_t duration_us;
   int64_t current_pts_us;
+  int64_t seek_target_us;
   bool eof_reached;
   int16_t* leftover_buffer;
   size_t leftover_capacity;
@@ -27,8 +28,8 @@ struct vw_source_decoder {
 
 // URL decode helper to convert file URI (e.g. file:///C:/video%20file.mp4) to native Windows path.
 // Preserves UNC authority: file://server/share/video.mp4 -> \\server\share\video.mp4
-static void vw_source_decoder_normalize_win32_path(const char* url, char* out_path, size_t max_out) {
-  if (!url || !out_path || max_out == 0) return;
+static bool vw_source_decoder_normalize_win32_path(const char* url, char* out_path, size_t max_out) {
+  if (!url || !out_path || max_out == 0) return false;
   const char* src = url;
   bool is_unc = false;
 
@@ -54,7 +55,7 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
   if (is_unc) {
     if (max_out < 3) {
       out_path[0] = '\0';
-      return;
+      return false;
     }
     out_path[0] = '\\';
     out_path[1] = '\\';
@@ -66,6 +67,7 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
       char* end = NULL;
       long val = strtol(hex, &end, 16);
       if (end == hex + 2) {
+        if (val == 0) return false;
         out_path[dst_idx++] = (char)val;
         src += 3;
         continue;
@@ -79,6 +81,7 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
     src++;
   }
   out_path[dst_idx] = '\0';
+  return *src == '\0';
 }
 
 vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_info_t* info) {
@@ -99,7 +102,10 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   bool need_com_uninit_on_fail = com_initialized;
 
   char clean_path[4096];
-  vw_source_decoder_normalize_win32_path(url, clean_path, sizeof(clean_path));
+  if (!vw_source_decoder_normalize_win32_path(url, clean_path, sizeof(clean_path))) {
+    if (need_com_uninit_on_fail) CoUninitialize();
+    return NULL;
+  }
 
   int wlen = MultiByteToWideChar(CP_UTF8, 0, clean_path, -1, NULL, 0);
   if (wlen <= 0) {
@@ -200,6 +206,7 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
 
   if (SUCCEEDED(hr)) {
     decoder->current_pts_us = target_pts_us;
+    decoder->seek_target_us = target_pts_us;
     decoder->eof_reached = false;
     decoder->leftover_count = 0;
     return true;
@@ -274,9 +281,19 @@ vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t
           size_t samples_in_sample = cbCurrentLength / sizeof(int16_t);
           const int16_t* in_samples = (const int16_t*)pAudioData;
 
-          if (out_pts_us && total_samples == 0) {
-            *out_pts_us = (int64_t)(llTimestamp / 10);
-            decoder->current_pts_us = *out_pts_us;
+          int64_t sample_pts_us = (int64_t)(llTimestamp / 10);
+          if (sample_pts_us < decoder->seek_target_us) {
+            uint64_t delta = (uint64_t)decoder->seek_target_us - (uint64_t)sample_pts_us;
+            uint64_t skip = delta / 125U * 2U + ((delta % 125U) * 2U + 124U) / 125U;
+            size_t trimmed = skip < samples_in_sample ? (size_t)skip : samples_in_sample;
+            in_samples += trimmed;
+            samples_in_sample -= trimmed;
+            sample_pts_us += (int64_t)(trimmed * 125U / 2U);
+          }
+
+          if (total_samples == 0 && samples_in_sample > 0) {
+            if (out_pts_us) *out_pts_us = sample_pts_us;
+            decoder->current_pts_us = sample_pts_us;
           }
 
           size_t needed = max_samples - total_samples;
