@@ -10,6 +10,7 @@
 #endif
 
 #include "vw_log.h"
+#include "vw_process_policy.h"
 #include "vw_worker.h"
 #include "vw_worker_config.h"
 
@@ -128,6 +129,7 @@ static void vw_worker_setup_log_file(const vw_worker_config_t* config) {
 }
 
 int main(int argc, char** argv) {
+  if (!vw_process_install_worker_signal_policy()) return 2;
 #ifdef _WIN32
   (void)argc;
   (void)argv;

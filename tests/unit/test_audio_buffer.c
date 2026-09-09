@@ -71,6 +71,26 @@ int main(void) {
   vw_audio_buffer_clear(buf);
   EXPECT(vw_audio_buffer_get_count(buf) == 0);
 
+  // 7. Consecutive resampled blocks may differ from VLC PTS by one 16 kHz output-sample phase without discontinuity.
+  vw_audio_buffer_t* resampled_buf = vw_audio_buffer_create(4096);
+  int16_t resampled_pcm[342] = {0};
+  EXPECT(resampled_buf != NULL);
+  EXPECT(vw_audio_buffer_append_s16le(resampled_buf, resampled_pcm, 342, 0));
+  EXPECT(vw_audio_buffer_append_s16le(resampled_buf, resampled_pcm, 341, 21333));
+  EXPECT(vw_audio_buffer_append_s16le(resampled_buf, resampled_pcm, 341, 42667));
+  EXPECT(vw_audio_buffer_get_count(resampled_buf) == 1024);
+  int64_t resampled_pts = -1;
+  float resampled_sample = 0.0f;
+  EXPECT(vw_audio_buffer_get_samples(resampled_buf, &resampled_sample, 1, &resampled_pts) == 1);
+  EXPECT(resampled_pts == 0);
+
+  // A real gap well beyond one output sample still clears/reanchors the accumulated buffer.
+  EXPECT(vw_audio_buffer_append_s16le(resampled_buf, resampled_pcm, 341, 100000));
+  EXPECT(vw_audio_buffer_get_count(resampled_buf) == 341);
+  EXPECT(vw_audio_buffer_get_samples(resampled_buf, &resampled_sample, 1, &resampled_pts) == 1);
+  EXPECT(resampled_pts == 100000);
+  vw_audio_buffer_free(resampled_buf);
+
   vw_audio_buffer_free(buf);
   printf("test_audio_buffer passed\n");
   return 0;

@@ -86,6 +86,15 @@ else()
     endif()
 endif()
 
+# Preinclude the POSIX translation pipe policy so original descriptors are CLOEXEC, curl stdin/stdout stay blocking,
+# and only parent endpoints become nonblocking after spawn through the same namespaced production/test seam.
+if(NOT WIN32)
+    set_source_files_properties(src/vw_translate.c PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translate_pipe_policy.h"
+        COMPILE_DEFINITIONS "VW_TRANSLATE_PIPE_POLICY_OVERRIDE=1"
+    )
+endif()
+
 add_executable(vlc-whisper-worker
     src/main.c
     src/vw_worker.c

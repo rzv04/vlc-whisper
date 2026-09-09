@@ -31,7 +31,7 @@ The Python orchestration requires Python 3.10+ for the project workflow. Corpus 
 - audio normalization: 16 kHz mono PCM S16LE WAV
 - FLEURS license: CC-BY-4.0
 
-The downloader first resolves the current Hugging Face dataset revision SHA and then loads both language configurations at that exact revision. The local manifest records that SHA, sample IDs, reference transcripts, duration, PCM hash, and provenance. Selection never depends on Whisper output.
+The downloader first resolves the current Hugging Face dataset revision SHA and then loads both language configurations at that exact revision. The local manifest records that SHA, sample IDs, reference transcripts, duration, PCM hash, and provenance. Before launching any runner, the orchestrator rejects normalized-empty references and verifies each WAV against its manifest SHA-256. Selection never depends on Whisper output, and invalid fixtures cannot produce misleading zero-denominator or corrupted-audio scores.
 
 All downloaded WAVs and manifests live by default under:
 
@@ -74,7 +74,7 @@ The runner starts the worker with the local WAV path as `VW_SOURCE_LOCAL_FILE` a
 
 The runner sends media `POSITION` updates every 100 ms at 1x wall-clock speed. The worker itself retains its production 30 second ahead-of-playhead decode policy and VAD-guided non-overlapping source chunking. This means the benchmark paces playback realistically while still testing the actual look-ahead algorithm rather than a Python reimplementation.
 
-After the final playback position, the runner waits for the worker's real source EOF boundary: the same third consecutive zero-length decoder read that causes `vw_worker.c` to enter its EOF flush path. The runner continues receiving caption/status frames while waiting. Once that marker appears, the worker still completes the current synchronous EOF flush and caption emission before it can dequeue the runner's subsequent `SHUTDOWN`. The runner then drains output through IPC EOF and worker exit. Both EOF and shutdown waits are bounded to 120 seconds and fail closed.
+After the final playback position, the runner waits for the worker's explicit source EOF boundary. Retryable decoder stalls do not create this marker or end look-ahead processing. The runner continues receiving caption/status frames while waiting. Once explicit EOF appears, the worker still completes the current synchronous EOF flush and caption emission before it can dequeue the runner's subsequent `SHUTDOWN`. The runner then drains output through IPC EOF and worker exit. Both EOF and shutdown waits are bounded to 120 seconds and fail closed.
 
 The Python parent watchdog is deliberately looser than these C-level barriers. It budgets media pacing, worker/model startup, one 120 second completion phase for live mode, two possible 120 second phases for look-ahead mode, and an additional outer grace interval. This prevents the orchestrator from killing a valid slow CPU run before the C runner can report its own bounded timeout.
 

@@ -29,8 +29,13 @@ int main(void) {
   vw_msg_hello_ack_t hello_ack = {.worker_version_length = 4, .worker_version = (char*)"test"};
   EXPECT(vw_protocol_validate_payload(VW_MSG_HELLO_ACK, &hello_ack));
 
-  // Validate START (always valid)
-  vw_msg_start_t start = {0};
+  // Validate START
+  vw_msg_start_t start = {.sample_rate = 16000,
+                          .channels = 1,
+                          .sample_format = 1,
+                          .model_id = "ggml-tiny.en.bin",
+                          .language = "en",
+                          .source_kind = VW_SOURCE_LIVE_AUDIO};
   EXPECT(vw_protocol_validate_payload(VW_MSG_START_SESSION, &start));
 
   // Validate AUDIO

@@ -100,6 +100,15 @@ static bool is_empty_or_whitespace(const char* s, size_t len) {
   return true;
 }
 
+static bool vw_bounded_string_length(const char* text, size_t capacity, size_t* out_length) {
+  if (!text || !out_length || capacity == 0) return false;
+  size_t length = 0;
+  while (length < capacity && text[length] != '\0') length++;
+  if (length == capacity) return false;
+  *out_length = length;
+  return true;
+}
+
 bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
   if (!payload && type != VW_MSG_SHUTDOWN) return false;
   switch (type) {
@@ -113,8 +122,22 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       if (p->worker_version_length > 0 && !p->worker_version) return false;
       return true;
     }
-    case VW_MSG_START_SESSION:
-      return true;
+    case VW_MSG_START_SESSION: {
+      const vw_msg_start_t* p = (const vw_msg_start_t*)payload;
+      if (p->sample_rate != 16000U || p->channels != 1U || p->sample_format != VW_SAMPLE_FORMAT_S16LE) return false;
+      if (!is_valid_language_code(p->language, false)) return false;
+
+      size_t model_id_length = 0;
+      if (!vw_bounded_string_length(p->model_id, sizeof(p->model_id), &model_id_length) || model_id_length == 0)
+        return false;
+
+      size_t source_url_length = 0;
+      if (!vw_bounded_string_length(p->source_url, sizeof(p->source_url), &source_url_length)) return false;
+      if (p->source_url_len != source_url_length) return false;
+      if (p->source_kind == VW_SOURCE_LIVE_AUDIO) return source_url_length == 0;
+      if (p->source_kind == VW_SOURCE_LOCAL_FILE) return source_url_length > 0;
+      return false;
+    }
     case VW_MSG_AUDIO_PCM: {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
       if (p->duration_us <= 0 || p->duration_us > 30000000) return false;

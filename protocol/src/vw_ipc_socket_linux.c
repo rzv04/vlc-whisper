@@ -84,6 +84,10 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name) {
   // Set 3 second timeout for send/receive operations
   setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#if defined(SO_NOSIGPIPE)
+  int nosigpipe = 1;
+  setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
 
   vw_ipc_handle_t* handle = (vw_ipc_handle_t*)calloc(1, sizeof(vw_ipc_handle_t));
   if (!handle) {
@@ -115,6 +119,10 @@ vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
   tv.tv_usec = 0;
   setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#if defined(SO_NOSIGPIPE)
+  int nosigpipe = 1;
+  setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
 
   vw_ipc_handle_t* handle = (vw_ipc_handle_t*)calloc(1, sizeof(vw_ipc_handle_t));
   if (!handle) {

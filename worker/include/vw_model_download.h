@@ -32,16 +32,16 @@ typedef struct vw_model_download vw_model_download_t;
 // destination lock before the dedicated thread can touch its partial file.
 vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* entry, const char* dest_dir);
 
-// Requests asynchronous abort of an in-flight download; sets abort flag, kills
-// platform backend handle or curl child, and lets the thread clean up safely.
+// Requests asynchronous abort by publishing cancellation state only. The downloader owner thread observes the flag,
+// terminates and reaps its own curl child, preventing stale PID cross-thread signalling.
 void vw_model_download_abort(vw_model_download_t* dl);
 
 // Copies the current progress snapshot under mutex protection into out; returns
 // false when download handle or output pointer is NULL for safe polling.
 bool vw_model_download_poll(vw_model_download_t* dl, vw_download_progress_t* out);
 
-// Joins the download thread if running, reaps any curl child process, frees
-// internal mutex and heap allocations, and is safe to call with NULL.
+// Requests abort, joins the owner thread, releases the destination lock and synchronization state, then frees the
+// handle without performing any secondary child-process wait or signal from the caller thread.
 void vw_model_download_free(vw_model_download_t* dl);
 
 // Resolves per-user model directory (%LOCALAPPDATA%\vlc-whisper\models on Windows

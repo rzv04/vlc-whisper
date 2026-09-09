@@ -50,7 +50,7 @@ vlc-whisper/
 │   ├── CMakeLists.txt                         # Builds worker; official Windows release can require Vulkan fail-closed
 │   ├── include/
 │   │   ├── vw_worker.h                        # Main worker event loop and IPC message dispatcher
-│   │   ├── vw_source_decoder.h                # Native audio/video source file demuxer interface
+│   │   ├── vw_source_decoder.h                # Native source decoder API with OK/AGAIN/EOF/ERROR outcomes
 │   │   ├── vw_worker_queue.h                  # Bounded frame queue types and ownership contract
 │   │   ├── vw_whisper_engine.h                # C wrapper around whisper.cpp: segment-level timing & no_speech_prob accessors
 │   │   ├── vw_vad.h                           # Silero VAD GGML context management, chunk finding & RMS Energy fallback
@@ -66,8 +66,8 @@ vlc-whisper/
 │   ├── src/
 │   │   ├── main.c                             # Worker executable entry point: CLI parsing & signal handling
 │   │   ├── vw_worker.c                        # Worker IPC state machine, look-ahead decoding & message loop
-│   │   ├── vw_source_decoder_mf.c             # Windows Media Foundation native audio source demuxer
-│   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
+│   │   ├── vw_source_decoder_mf.c             # Windows MF demuxer with retryable-gap and fatal-error reporting
+│   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg demuxer with explicit stall/EOF/error reporting
 │   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
 │   │   ├── vw_quality_hooks.c                 # Test-build link wrappers exposing source EOF/drop completion metadata
 │   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, confidence & segment accessors
@@ -111,7 +111,9 @@ vlc-whisper/
 │   │   ├── test_protocol_codec.c              # Serialization & frame encoding unit tests
 │   │   ├── test_protocol_validate.c           # Malformed payload & boundary validation tests
 │   │   ├── test_protocol_util.c               # Saturating arithmetic boundary and overflow unit tests
+│   │   ├── test_log.c                         # Thread-safe logging, multi-instance registration & file flush tests
 │   │   ├── test_source_decoder.c              # Media Foundation / FFmpeg native source demuxer tests
+│   │   ├── test_protocol_start_failure_paths.c # START semantic boundary and source consistency tests
 │   │   ├── test_queue.c                       # Lock-free SPSC queue concurrency & overflow tests
 │   │   ├── test_audio_capture.c               # PCM normalization & chunking tests
 │   │   ├── test_audio_buffer.c                # PCM ring buffer float32 conversion & overflow tests
@@ -129,7 +131,8 @@ vlc-whisper/
 │   │   └── test_model_download.c              # Model download: sha256 vectors, catalog, progress, retry tests
 │   ├── integration/                           # Sub-system IPC and process tests
 │   │   ├── test_worker_ipc.c                  # Full IPC handshake & message exchange test
-│   │   └── test_worker_lifecycle.c            # Worker startup, crash recovery & shutdown test
+│   │   ├── test_worker_lifecycle.c            # Worker startup, crash recovery & shutdown test
+│   │   └── test_*failure*.c                   # Queue/decoder/session/tail cross-component regressions
 │   ├── e2e/                                   # End-to-end playback test procedures
 │   │   └── test_local_video_playback.md       # Manual test protocol for live VLC playback
 │   └── fixtures/                              # Test fixtures & expected outputs
@@ -259,8 +262,8 @@ Payload structs are constructed at call sites with C99 designated initializers (
 
 ## Tests
 
-- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, caption timing, platform abstraction, worker-client source seek epoch regression.
-- `tests/integration/`: worker process, pipe handshake, lifecycle/errors/cleanup.
+- `tests/unit/`: codec/validation, START failure paths, queue policy, audio capture, segment building, caption timing, platform abstraction, worker-client source seek epoch regression.
+- `tests/integration/`: worker process, pipe handshake, lifecycle/errors/cleanup, dropped-audio timeline gaps, decoder stalls/errors, live-tail flush, and fresh-session reset seams.
 - `tests/e2e/`: repeatable manual test of the pinned VLC build and local English video.
 - `tests/fixtures/`: legal, small, deterministic offline input data only.
 - `tools/quality_benchmark/`: network-free helper tests in CI plus optional local-only EN/RO FLEURS WER/CER runs; downloaded corpus and reports are git-ignored and never required by CI.

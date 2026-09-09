@@ -284,7 +284,7 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   vw_msg_start_t start = {.timeline_origin_pts_us = timeline_origin_pts_us,
                           .sample_rate = 16000,
                           .channels = 1,
-                          .sample_format = VW_AUDIO_FORMAT_S16,
+                          .sample_format = VW_SAMPLE_FORMAT_S16LE,
                           .source_kind = source_url ? VW_SOURCE_LOCAL_FILE : VW_SOURCE_LIVE_AUDIO};
   memcpy(start.session_id.bytes, client->session_id, 16);
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);
@@ -442,10 +442,14 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
 
 static bool vw_worker_client_send_position_frame(vw_worker_client_t* client, int64_t current_pts_us,
                                                  int64_t input_time_us, float playback_rate, uint32_t flags) {
-  vw_msg_position_t pos = {.current_pts_us = current_pts_us,
-                           .input_time_us = input_time_us,
-                           .playback_rate = playback_rate > 0.0f ? playback_rate : 1.0f,
-                           .flags = flags};
+  float eff_rate = playback_rate > 0.0f ? playback_rate : 1.0f;
+  if (eff_rate < 0.05f) {
+    eff_rate = 0.05f;
+  } else if (eff_rate > 16.0f) {
+    eff_rate = 16.0f;
+  }
+  vw_msg_position_t pos = {
+      .current_pts_us = current_pts_us, .input_time_us = input_time_us, .playback_rate = eff_rate, .flags = flags};
   memcpy(pos.session_id.bytes, client->session_id, 16);
 
   uint8_t payload_buf[64];
