@@ -113,16 +113,16 @@ Use **Control Panel > Programs > Uninstall a program**, Windows **Installed apps
 > [!INFO]
 > These are anecdotal project regression measurements, not general `whisper.cpp` benchmarks. They use a small 20-clip FLEURS subset (10 English, 10 Romanian) and the bundled `tiny` model with 4 CPU threads.
 
-| Language | Mode | WER | CER | Word errors / ref words | Estimated WER excl. duplicate insertions* |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| **English (`en`)** | **Offline** | **10.38%** | **4.97%** | 22 / 212 | 10.38% |
-| **English (`en`)** | **Local media** | **10.38%** | **4.87%** | 22 / 212 | 10.38% |
-| **English (`en`)** | **Livestream** | **46.23%** | **39.32%** | 98 / 212 | **~13.2%** |
-| **Romanian (`ro`)** | **Offline** | **93.03%** | **29.71%** | 227 / 244 | 93.03% |
-| **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | 219 / 244 | 89.75% |
-| **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | 389 / 244 | **~83.61%** |
+| Language | Mode | WER | CER | Raw word errors / ref words | Est. errors excl. duplicate insertions* | Est. WER excl. duplicate insertions* |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| **English (`en`)** | **Offline** | **10.38%** | **4.97%** | 22 / 212 | — | — |
+| **English (`en`)** | **Local media** | **10.38%** | **4.87%** | 22 / 212 | — | — |
+| **English (`en`)** | **Livestream** | **46.23%** | **39.32%** | 98 / 212 | **~28 / 212** | **~13.21%** |
+| **Romanian (`ro`)** | **Offline** | **93.03%** | **29.71%** | 227 / 244 | — | — |
+| **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | 219 / 244 | — | — |
+| **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | 389 / 244 | **~204 / 244** | **~83.61%** |
 
-_*The estimate removes excess insertions attributed to rolling-window duplicate leakage (English: 70; Romanian: 185). It is diagnostic, not the primary measured score._
+_*The adjusted livestream values are diagnostic estimates, not separately measured scores: English deducts 70 duplicate-insertion errors (98 → 28), while Romanian deducts 185 (389 → 204). Reference-word counts remain unchanged because WER always divides by the original reference transcript length._
 
 See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and [`docs/quality-benchmark-report.md`](docs/quality-benchmark-report.md) for the detailed historical analysis.
 
@@ -250,9 +250,8 @@ Use [`tools/quality_benchmark/README.md`](tools/quality_benchmark/README.md) for
 
 ## Documentation
 
-Start at [`docs/README.md`](docs/README.md). It routes contributors and agents to the smallest relevant reference instead of requiring the full documentation set to be loaded.
+Start with [`AGENTS.md`](AGENTS.md) and [`docs/invariants.md`](docs/invariants.md), then open only the technical reference relevant to the changed behavior.
 
-- [`docs/invariants.md`](docs/invariants.md) — cross-component engineering contracts.
 - [`docs/architecture.md`](docs/architecture.md) — process/lifecycle architecture.
 - [`docs/api-contracts.md`](docs/api-contracts.md) — IPC/API semantics.
 - [`docs/test-strategy.md`](docs/test-strategy.md) — failure-path and seam-test rules.
