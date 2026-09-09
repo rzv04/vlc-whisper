@@ -113,16 +113,16 @@ Use **Control Panel > Programs > Uninstall a program**, Windows **Installed apps
 > [!INFO]
 > These are anecdotal project regression measurements, not general `whisper.cpp` benchmarks. They use a small 20-clip FLEURS subset (10 English, 10 Romanian) and the bundled `tiny` model with 4 CPU threads.
 
-| Language | Mode | WER | CER | Raw word errors / ref words | Est. errors excl. duplicate insertions* | Est. WER excl. duplicate insertions* |
+| Language | Mode | WER | CER | WER excl. duplicate insertions* | CER excl. duplicate insertions* | Raw word errors / ref words |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| **English (`en`)** | **Offline** | **10.38%** | **4.97%** | 22 / 212 | — | — |
-| **English (`en`)** | **Local media** | **10.38%** | **4.87%** | 22 / 212 | — | — |
-| **English (`en`)** | **Livestream** | **46.23%** | **39.32%** | 98 / 212 | **~28 / 212** | **~13.21%** |
-| **Romanian (`ro`)** | **Offline** | **93.03%** | **29.71%** | 227 / 244 | — | — |
-| **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | 219 / 244 | — | — |
-| **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | 389 / 244 | **~204 / 244** | **~83.61%** |
+| **English (`en`)** | **Offline** | **10.38%** | **4.97%** | **10.38%** | **4.97%** | 22 / 212 |
+| **English (`en`)** | **Local media** | **10.38%** | **4.87%** | **10.38%** | **4.87%** | 22 / 212 |
+| **English (`en`)** | **Livestream** | **46.23%** | **39.32%** | **~13.21%** | **N/A** | 98 / 212 |
+| **Romanian (`ro`)** | **Offline** | **93.03%** | **29.71%** | **93.03%** | **29.71%** | 227 / 244 |
+| **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | **89.75%** | **33.00%** | 219 / 244 |
+| **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | **~83.61%** | **N/A** | 389 / 244 |
 
-_*The adjusted livestream values are diagnostic estimates, not separately measured scores: English deducts 70 duplicate-insertion errors (98 → 28), while Romanian deducts 185 (389 → 204). Reference-word counts remain unchanged because WER always divides by the original reference transcript length._
+_*The livestream WER adjustment is a diagnostic estimate: the historical analysis deducted 70 duplicate word insertions for English and 185 for Romanian. The preserved benchmark did not record duplicate character-error counts or a de-duplicated livestream hypothesis corpus, so an adjusted livestream CER cannot be derived faithfully and is shown as N/A._
 
 See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and [`docs/quality-benchmark-report.md`](docs/quality-benchmark-report.md) for the detailed historical analysis.
 
