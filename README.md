@@ -113,16 +113,16 @@ Use **Control Panel > Programs > Uninstall a program**, Windows **Installed apps
 > [!INFO]
 > These are anecdotal project regression measurements, not general `whisper.cpp` benchmarks. They use a small 20-clip FLEURS subset (10 English, 10 Romanian) and the bundled `tiny` model with 4 CPU threads.
 
-| Language | Mode | WER | CER | WER excl. duplicate insertions* | CER excl. duplicate insertions* | Raw word errors / ref words |
+| Language | Mode | WER | CER | WER excl. insertions* | CER excl. insertions* | Raw word errors / ref words |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| **English (`en`)** | **Offline** | **10.38%** | **4.97%** | **10.38%** | **4.97%** | 22 / 212 |
-| **English (`en`)** | **Local media** | **10.38%** | **4.87%** | **10.38%** | **4.87%** | 22 / 212 |
-| **English (`en`)** | **Livestream** | **46.23%** | **39.32%** | **~13.21%** | **N/A** | 98 / 212 |
-| **Romanian (`ro`)** | **Offline** | **93.03%** | **29.71%** | **93.03%** | **29.71%** | 227 / 244 |
-| **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | **89.75%** | **33.00%** | 219 / 244 |
-| **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | **~83.61%** | **N/A** | 389 / 244 |
+| **English (`en`)** | **Offline** | **10.38%** | **4.97%** | **7.55%** | **3.77%** | 22 / 212 |
+| **English (`en`)** | **Local media** | **10.38%** | **4.87%** | **7.55%** | **3.67%** | 22 / 212 |
+| **English (`en`)** | **Livestream** | **46.23%** | **39.32%** | **10.38%** | **5.16%** | 98 / 212 |
+| **Romanian (`ro`)** | **Offline** | **93.03%** | **29.71%** | **74.59%** | **25.68%** | 227 / 244 |
+| **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | **75.82%** | **29.47%** | 219 / 244 |
+| **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | **69.67%** | **24.28%** | 389 / 244 |
 
-_*The livestream WER adjustment is a diagnostic estimate: the historical analysis deducted 70 duplicate word insertions for English and 185 for Romanian. The preserved benchmark did not record duplicate character-error counts or a de-duplicated livestream hypothesis corpus, so an adjusted livestream CER cannot be derived faithfully and is shown as N/A._
+_*The insertion-free columns are reconstructed diagnostic rates from the preserved per-sample hypotheses and references using the benchmark's normalizer and the same minimum Levenshtein-distance objective. They remove insertion edit operations from the error numerator while retaining substitutions, deletions, and the original reference denominator. Where multiple minimum-distance alignments exist, the reconstruction uses the minimum insertion count, making the adjustment conservative. These are not standard WER/CER scores; duplicate rolling-window re-emission is a major source of insertions in livestream mode, but the adjustment removes all aligned insertions rather than attempting to label individual insertions as duplicates._
 
 See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and [`docs/quality-benchmark-report.md`](docs/quality-benchmark-report.md) for the detailed historical analysis.
 
