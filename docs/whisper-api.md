@@ -602,6 +602,8 @@ After a token run is committed, a later rolling window may reproduce that same a
 
 Proximity alone is insufficient. Therefore a legitimate adjacent repetition such as `no, no` is preserved when the second `no` occupies a new non-overlapping acoustic interval.
 
+Confirmed output is transactional with immutable delivery. `vw_local_agreement_update()` runs against a temporary agreement-state copy; a zero-confirmation result may publish that hidden-state update immediately, but a result containing confirmed tokens advances the real committed tail/frontier only after the entire confirmed run formats into one cue and `vw_segment_builder_push_hypothesis()` accepts it. If formatting or builder acceptance fails, the real agreement state is unchanged so the same acoustic text remains eligible for later confirmation rather than being silently stripped as already committed.
+
 START/STOP live-mode changes are staged when dequeued but applied only when the worker reaches its already-validated segment-builder clear path. A stale or duplicate control cannot disable LocalAgreement before the worker's session-ID validation.
 
 Only committed text enters the existing immutable segment builder and SPU path; raw hypotheses are never displayed. This branch does not enable `no_context=false`, prompt tokens, fuzzy agreement, AlignAtt, or DTW alignment.

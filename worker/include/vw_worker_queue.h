@@ -35,8 +35,8 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
 // the queue's short internal mutex critical section.
 bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out);
 
-// Pops with worker lifecycle priority after HELLO, promoting session controls ahead of queued PCM and accounting any
-// obsolete audio discarded before the promoted transition.
+// Pops with lifecycle priority after HELLO, discarding stale PCM and POSITION state superseded by an accepted
+// transition while preserving unrelated frame ordering.
 bool vw_worker_queue_pop_prioritized(vw_worker_queue_t* q, vw_worker_frame_t* out);
 
 // Returns total microseconds of audio discarded by queue overflow or lifecycle invalidation using a relaxed atomic

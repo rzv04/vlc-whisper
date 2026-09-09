@@ -40,12 +40,13 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 - LocalAgreement committed-overlap suppression requires matching raw token text plus substantial overlap of the authentic absolute token timestamp intervals. A genuinely new adjacent repetition such as `no, no` must survive and require its own two-pass confirmation.
 - LocalAgreement uses authentic `whisper_full_get_token_t0/t1()` timing for committed text. Live latency metrics must therefore use the confirmed token run's actual first/last token PTS rather than interpolation across a segment.
 - LocalAgreement state resets on accepted session transitions, pause/discontinuity paths, and empty/invalid hypothesis passes. A stale or duplicate STOP must not disable agreement for the active session before the worker validates its session ID.
+- A confirmed LocalAgreement run must not advance the committed tail/frontier until the immutable segment builder accepts the complete cue. Builder rejection or formatting failure leaves the agreement state unchanged so the text can be reconfirmed rather than silently lost.
 - A seekable local file whose source decoder fails to open or seek may fall back to PCM forwarding, but it retains `VW_SOURCE_LOCAL_FILE` classification and therefore preserves the legacy 8-second startup / 2-second hop rather than entering progressive live scheduling or LocalAgreement.
 - Pause stops AUDIO forwarding and clears partial state; resume does not reuse a stale worker session.
 - End/stop clears captions and closes worker cleanly.
 - User seeks, changes rate, replaces media, or creates non-monotonic PTS: generated captions clear, VLC keeps playing, a single diagnostic appears, no crash. Every accepted live or source seek creates a fresh caption-session ID so buffered pre-seek source and translated cues are stale by construction.
 - Worker absent, wrong version, invalid token, model missing/corrupt, pipe disconnect, bad payload, invalid UTF-8, or worker nonzero exit: safe disable, no playback impact.
-- Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises. Worker lifecycle controls must preempt stale PCM in the enlarged 512-frame queue.
+- Sustained slow inference: queue stays bounded, old audio is dropped by policy, memory stays bounded, and drop counter rises. Worker lifecycle controls must preempt stale PCM in the enlarged 512-frame queue; older same-epoch `POSITION` state superseded by a promoted transition must not replay afterward.
 - Existing subtitle track and VLC-whisper behavior follow the documented coexistence policy.
 - Lua settings acceptance: opening the single dialog reports bundled/per-user model presence; `tiny.en` and `base.en`
   force `en` on Apply while the full language list remains visible; existing files offer re-download without blocking
@@ -55,7 +56,8 @@ Step 20 benchmark reports are aggregate, local, and key/value formatted. They in
 
 - `tests/unit/test_local_agreement.c`: first-pass withholding, exact common-prefix commitment, divergence replacement, committed-overlap removal for the same acoustic occurrence, preservation of adjacent repeated tokens at non-overlapping timestamps, reset semantics, empty-pass consecutiveness break, bounded formatting, raw-token whitespace preservation, and CJK token concatenation.
 - `tests/unit/test_worker_queue.c`: 512-frame capacity, ordinary FIFO/overflow ownership, lifecycle-prioritized worker pop, stale PCM invalidation before a promoted transition, and `dropped_audio_us` accounting.
-- Worker integration targets continue compiling `vw_worker.c` through the LocalAgreement remap layer, so live source classification exercises token-timestamp decoding and immutable commit delivery while local/lookahead paths delegate to the production engine/builder behavior.
+- `tests/unit/test_worker_queue_priority.c`: same-session lifecycle preemption, wrong-session and duplicate-START FIFO preservation, replacement-START invalidation, HELLO ordering, and PAUSE/RESUME suppression of older same-epoch `POSITION` snapshots without counting them as dropped audio.
+- Worker integration targets continue compiling `vw_worker.c` through the LocalAgreement remap layer, so live source classification exercises token-timestamp decoding and transactional immutable commit delivery while local/lookahead paths delegate to the production engine/builder behavior.
 - Manual live/network A/B runs compare this branch against current `main` using first sent-caption elapsed time and live utterance latency p50/p95. Expected confirmation cost is approximately one 1-second update interval when two successive hypotheses agree; that is an estimate, not a benchmark result.
 
 ### Automated failure-path coverage
@@ -121,7 +123,7 @@ Define the reference machine before claiming “real time”: CPU model/core cou
 - Current `main` live baseline: first inference after about 2 seconds, 1-second update/steady hop, context growing to 8 seconds, and a 500 ms growing-window edge holdback before immediate finalization.
 - LocalAgreement experiment: first inference timing is unchanged, but the first hypothesis is hidden and typical first stable output is expected roughly one update interval later when two passes agree. Measure this rather than claiming a startup-latency improvement over `main`.
 - End-to-caption latency: target p95 below 5 seconds for the production baseline. For the experimental branch, report measured first-caption elapsed and live utterance p50/p95 separately; WER may remain high and no latency/quality estimate is a release claim until A/B data exists.
-- No unbounded queue; the worker inbound queue is 512 frames (~10.2 seconds at 20 ms cadence), while the plugin SPSC audio backlog remains 8 seconds. Lifecycle controls preempt stale queued PCM rather than waiting behind the worker backlog.
+- No unbounded queue; the worker inbound queue is 512 frames (~10.2 seconds at 20 ms cadence), while the plugin SPSC audio backlog remains 8 seconds. Lifecycle controls preempt stale queued PCM and discard superseded same-epoch POSITION state rather than waiting behind or replaying the worker backlog.
 
 These targets are engineering gates, not a guarantee for every PC or noisy source.
 

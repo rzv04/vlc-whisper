@@ -67,10 +67,10 @@ vlc-whisper/
 │   │   ├── vw_worker.c                        # Worker IPC state machine, look-ahead decoding & message loop
 │   │   ├── vw_source_decoder_mf.c             # Windows Media Foundation native audio source demuxer
 │   │   ├── vw_source_decoder_ffmpeg.c         # Linux FFmpeg native audio source demuxer
-│   │   ├── vw_worker_queue.c                  # Bounded worker frame queue (reader -> main loop handoff)
+│   │   ├── vw_worker_queue.c                  # Bounded worker queue with lifecycle priority and stale state suppression
 │   │   ├── vw_whisper_engine.c                # Model load/unload, whisper_full inference, confidence & segment accessors
 │   │   ├── vw_local_agreement.c               # Experimental exact-prefix agreement and timestamp-aware overlap suppression
-│   │   ├── vw_local_agreement_hooks.c         # Live-only worker interposition for token timestamps and immutable commits
+│   │   ├── vw_local_agreement_hooks.c         # Live worker interposition with transactional immutable commit delivery
 │   │   ├── vw_vad.c                           # Silero GGML VAD integration, chunk boundary finding & RMS energy fallback
 │   │   ├── vw_hallucination_filter.c          # Sound descriptor tag stripping and isolated punctuation filter
 │   │   ├── vw_segment_builder.c               # Segment dedup (final subtitles), queue growth
@@ -120,6 +120,7 @@ vlc-whisper/
 │   │   ├── test_hallucination_filter.c        # Non-speech tag & isolated punctuation filter tests
 │   │   ├── test_segment_builder.c             # Segment overlap & deduplication unit tests
 │   │   ├── test_local_agreement.c             # LocalAgreement prefix, reset, CJK/raw-token, and repeated-token tests
+│   │   ├── test_worker_queue_priority.c       # Lifecycle priority, stale POSITION suppression, and epoch-order tests
 │   │   ├── test_caption_timing.c              # pts_us timestamp arithmetic and formatting tests
 │   │   ├── test_benchmark.c                   # Per-session metric and temporary report tests
 │   │   ├── test_caption_presenter.c           # Caption cue conversion, reading floor & rate scaling tests
@@ -200,10 +201,11 @@ The VLC audio callback may only do bounded non-blocking work. It must never wait
 | `vw_worker.c`          | IPC event loop, protocol dispatch, look-ahead decoding & state     |
 | `vw_source_decoder_mf.c` | Windows Media Foundation native audio demuxer & resampler        |
 | `vw_source_decoder_ffmpeg.c` | Linux FFmpeg native audio demuxer & resampler                |
+| `vw_worker_queue.c`    | Bounded reader-to-main queue; validated lifecycle promotion discards superseded PCM/POSITION state |
 | `vw_whisper_engine.c`  | Whisper C API adapter: model load/unload, inference timing, per-segment accessors |
 | `vw_local_agreement.h` | Experimental bounded LocalAgreement-2 state over raw Whisper text tokens and authentic token PTS |
 | `vw_local_agreement.c` | Exact two-pass prefix agreement plus timestamp-interval overlap suppression that preserves adjacent repeated tokens |
-| `vw_local_agreement_hooks.c` | Live-only worker remaps: token-timestamp decode, accepted-control gating, immutable commit delivery |
+| `vw_local_agreement_hooks.c` | Live-only worker remaps: token-timestamp decode, accepted-control gating, transactional immutable commit delivery |
 | `vw_vad.c`             | Voice-activity detection state and window decisions                |
 | `vw_audio_buffer.c`    | PCM accumulation, window extraction, overlap                       |
 | `vw_segment_builder.c` | Ordered timed segments, final-subtitles dedup, dynamic queue growth |
@@ -223,7 +225,15 @@ commit only the exact raw-token prefix shared by consecutive hypotheses. Committ
 requires matching token text and substantial overlap of the authentic absolute timestamp intervals, so a newly spoken
 adjacent repetition such as `no, no` is not erased merely because it occurs close to the preceding cue. START/STOP mode
 changes are staged at dequeue and applied only when the worker reaches its already-validated `builder_clear()` path;
-a stale or duplicate control therefore cannot disable LocalAgreement for the active session.
+a stale or duplicate control therefore cannot disable LocalAgreement for the active session. Confirmed-token updates
+are transactional with the immutable builder: the agreement committed tail/frontier advances only after the complete
+confirmed run formats successfully and `vw_segment_builder_push_hypothesis()` accepts it. A rejected run remains
+uncommitted and can be confirmed again on a later pass instead of being silently lost.
+
+The worker's prioritized dequeue validates lifecycle controls against the nearest preceding AUDIO or POSITION epoch.
+When a valid lifecycle transition is promoted, older PCM is dropped with duration accounting and older POSITION state
+is discarded without audio accounting, preventing a pre-PAUSE/RESUME paused flag from being replayed after the newer
+control. Wrong-session controls and duplicate START remain FIFO for the worker's authoritative validation.
 
 The builder exposes `vw_segment_builder_push_hypothesis` (whole-phrase final-subtitles dedup: exact,
 fragment, and expanded superstring hypotheses are dropped; queue grows dynamically; history commits after a
@@ -259,7 +269,7 @@ Payload structs are constructed at call sites with C99 designated initializers (
 
 ## Tests
 
-- `tests/unit/`: codec/validation, queue policy, audio capture, segment building, LocalAgreement token-prefix/overlap behavior, caption timing, platform abstraction, worker-client source seek epoch regression.
+- `tests/unit/`: codec/validation, queue policy including lifecycle/POSITION ordering, audio capture, segment building, LocalAgreement token-prefix/overlap behavior, caption timing, platform abstraction, worker-client source seek epoch regression.
 - `tests/integration/`: worker process, pipe handshake, lifecycle/errors/cleanup.
 - `tests/e2e/`: repeatable manual test of the pinned VLC build and local English video.
 - `tests/fixtures/`: legal, small, deterministic offline input data only.

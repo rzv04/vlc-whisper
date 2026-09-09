@@ -53,6 +53,18 @@ static uint8_t* make_start_payload(uint8_t session_marker, uint32_t* out_len) {
   return buf;
 }
 
+static uint8_t* make_position_payload(uint8_t session_marker, uint32_t flags, uint32_t* out_len) {
+  vw_msg_position_t position = {
+      .current_pts_us = 1000000, .input_time_us = 1000000, .playback_rate = 1.0f, .flags = flags};
+  fill_session(&position.session_id, session_marker);
+  uint8_t* buf = (uint8_t*)malloc(128);
+  EXPECT(buf != NULL);
+  size_t written = 0;
+  EXPECT(vw_protocol_encode_payload(VW_MSG_POSITION, &position, buf, 128, &written));
+  *out_len = (uint32_t)written;
+  return buf;
+}
+
 int main(void) {
   vw_worker_queue_t* q = vw_worker_queue_create(VW_WORKER_FRAME_QUEUE_CAPACITY);
   EXPECT(q != NULL);
@@ -135,6 +147,52 @@ int main(void) {
   EXPECT(vw_worker_queue_get_dropped_audio_us(replacement) == 175000);
   EXPECT(!vw_worker_queue_pop_prioritized(replacement, &frame));
   vw_worker_queue_destroy(replacement);
+
+  // A same-session PAUSE supersedes older unpaused POSITION state; the stale position must not replay afterward.
+  vw_worker_queue_t* pause_position = vw_worker_queue_create(4);
+  EXPECT(pause_position != NULL);
+  uint32_t position_len = 0, position_pause_len = 0;
+  uint8_t* position = make_position_payload(8, 0, &position_len);
+  uint8_t* position_pause = make_control_payload(VW_MSG_PAUSE, 8, &position_pause_len);
+  EXPECT(vw_worker_queue_push(pause_position, VW_MSG_POSITION, position, position_len));
+  EXPECT(vw_worker_queue_push(pause_position, VW_MSG_PAUSE, position_pause, position_pause_len));
+  EXPECT(vw_worker_queue_pop_prioritized(pause_position, &frame));
+  EXPECT(frame.type == VW_MSG_PAUSE);
+  free(frame.payload);
+  EXPECT(vw_worker_queue_get_dropped_audio_us(pause_position) == 0);
+  EXPECT(!vw_worker_queue_pop_prioritized(pause_position, &frame));
+  vw_worker_queue_destroy(pause_position);
+
+  // A same-session RESUME likewise supersedes an older paused POSITION snapshot.
+  vw_worker_queue_t* resume_position = vw_worker_queue_create(4);
+  EXPECT(resume_position != NULL);
+  uint32_t paused_position_len = 0, resume_len = 0;
+  uint8_t* paused_position = make_position_payload(9, VW_POSITION_FLAG_PAUSED, &paused_position_len);
+  uint8_t* resume = make_control_payload(VW_MSG_RESUME, 9, &resume_len);
+  EXPECT(vw_worker_queue_push(resume_position, VW_MSG_POSITION, paused_position, paused_position_len));
+  EXPECT(vw_worker_queue_push(resume_position, VW_MSG_RESUME, resume, resume_len));
+  EXPECT(vw_worker_queue_pop_prioritized(resume_position, &frame));
+  EXPECT(frame.type == VW_MSG_RESUME);
+  free(frame.payload);
+  EXPECT(!vw_worker_queue_pop_prioritized(resume_position, &frame));
+  vw_worker_queue_destroy(resume_position);
+
+  // Wrong-session lifecycle controls must not jump ahead of a POSITION belonging to another active epoch.
+  vw_worker_queue_t* wrong_position = vw_worker_queue_create(4);
+  EXPECT(wrong_position != NULL);
+  uint32_t wrong_position_len = 0, wrong_position_pause_len = 0;
+  uint8_t* active_position = make_position_payload(10, 0, &wrong_position_len);
+  uint8_t* stale_pause = make_control_payload(VW_MSG_PAUSE, 11, &wrong_position_pause_len);
+  EXPECT(vw_worker_queue_push(wrong_position, VW_MSG_POSITION, active_position, wrong_position_len));
+  EXPECT(vw_worker_queue_push(wrong_position, VW_MSG_PAUSE, stale_pause, wrong_position_pause_len));
+  EXPECT(vw_worker_queue_pop_prioritized(wrong_position, &frame));
+  EXPECT(frame.type == VW_MSG_POSITION);
+  EXPECT(frame.payload == active_position);
+  free(frame.payload);
+  EXPECT(vw_worker_queue_pop_prioritized(wrong_position, &frame));
+  EXPECT(frame.type == VW_MSG_PAUSE);
+  free(frame.payload);
+  vw_worker_queue_destroy(wrong_position);
 
   // Authentication ordering is never bypassed even when START is already queued behind HELLO.
   vw_worker_queue_t* auth = vw_worker_queue_create(4);
