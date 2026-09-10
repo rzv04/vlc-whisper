@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 
 add_executable(vlc-whisper-settings-spike
-    src/main.cpp
+    src/vw_qt_settings_main.cpp
 )
 
 target_link_libraries(vlc-whisper-settings-spike PRIVATE Qt6::Widgets)
