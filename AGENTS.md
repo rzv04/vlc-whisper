@@ -4,7 +4,7 @@ This repository enforces strict C17 standards, architectural invariants, and pri
 
 ## Core Directives
 
-1. **C17 Language Standard**: All authored code is standard C17 (`-std=c17`). No project-authored C++ code. Third-party `whisper.cpp` is linked via its public C API (`whisper.h`).
+1. **C17 Language Standard**: All production project-authored runtime code is standard C17 (`-std=c17`). No project-authored C++ code is permitted except the explicitly approved, isolated `spikes/qt-settings/` Qt Widgets feasibility spike, which may use C++17 solely to exercise Qt's C++ API and must remain outside the root build, CI, packaging, plugin, protocol, and worker until an ADR explicitly accepts a production exception. Third-party `whisper.cpp` is linked via its public C API (`whisper.h`).
 2. **Code Style**: 2-space indentation, 120-column limit, Google C style rules. Use `clang-format`.
 3. **Symbol Namespacing**: All functions, types, macros, and files use the `vw_` prefix (e.g. `vw_protocol_codec.c`, `vw_frame_header_t`).
 4. **VLC Realtime Callback Safety**: NEVER perform inference, IPC write/read, blocking locks, or heap allocation inside VLC audio callbacks. Enqueue PCM to bounded SPSC queue only.
