@@ -15,8 +15,9 @@ The codebase is an ensemble: a native C17 VLC integration module, an isolated lo
 | `protocol/` | Versioned frames, encoding, decoding, validation, transport abstraction                | VLC or Whisper APIs, application policy                  |
 | `models/`   | Local GGML whisper model binary storage and model manifest validation                  | Model downloading over network at runtime                |
 | `tests/`    | Automated verification, fixtures, manual E2E procedure                                 | Production implementation logic                          |
+| `spikes/qt-settings/` | Isolated Qt 6 Widgets settings-frontend feasibility code and CWD-local `settings.json` persistence | VLC/plugin/worker IPC, network access, or production packaging |
 
-All project-authored source is C17. The pinned `whisper.cpp` dependency may contain C/C++, but project-owned plugin code remains C.
+Production project-authored runtime source is C17. The pinned `whisper.cpp` dependency may contain C/C++, but project-owned plugin code remains C. The explicitly approved `spikes/qt-settings/` feasibility spike is the sole project-authored C++17 exception; it is excluded from the root build, CI, and packaging unless a future ADR accepts a production Qt frontend.
 
 ## Repository Tree
 
@@ -143,6 +144,12 @@ vlc-whisper/
 │   ├── audio/                                 # Sample audio test files (output.wav, harvard.wav)
 │   └── snippets/                              # Standalone C17 sample code files
 │       └── vw_sample_whisper_pcm.c            # 16kHz WAV reader, float resampler & Whisper runner
+├── spikes/                                    # Isolated feasibility work; excluded from root build and packaging
+│   └── qt-settings/                           # Standalone Qt 6 Widgets settings frontend feasibility spike
+│       ├── CMakeLists.txt                     # Independent Qt 6 C++17 build target
+│       ├── README.md                          # Linux/Windows build, runtime, and deployment checks
+│       └── src/
+│           └── vw_qt_settings_main.cpp        # Interactive settings UI and atomic CWD-local JSON persistence
 ├── cmake/                                     # Build system configurations & toolchains
 │   ├── vw_packaging.cmake                     # Explicit release model allowlist, NSIS/CPack & CPU fallback staging
 │   ├── vw_provision_model.cmake               # Verify existing pinned model hash or opt-in download + verify
