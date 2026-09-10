@@ -1,35 +1,44 @@
 # Contributing to VLC-Whisper
 
-Thank you for contributing to VLC-Whisper! Please review the following guidelines and architectural invariants before submitting pull requests.
+Start with root `AGENTS.md`. It is the canonical coding/invariant rule set. Open only the technical references relevant to your change.
 
----
+## Before implementation
 
-## Core Directives & Standards
+For meaningful behavior changes:
 
-1. **C17 Language Standard**: All authored code must comply with standard C17 (`-std=c17`). No project-authored C++ code is permitted. Third-party `whisper.cpp` is linked exclusively via its public C API (`whisper.h`).
-2. **Code Style & Formatting**: 2-space indentation, 120-column limit, Google C style rules. Format code using `clang-format`.
-3. **Symbol Namespacing**: All functions, types, macros, and file names must use the `vw_` prefix (e.g., `vw_protocol_codec.c`, `vw_frame_header_t`).
-4. **VLC Realtime Callback Safety**: NEVER perform inference, IPC write/read, blocking locks, or heap allocation (`malloc`/`calloc`) inside VLC audio callbacks (`pf_audio_filter`). Enqueue PCM to the bounded SPSC queue only.
-5. **Offline & Privacy Invariants**: Authenticated local IPC only (named pipe on Windows, Unix domain socket on Linux with a 32-byte secret token). Zero network requests, cloud APIs, telemetry, or transcript/PCM disk logging.
-6. **Timeline Synchronization**: Use signed 64-bit microsecond media timestamps (`int64_t pts_us`). Never use wall-clock time for caption timing.
-7. **Discontinuity Handling**: Seeking, rate changes, or media swaps clear captions and end the caption session gracefully without affecting VLC media playback.
-8. **Header Documentation**: Every non-third-party function in `.h` header files must have a concise (20–30 words) doc comment explaining its behavior and any realtime constraints.
+1. Inspect the changed component, callers/consumers, and affected contract.
+2. Map `producer -> boundary -> consumer -> lifecycle owner`.
+3. Define external failure handling before the happy path.
+4. Write failure/boundary/seam specs first when behavior crosses components.
 
-9. **Versioning**: VLC-Whisper follows Semantic Versioning. During the 0.x phase, patch releases contain fixes and small non-breaking changes; minor releases may introduce new features or behavior changes. Public releases are tagged as vMAJOR.MINOR.PATCH.
+Use `ai/task-template.md` for high-risk work and `docs/invariants.md` for the canonical contract set.
 
----
+## Test convention
 
-## Verification Checklist
+New C failure/contract tests use PR #50-style named accumulating expectations (`vw_test_check_true` / `vw_test_check_false`) and one `vw_test_finish`. Expectation names state behavior in plain language. Existing small fail-fast unit tests may keep legacy `EXPECT` macros.
 
-Before submitting a PR, verify that all three verification checks pass:
+A fixed known defect should gain a named regression where practical. Do not weaken tests to make an implementation green.
+
+## Core code rules
+
+- Project-authored C is C17, 2-space Google style, 120 columns, `vw_` namespacing.
+- VLC audio callbacks perform bounded non-blocking capture/queue work only, with zero heap allocation.
+- Preserve signed 64-bit media PTS and explicit discontinuities.
+- Distinct transient/EOF/error states stay distinct.
+- Identity-bearing values reject overflow instead of truncating.
+- Session-scoped state defines reset/finalize behavior for affected lifecycle transitions.
+- Metrics have one authoritative producer, units, reset domain, and fallback policy.
+- Transcription remains local; only documented explicit model-download/opt-in translation network paths are allowed.
+- No implicit runtime transcript/PCM persistence; explicit local subtitle exports and git-ignored developer benchmark text artifacts are allowed.
+
+## Verification
 
 ```bash
-# 1. Code format check
-clang-format --dry-run --Werror <modified-files>
-
-# 2. Native debug build & unit test suite
-cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug && ctest --preset linux-x64-debug --output-on-failure
-
-# 3. Valgrind memory leak check
+clang-format --dry-run --Werror <modified-c-files>
+cmake --preset linux-x64-debug
+cmake --build --preset linux-x64-debug
+ctest --preset linux-x64-debug --output-on-failure
 ctest --test-dir build/linux-x64-debug -T memcheck
 ```
+
+Update only documentation whose canonical contract changed. Use Conventional Commits and the pull-request template.
