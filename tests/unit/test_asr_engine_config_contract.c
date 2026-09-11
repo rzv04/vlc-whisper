@@ -16,12 +16,14 @@ int main(void) {
   vw_test_check_true("known experimental Nemotron ASR engine identity is accepted",
                      vw_worker_config_parse_args(&config, 3, nemotron_args) == 0);
 
-  vw_test_check_true("worker config reinitializes before unknown-engine parsing", vw_worker_config_init_defaults(&config));
+  vw_test_check_true("worker config reinitializes before unknown-engine parsing",
+                     vw_worker_config_init_defaults(&config));
   char* unknown_args[] = {"vlc-whisper-worker", "--asr-engine", "not-an-engine", NULL};
   vw_test_check_true("unknown ASR engine identity is rejected",
                      vw_worker_config_parse_args(&config, 3, unknown_args) == 2);
 
-  vw_test_check_true("worker config reinitializes before oversized-engine parsing", vw_worker_config_init_defaults(&config));
+  vw_test_check_true("worker config reinitializes before oversized-engine parsing",
+                     vw_worker_config_init_defaults(&config));
   char oversized_engine[128];
   memset(oversized_engine, 'x', sizeof(oversized_engine));
   oversized_engine[sizeof(oversized_engine) - 1U] = '\0';
