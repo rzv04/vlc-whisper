@@ -51,6 +51,8 @@ endif()
 
 add_vw_test(test_worker_config unit/test_worker_config.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
 target_link_libraries(test_worker_config PRIVATE whisper)
+add_vw_test(test_asr_engine_config_contract unit/test_asr_engine_config_contract.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
+target_link_libraries(test_asr_engine_config_contract PRIVATE whisper)
 add_vw_test(test_audio_buffer unit/test_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c)
 add_vw_test(test_vad unit/test_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c)
 target_link_libraries(test_vad PRIVATE whisper)
