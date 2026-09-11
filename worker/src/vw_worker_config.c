@@ -8,8 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "whisper.h"
-
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
@@ -107,7 +105,7 @@ static bool vw_worker_config_get_executable_dir(char* out, size_t out_size) {
   if (!slash) return false;
 
   size_t dir_length = (size_t)(slash - executable_path);
-  if (dir_length == 0) dir_length = 1;  // Preserve the filesystem root (e.g. /worker).
+  if (dir_length == 0) dir_length = 1;
   if (dir_length >= out_size) return false;
   memcpy(out, executable_path, dir_length);
   out[dir_length] = '\0';
@@ -130,7 +128,7 @@ static bool vw_worker_config_join_path(char* out, size_t out_size, const char* d
 
 // Parse a 64-char hex string into a 32-byte token. Returns true on success.
 static bool vw_token_from_hex(const char* hex, uint8_t out[VW_AUTH_TOKEN_BYTES]) {
-  if (strlen(hex) != VW_AUTH_TOKEN_BYTES * 2) return false;  // must be exactly 64 hex chars
+  if (strlen(hex) != VW_AUTH_TOKEN_BYTES * 2) return false;
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) {
     unsigned hi, lo;
     char c1 = hex[i * 2], c2 = hex[i * 2 + 1];
@@ -235,7 +233,6 @@ bool vw_worker_config_resolve_vad_model_path(const vw_worker_config_t* config, c
                effective_model_path ? effective_model_path : "", config->model_dir, config->vad_model_path);
   vw_worker_config_log_cwd();
 
-  // 1. Explicit --vad-model always wins, even if the worker later reports it invalid.
   if (config->vad_model_path[0] != '\0') {
     if (strlen(config->vad_model_path) >= out_size) return false;
     snprintf(out, out_size, "%s", config->vad_model_path);
@@ -243,16 +240,10 @@ bool vw_worker_config_resolve_vad_model_path(const vw_worker_config_t* config, c
     return true;
   }
 
-  // 2. Prefer the VAD sibling of the fully resolved Whisper model.
   if (vw_worker_config_vad_beside(effective_model_path, out, out_size)) return true;
-
-  // 3. Probe --model-dir directly when the effective model has no VAD sibling.
   if (vw_worker_config_vad_in_dir("model-dir", config->model_dir, out, out_size)) return true;
-
-  // 4. Probe the installed VLC models directory independently of the launcher's working directory.
   if (vw_worker_config_vad_in_install_dir(out, out_size)) return true;
 
-  // 5. Retain standard candidate paths relative to CWD for compatibility.
   static const char* const k_vad_candidates[] = {
       "models/ggml-silero-vad.bin",       "ggml-silero-vad.bin",           "../../../models/ggml-silero-vad.bin",
       "../../models/ggml-silero-vad.bin", "../models/ggml-silero-vad.bin", NULL};
@@ -279,6 +270,7 @@ bool vw_worker_config_init_defaults(vw_worker_config_t* config) {
   strncpy(config->language, "en", sizeof(config->language) - 1);
   config->n_threads = 4;
   config->sample_rate = 16000;
+  config->asr_engine = VW_ASR_ENGINE_WHISPER;
   config->backend = VW_WORKER_BACKEND_AUTO;
   config->gpu_device = 0;
   config->vad_model_path[0] = '\0';
@@ -342,6 +334,20 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
       config->logging_enabled = true;
     } else if (strcmp(argv[i], "--enable-logging") == 0) {
       config->logging_enabled = true;
+    } else if (strcmp(argv[i], "--asr-engine") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "missing value for --asr-engine\n");
+        return 2;
+      }
+      const char* engine_id = argv[++i];
+      if (strcmp(engine_id, "whisper") == 0) {
+        config->asr_engine = VW_ASR_ENGINE_WHISPER;
+      } else if (strcmp(engine_id, "nemotron") == 0) {
+        config->asr_engine = VW_ASR_ENGINE_NEMOTRON;
+      } else {
+        fprintf(stderr, "bad --asr-engine: expected whisper|nemotron, got '%s'\n", engine_id);
+        return 2;
+      }
     } else if (strcmp(argv[i], "--backend") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --backend\n");
@@ -384,10 +390,6 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "bad --language: 'auto' is not a concrete transcription language\n");
         return 2;
       }
-      if (whisper_lang_id(lang) < 0) {
-        fprintf(stderr, "bad --language: unknown Whisper language '%s' (use whisper_lang_id list)\n", lang);
-        return 2;
-      }
       snprintf(config->language, sizeof(config->language), "%s", lang);
     } else if (strcmp(argv[i], "--n-threads") == 0) {
       if (i + 1 >= argc) {
@@ -424,7 +426,6 @@ bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char*
   const char* filename = vw_worker_config_basename(config->model_path);
   if (!filename || !filename[0]) return false;
 
-  // Prefer the per-user directory because downloaded models are intentionally user-owned.
   if (config->model_dir[0]) {
     char candidate[VW_PATH_MAX_BYTES];
     if (vw_worker_config_join_path(candidate, sizeof(candidate), config->model_dir, filename) &&
@@ -435,7 +436,6 @@ bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char*
     }
   }
 
-  // Bundled models live beside the worker installation, not necessarily beneath the launcher's CWD.
   char executable_dir[VW_PATH_MAX_BYTES];
   char install_model_dir[VW_PATH_MAX_BYTES];
   if (vw_worker_config_get_executable_dir(executable_dir, sizeof(executable_dir)) &&
