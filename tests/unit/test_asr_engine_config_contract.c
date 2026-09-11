@@ -6,6 +6,7 @@
 int main(void) {
   vw_worker_config_t config;
 
+  // Engine identity is independent from inference backend selection.
   vw_test_check_true("worker config initializes before ASR-engine parsing", vw_worker_config_init_defaults(&config));
   char* whisper_args[] = {"vlc-whisper-worker", "--asr-engine", "whisper", NULL};
   vw_test_check_true("explicit Whisper ASR engine is accepted",
