@@ -4,7 +4,7 @@ set -eu
 REPO="rzv04/vlc-whisper"
 MIN_VLC="3.0.23"
 PACKAGE="vlc-whisper-linux-amd64.deb"
-CHECKSUM="vlc-whisper-linux-amd64.SHA256"
+CHECKSUM="vlc-whisper-linux-amd64.deb.sha256"
 BASE="https://github.com/${REPO}/releases/latest/download"
 
 die() {
