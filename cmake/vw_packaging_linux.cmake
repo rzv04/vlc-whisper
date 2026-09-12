@@ -64,16 +64,17 @@ install(FILES
 # Runtime discovery expects models adjacent to the worker, while the Lua extension
 # uses VLC's data directory. One symlink satisfies both without duplicating models.
 install(CODE "
-  set(_vw_models_link \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${VW_LINUX_VLC_ROOT}/models\")
+  set(_vw_models_link \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${VW_LINUX_VLC_ROOT}/models\")
+  set(_vw_models_target \"\${CMAKE_INSTALL_PREFIX}/${VW_LINUX_MODEL_DIR}\")
   if(IS_SYMLINK \"\${_vw_models_link}\")
-    file(READ_SYMLINK \"\${_vw_models_link}\" _vw_models_target)
-    if(NOT _vw_models_target STREQUAL \"${CMAKE_INSTALL_PREFIX}/${VW_LINUX_MODEL_DIR}\")
+    file(READ_SYMLINK \"\${_vw_models_link}\" _vw_existing_target)
+    if(NOT _vw_existing_target STREQUAL \"\${_vw_models_target}\")
       message(FATAL_ERROR \"VW: existing models symlink points to an unexpected location\")
     endif()
   elseif(EXISTS \"\${_vw_models_link}\")
     message(FATAL_ERROR \"VW: refusing to replace existing VLC models path: \${_vw_models_link}\")
   else()
-    file(CREATE_LINK \"${CMAKE_INSTALL_PREFIX}/${VW_LINUX_MODEL_DIR}\" \"\${_vw_models_link}\" SYMBOLIC)
+    file(CREATE_LINK \"\${_vw_models_target}\" \"\${_vw_models_link}\" SYMBOLIC)
   endif()
 ")
 
