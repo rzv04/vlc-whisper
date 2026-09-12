@@ -216,25 +216,18 @@ Section "VLC Plugin & AI Engine" SecCore
   SectionIn RO
 
   DetailPrint "Checking for running VLC..."
-  Call IsVLCProcessRunning
-  Pop $0
-  ${If} $0 == 1
-    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-      "VLC is currently running. Please close VLC before installing.$\r$\nClick OK after closing VLC to continue, or Cancel to abort." \
-      IDOK vlc_closed IDCANCEL vlc_abort
-    vlc_closed:
-      Call IsVLCProcessRunning
-      Pop $0
-      ${If} $0 == 1
-        MessageBox MB_OK|MB_ICONSTOP "VLC is still running. Installation aborted to avoid terminating unrelated VLC instances. Please close VLC and run the installer again."
-        SetErrorLevel 1
-        Quit
-      ${EndIf}
-      Goto no_vlc_running
-    vlc_abort:
-      SetErrorLevel 1
-      Quit
-  ${EndIf}
+  check_vlc_running:
+    Call IsVLCProcessRunning
+    Pop $0
+    ${If} $0 == 1
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+        "VLC is currently running. Please close VLC before installing.$\r$\nClick Retry after closing VLC to continue, or Cancel to abort." \
+        IDRETRY check_vlc_running IDCANCEL vlc_abort
+    ${EndIf}
+    Goto no_vlc_running
+  vlc_abort:
+    SetErrorLevel 1
+    Quit
   no_vlc_running:
 
   DetailPrint "Stopping owned worker processes..."
