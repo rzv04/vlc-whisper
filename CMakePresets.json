@@ -58,6 +58,20 @@
       }
     },
     {
+      "name": "linux-x64-release",
+      "displayName": "Linux x64 Release",
+      "description": "Native Ubuntu/Debian x64 release build with Vulkan and DEB packaging",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "/usr",
+        "BUILD_TESTING": "OFF",
+        "VW_REQUIRE_VULKAN": "ON",
+        "VW_PROVISION_MODELS": "ON"
+      }
+    },
+    {
       "name": "linux-x64-debug",
       "displayName": "Linux x64 Debug (Host Native)",
       "description": "Native Linux x64 debug build for unit tests and local protocol checks",
@@ -109,6 +123,10 @@
     {
       "name": "windows-x64-debug-cpu",
       "configurePreset": "windows-x64-debug-cpu"
+    },
+    {
+      "name": "linux-x64-release",
+      "configurePreset": "linux-x64-release"
     },
     {
       "name": "linux-x64-debug",

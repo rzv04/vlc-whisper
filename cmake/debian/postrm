@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+plugin_file="$(dpkg-query -L vlc-plugin-base 2>/dev/null | awk '/\/vlc\/plugins\/.*_plugin\.so$/ { print; exit }')"
+cache_gen="$(dpkg-query -L libvlc-bin 2>/dev/null | awk '/\/vlc\/vlc-cache-gen$/ { print; exit }')"
+
+if [ -n "$plugin_file" ] && [ -n "$cache_gen" ] && [ -x "$cache_gen" ]; then
+  plugin_root="$(dirname "$(dirname "$plugin_file")")"
+  "$cache_gen" "$plugin_root" >/dev/null 2>&1 || true
+fi
+
+exit 0
