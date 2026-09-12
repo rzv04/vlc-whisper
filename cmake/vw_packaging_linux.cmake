@@ -18,6 +18,11 @@ if(NOT VW_LINUX_MULTIARCH MATCHES "^x86_64-")
   message(FATAL_ERROR "VW: Linux release packaging currently supports Debian amd64/x86_64 only")
 endif()
 
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(VW_RELEASE_FFMPEG REQUIRED libavformat libavcodec libswresample libavutil)
+endif()
+
 set(VW_LINUX_VLC_ROOT "lib/${VW_LINUX_MULTIARCH}/vlc")
 set(VW_LINUX_VLC_PLUGIN_DIR "${VW_LINUX_VLC_ROOT}/plugins/audio_filter")
 set(VW_LINUX_VLC_LUA_DIR "${VW_LINUX_VLC_ROOT}/lua/extensions")
