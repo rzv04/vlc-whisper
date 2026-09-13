@@ -14,26 +14,26 @@
 #include "vw_test.h"
 #include "vw_translate.h"
 
-typedef enum vw_blame_hook_mode {
-  VW_BLAME_HOOK_TRANSPORT,
-  VW_BLAME_HOOK_PROVIDER,
-  VW_BLAME_HOOK_PARSE,
-  VW_BLAME_HOOK_DEADLINE,
-} vw_blame_hook_mode_t;
+typedef enum blame_mode {
+  BLAME_TRANSPORT,
+  BLAME_PROVIDER,
+  BLAME_PARSE,
+  BLAME_DEADLINE,
+} blame_mode_t;
 
-typedef struct vw_blame_hook_state {
-  vw_blame_hook_mode_t mode;
+typedef struct hook_state {
+  blame_mode_t mode;
   unsigned calls;
-} vw_blame_hook_state_t;
+} hook_state_t;
 
-typedef struct vw_blame_log_capture {
+typedef struct log_capture {
   vw_log_level_t level;
   char event_id[64];
   char message[512];
   unsigned count;
-} vw_blame_log_capture_t;
+} log_capture_t;
 
-static void vw_blame_sleep_ms(uint32_t ms) {
+static void sleep_ms(uint32_t ms) {
 #ifdef _WIN32
   Sleep(ms);
 #else
@@ -43,133 +43,121 @@ static void vw_blame_sleep_ms(uint32_t ms) {
 #endif
 }
 
-static vw_translate_test_http_outcome_t vw_blame_http_hook(const char* host, const char* path, const char* body,
-                                                            const char* content_type, char* out_buf, size_t buf_size,
-                                                            uint32_t timeout_ms, uint16_t* out_status,
-                                                            void* user_data) {
+static vw_translate_test_http_outcome_t http_hook(const char* host, const char* path, const char* body,
+                                                  const char* type, char* out, size_t cap, uint32_t timeout_ms,
+                                                  uint16_t* status, void* data) {
   (void)host;
   (void)path;
   (void)body;
-  (void)content_type;
-  vw_blame_hook_state_t* state = (vw_blame_hook_state_t*)user_data;
+  (void)type;
+  hook_state_t* state = (hook_state_t*)data;
   state->calls++;
-  if (out_status) *out_status = 0;
+  if (status) *status = 0;
 
-  if (state->mode == VW_BLAME_HOOK_PROVIDER) {
-    if (out_status) *out_status = 429;
+  if (state->mode == BLAME_PROVIDER) {
+    if (status) *status = 429;
     return VW_TRANSLATE_TEST_HTTP_PROVIDER;
   }
-  if (state->mode == VW_BLAME_HOOK_DEADLINE) {
-    vw_blame_sleep_ms(timeout_ms);
+  if (state->mode == BLAME_DEADLINE) {
+    sleep_ms(timeout_ms);
     return VW_TRANSLATE_TEST_HTTP_DEADLINE;
   }
-  if (state->mode == VW_BLAME_HOOK_PARSE) {
+  if (state->mode == BLAME_PARSE) {
     const char* malformed = "provider-response-without-translation";
     size_t len = strlen(malformed);
-    if (len + 1U < buf_size) memcpy(out_buf, malformed, len + 1U);
+    if (len + 1U < cap) memcpy(out, malformed, len + 1U);
     return VW_TRANSLATE_TEST_HTTP_OK;
   }
   return VW_TRANSLATE_TEST_HTTP_TRANSPORT;
 }
 
-static void vw_blame_log_sink(vw_log_level_t level, const char* event_id, const char* formatted_msg,
-                              void* user_data) {
-  vw_blame_log_capture_t* capture = (vw_blame_log_capture_t*)user_data;
+static void log_sink(vw_log_level_t level, const char* event_id, const char* message, void* data) {
+  log_capture_t* capture = (log_capture_t*)data;
   if (!capture) return;
   capture->level = level;
   snprintf(capture->event_id, sizeof(capture->event_id), "%s", event_id ? event_id : "");
-  snprintf(capture->message, sizeof(capture->message), "%s", formatted_msg ? formatted_msg : "");
+  snprintf(capture->message, sizeof(capture->message), "%s", message ? message : "");
   capture->count++;
 }
 
-static vw_translate_failure_t vw_blame_run_failure(vw_blame_hook_mode_t mode, unsigned* calls_out) {
-  vw_blame_hook_state_t state = {.mode = mode, .calls = 0};
-  vw_translate_set_test_http_hook(vw_blame_http_hook, &state);
+static vw_translate_failure_t run_failure(blame_mode_t mode, unsigned* calls_out) {
+  hook_state_t state = {.mode = mode, .calls = 0};
+  vw_translate_set_test_http_diagnostic_hook(http_hook, &state);
 
   char out[256];
   uint8_t tier = 99;
   uint32_t latency_us = 0;
   vw_translate_failure_t failure = {0};
-  bool ok = vw_translate_text("failure contract", "en", "ro", out, sizeof(out), &tier, &latency_us, &failure);
+  bool ok =
+      vw_translate_text_detailed("failure contract", "en", "ro", out, sizeof(out), &tier, &latency_us, &failure);
 
-  vw_translate_set_test_http_hook(NULL, NULL);
-  vw_test_check_false("failure contract does not report translation success", ok);
-  vw_test_check_true("failed translation keeps success tier none", tier == VW_TRANSLATE_TIER_NONE);
+  vw_translate_set_test_http_diagnostic_hook(NULL, NULL);
+  vw_test_check_false("failure does not report success", ok);
+  vw_test_check_true("failure keeps success tier none", tier == VW_TRANSLATE_TIER_NONE);
   if (calls_out) *calls_out = state.calls;
   return failure;
 }
 
-static void vw_blame_test_translator_causes(void) {
+static void test_translator_causes(void) {
   unsigned calls = 0;
-  vw_translate_failure_t failure = vw_blame_run_failure(VW_BLAME_HOOK_TRANSPORT, &calls);
-  vw_test_check_true("transport failure is explicitly classified",
-                     failure.cause == VW_TRANSLATE_FAILURE_TRANSPORT);
-  vw_test_check_true("transport failure reaches terminal mobile fallback",
-                     failure.terminal_tier == VW_TRANSLATE_TIER_MOBILE_SCRAPE);
-  vw_test_check_true("transport failure records all attempted fallbacks", failure.attempted_tiers == 0x07U);
-  vw_test_check_true("transport failure attempts all three tiers", calls == 3U);
+  vw_translate_failure_t failure = run_failure(BLAME_TRANSPORT, &calls);
+  vw_test_check_true("transport cause is explicit", failure.cause == VW_TRANSLATE_FAILURE_TRANSPORT);
+  vw_test_check_true("transport terminal tier is mobile", failure.terminal_tier == VW_TRANSLATE_TIER_MOBILE_SCRAPE);
+  vw_test_check_true("transport records all tiers", failure.attempted_tiers == 0x07U);
+  vw_test_check_true("transport attempts all tiers", calls == 3U);
 
-  failure = vw_blame_run_failure(VW_BLAME_HOOK_PROVIDER, &calls);
-  vw_test_check_true("provider rejection is explicitly classified",
-                     failure.cause == VW_TRANSLATE_FAILURE_PROVIDER);
-  vw_test_check_true("provider rejection preserves terminal HTTP status", failure.provider_status == 429U);
-  vw_test_check_true("provider rejection reaches terminal mobile fallback",
-                     failure.terminal_tier == VW_TRANSLATE_TIER_MOBILE_SCRAPE);
+  failure = run_failure(BLAME_PROVIDER, &calls);
+  vw_test_check_true("provider cause is explicit", failure.cause == VW_TRANSLATE_FAILURE_PROVIDER);
+  vw_test_check_true("provider status is preserved", failure.provider_status == 429U);
+  vw_test_check_true("provider terminal tier is mobile", failure.terminal_tier == VW_TRANSLATE_TIER_MOBILE_SCRAPE);
 
-  failure = vw_blame_run_failure(VW_BLAME_HOOK_PARSE, &calls);
-  vw_test_check_true("malformed successful response is classified as parse failure",
-                     failure.cause == VW_TRANSLATE_FAILURE_PARSE);
-  vw_test_check_true("parse failure records all attempted fallbacks", failure.attempted_tiers == 0x07U);
-  vw_test_check_true("parse failure reaches terminal mobile fallback",
-                     failure.terminal_tier == VW_TRANSLATE_TIER_MOBILE_SCRAPE);
+  failure = run_failure(BLAME_PARSE, &calls);
+  vw_test_check_true("parse cause is explicit", failure.cause == VW_TRANSLATE_FAILURE_PARSE);
+  vw_test_check_true("parse records all tiers", failure.attempted_tiers == 0x07U);
+  vw_test_check_true("parse terminal tier is mobile", failure.terminal_tier == VW_TRANSLATE_TIER_MOBILE_SCRAPE);
 
-  failure = vw_blame_run_failure(VW_BLAME_HOOK_DEADLINE, &calls);
-  vw_test_check_true("deadline exhaustion is explicit", failure.cause == VW_TRANSLATE_FAILURE_DEADLINE);
-  vw_test_check_true("deadline reports the tier that consumed the budget",
-                     failure.terminal_tier == VW_TRANSLATE_TIER_WEB_RPC);
-  vw_test_check_true("deadline stops before later fallbacks", failure.attempted_tiers == 0x01U && calls == 1U);
+  failure = run_failure(BLAME_DEADLINE, &calls);
+  vw_test_check_true("deadline cause is explicit", failure.cause == VW_TRANSLATE_FAILURE_DEADLINE);
+  vw_test_check_true("deadline terminal tier is rpc", failure.terminal_tier == VW_TRANSLATE_TIER_WEB_RPC);
+  vw_test_check_true("deadline stops fallbacks", failure.attempted_tiers == 0x01U && calls == 1U);
 }
 
-static void vw_blame_test_plugin_logging_and_aggregates(void) {
-  vw_benchmark_t benchmark = {0};
-  vw_blame_log_capture_t capture = {0};
-  vw_log_set_sink(vw_blame_log_sink, &capture);
+static void test_plugin_logging_and_aggregates(void) {
+  vw_benchmark_t benchmark = {.active = true};
+  log_capture_t capture = {0};
+  vw_log_set_sink(log_sink, &capture);
   vw_log_set_enabled(true);
 
   vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
-  vw_test_check_true("failed caption increments total failure count", benchmark.translation_failure_count == 1U);
-  vw_test_check_true("latency no longer guesses timeout cause", benchmark.translation_timeout_count == 0U);
-  vw_test_check_true("caption metric path no longer emits duplicate failure log", capture.count == 0U);
+  vw_test_check_true("failed caption increments failure total", benchmark.translation_failure_count == 1U);
+  vw_test_check_true("latency does not guess timeout", benchmark.translation_timeout_count == 0U);
+  vw_test_check_true("caption metric path does not log failure", capture.count == 0U);
 
-  vw_benchmark_record_translation_failure(
-      &benchmark, E_TRANSLATION_PROVIDER,
-      "segment=42 cause=provider tier=mobile attempts=0x07 status=429 latency_ms=734.000");
-  vw_test_check_true("provider failure aggregate increments", benchmark.translation_provider_failure_count == 1U);
-  vw_test_check_true("translation blame uses one VLC error event", capture.count == 1U);
-  vw_test_check_true("translation blame event id is stable",
-                     strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
-  vw_test_check_true("translation blame is concise and includes cause",
-                     strstr(capture.message, "cause=provider") != NULL);
-  vw_test_check_true("translation blame includes terminal fallback", strstr(capture.message, "tier=mobile") != NULL);
-  vw_test_check_false("translation blame omits source subtitle body",
-                      strstr(capture.message, "failure contract") != NULL);
+  const char* provider = "segment=42 cause=provider tier=mobile attempts=0x07 status=429 latency_ms=734.000";
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_PROVIDER, provider);
+  vw_test_check_true("provider aggregate increments", benchmark.translation_provider_failure_count == 1U);
+  vw_test_check_true("one VLC error event is emitted", capture.count == 1U);
+  vw_test_check_true("translation event id is stable", strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
+  vw_test_check_true("live blame includes cause", strstr(capture.message, "cause=provider") != NULL);
+  vw_test_check_true("live blame includes terminal tier", strstr(capture.message, "tier=mobile") != NULL);
+  vw_test_check_false("live blame omits subtitle body", strstr(capture.message, "failure contract") != NULL);
 
-  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_TRANSPORT,
-                                          "segment=43 cause=transport tier=gtx attempts=0x03 latency_ms=220.000");
-  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_PARSE,
-                                          "segment=44 cause=parse tier=mobile attempts=0x07 latency_ms=310.000");
-  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_DEADLINE,
-                                          "segment=45 cause=deadline tier=rpc attempts=0x01 latency_ms=800.000");
-  vw_test_check_true("transport failure aggregate increments", benchmark.translation_transport_failure_count == 1U);
-  vw_test_check_true("parse failure aggregate increments", benchmark.translation_parse_failure_count == 1U);
-  vw_test_check_true("explicit deadline owns timeout aggregate", benchmark.translation_timeout_count == 1U);
+  const char* transport = "segment=43 cause=transport tier=gtx attempts=0x03 latency_ms=220.000";
+  const char* parse = "segment=44 cause=parse tier=mobile attempts=0x07 latency_ms=310.000";
+  const char* deadline = "segment=45 cause=deadline tier=rpc attempts=0x01 latency_ms=800.000";
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_TRANSPORT, transport);
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_PARSE, parse);
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_DEADLINE, deadline);
+  vw_test_check_true("transport aggregate increments", benchmark.translation_transport_failure_count == 1U);
+  vw_test_check_true("parse aggregate increments", benchmark.translation_parse_failure_count == 1U);
+  vw_test_check_true("deadline owns timeout aggregate", benchmark.translation_timeout_count == 1U);
 
   vw_log_set_enabled(false);
   vw_log_set_sink(NULL, NULL);
 }
 
 int main(void) {
-  vw_blame_test_translator_causes();
-  vw_blame_test_plugin_logging_and_aggregates();
+  test_translator_causes();
+  test_plugin_logging_and_aggregates();
   return vw_test_finish("translation_blame_contracts");
 }
