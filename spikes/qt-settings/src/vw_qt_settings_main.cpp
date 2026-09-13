@@ -4,15 +4,18 @@
 #include <QDir>
 #include <QFile>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QScreen>
+#include <QScrollArea>
+#include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
-
 #include <algorithm>
 #include <array>
 
@@ -92,9 +95,11 @@ class vw_settings_window_t final : public QWidget {
  public:
   vw_settings_window_t() : vw_settings_path_(QDir::current().filePath(QStringLiteral("settings.json"))) {
     setWindowTitle(QStringLiteral("VLC-Whisper Settings"));
-    setMinimumWidth(620);
 
-    auto* layout = new QGridLayout(this);
+    // All controls live in an inner widget; a scroll area wraps them so a tiny
+    // screen (or a future row) can never make the bottom rows unreachable.
+    vw_content_ = new QWidget(this);
+    auto* layout = new QGridLayout(vw_content_);
     layout->setColumnStretch(1, 1);
 
     vw_engine_ = new QComboBox(this);
@@ -146,8 +151,8 @@ class vw_settings_window_t final : public QWidget {
     layout->addWidget(new QLabel(QStringLiteral("Translation test:"), this), 9, 0);
     layout->addWidget(how_to_test, 9, 1);
 
-    vw_translation_test_result_ = new QLabel(
-        QStringLiteral("Worker runtime performs translation; this dialog never makes HTTP requests."), this);
+    vw_translation_test_result_ =
+        new QLabel(QStringLiteral("Worker runtime performs translation; this dialog never makes HTTP requests."), this);
     vw_translation_test_result_->setWordWrap(true);
     layout->addWidget(vw_translation_test_result_, 10, 0, 1, 2);
 
@@ -156,8 +161,7 @@ class vw_settings_window_t final : public QWidget {
     layout->addWidget(apply, 11, 0);
     layout->addWidget(vw_download_, 11, 1);
 
-    vw_backend_status_ =
-        new QLabel(QStringLiteral("Detected backend: (not connected -- frontend-only spike)"), this);
+    vw_backend_status_ = new QLabel(QStringLiteral("Detected backend: (not connected -- frontend-only spike)"), this);
     layout->addWidget(vw_backend_status_, 12, 0, 1, 2);
 
     vw_model_status_ = new QLabel(QStringLiteral("Model availability: not checked (frontend-only spike)"), this);
@@ -173,13 +177,54 @@ class vw_settings_window_t final : public QWidget {
     connect(apply, &QPushButton::clicked, this, [this]() { vw_save_settings(); });
     connect(vw_download_, &QPushButton::clicked, this, [this]() { vw_simulate_download_request(); });
 
+    // Scrollable body: on screens too short for the natural content height the
+    // layout scrolls instead of clipping the bottom rows or the window chrome.
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidget(vw_content_);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->addWidget(scroll);
+
+    vw_size_for_screen();
+
     vw_load_settings();
   }
+
+ public:
+  // The window's natural size is the inner content's size, not the scroll
+  // area's (whose sizeHint is capped to a small default by design). Keeping
+  // this honest makes resize-to-hint show every row scroll-free on any
+  // screen that fits the content.
+  QSize sizeHint() const override { return vw_content_ ? vw_content_->sizeHint() : QWidget::sizeHint(); }
 
  private:
   static void vw_add_row(QGridLayout* layout, int row, const QString& label, QWidget* field) {
     layout->addWidget(new QLabel(label), row, 0);
     layout->addWidget(field, row, 1);
+  }
+
+  // Sizes the window to the content's natural size, capped at 90% of the
+  // screen's available geometry (excludes panels/taskbars). Content taller or
+  // wider than that stays reachable through the scroll area's scrollbars
+  // instead of overflowing the workarea. Per-screen: targets the screen the
+  // window will open on. Platform/API failures fall back to natural sizing.
+  // Measures vw_content_ (not the window): a QScrollArea sizeHint is capped to
+  // a small default, so the window must be sized from the real content.
+  void vw_size_for_screen() {
+    const QSize content_size = vw_content_ ? vw_content_->sizeHint() : sizeHint();
+    QSize target = content_size;
+    QScreen* current_screen = this->screen() != nullptr ? this->screen() : QGuiApplication::primaryScreen();
+    if (current_screen != nullptr) {
+      const QSize available = current_screen->availableGeometry().size();
+      const QSize capped = available * 9 / 10;
+      target = target.boundedTo(capped);
+    }
+    if (target.width() > 0 && target.height() > 0) resize(target);
+    setMinimumSize(QSize(320, 240));
   }
 
   static void vw_select_by_data(QComboBox* combo, const QVariant& value, int fallback_index = 0) {
@@ -261,8 +306,7 @@ class vw_settings_window_t final : public QWidget {
     vw_select_by_data(vw_engine_,
                       vw_string_setting(settings, QStringLiteral("whisper-backend"), QStringLiteral("auto")));
     vw_select_by_data(vw_model_,
-                      vw_string_setting(settings, QStringLiteral("model-path"),
-                                        QStringLiteral("models/ggml-tiny.bin")),
+                      vw_string_setting(settings, QStringLiteral("model-path"), QStringLiteral("models/ggml-tiny.bin")),
                       1);
     vw_select_by_data(vw_language_,
                       vw_string_setting(settings, QStringLiteral("whisper-language"), QStringLiteral("en")));
@@ -270,14 +314,12 @@ class vw_settings_window_t final : public QWidget {
     vw_threads_->setText(
         QString::number(std::clamp(vw_int_setting(settings, QStringLiteral("whisper-threads"), 4), 1, 16)));
     vw_logging_->setChecked(vw_bool_setting(settings, QStringLiteral("whisper-logging"), false));
-    vw_translation_enabled_->setChecked(
-        vw_bool_setting(settings, QStringLiteral("whisper-translate-enabled"), false));
+    vw_translation_enabled_->setChecked(vw_bool_setting(settings, QStringLiteral("whisper-translate-enabled"), false));
     vw_select_by_data(vw_translation_from_,
                       vw_string_setting(settings, QStringLiteral("whisper-translate-from"), QStringLiteral("auto")));
     vw_select_by_data(vw_translation_to_,
                       vw_string_setting(settings, QStringLiteral("whisper-translate-to"), QStringLiteral("en")));
-    vw_select_by_data(vw_translation_mode_,
-                      vw_int_setting(settings, QStringLiteral("whisper-translate-mode"), 1));
+    vw_select_by_data(vw_translation_mode_, vw_int_setting(settings, QStringLiteral("whisper-translate-mode"), 1));
 
     if (invalid) {
       vw_backend_status_->setText(QStringLiteral("Detected backend: (settings.json invalid -- using defaults)"));
@@ -328,21 +370,20 @@ class vw_settings_window_t final : public QWidget {
     const QString from = vw_translation_from_->currentData().toString();
     const QString to = vw_translation_to_->currentData().toString();
     vw_translation_test_result_->setText(
-        QStringLiteral("Worker-only test: enable Auto translation, Apply, then play media (%1 -> %2). ")
-                .arg(from, to) +
+        QStringLiteral("Worker-only test: enable Auto translation, Apply, then play media (%1 -> %2). ").arg(from, to) +
         QStringLiteral("This frontend spike does not contact a worker or the network."));
   }
 
   void vw_simulate_download_request() {
     vw_force_english_for_english_only_model();
     const vw_model_choice_t* selected = vw_selected_model();
-    vw_backend_status_->setText(
-        QStringLiteral("Model %1: download requested (frontend-only spike; no network I/O)")
-            .arg(QString::fromUtf8(selected->id)));
+    vw_backend_status_->setText(QStringLiteral("Model %1: download requested (frontend-only spike; no network I/O)")
+                                    .arg(QString::fromUtf8(selected->id)));
     vw_model_status_->setText(QStringLiteral("Model availability: unchanged (downloader intentionally not wired)"));
   }
 
   const QString vw_settings_path_;
+  QWidget* vw_content_ = nullptr;
   QComboBox* vw_engine_ = nullptr;
   QComboBox* vw_model_ = nullptr;
   QComboBox* vw_language_ = nullptr;
