@@ -99,6 +99,7 @@ add_executable(vlc-whisper-worker
     src/main.c
     src/vw_worker_log_policy.c
     src/vw_worker.c
+    src/vw_asr_engine.c
     src/vw_whisper_engine.c
     src/vw_vad.c
     src/vw_segment_builder.c

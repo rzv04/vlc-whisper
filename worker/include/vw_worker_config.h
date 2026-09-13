@@ -5,8 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "vw_asr_engine.h"
 #include "vw_protocol_types.h"
-#include "vw_whisper_engine.h"
 
 typedef struct vw_worker_config {
   char model_path[VW_PATH_MAX_BYTES];
@@ -19,12 +19,13 @@ typedef struct vw_worker_config {
   char log_file[512];    // --log-file override; empty = default temp-dir log
   bool logging_enabled;  // --enable-logging or --log-file; false by default
   uint8_t auth_token[VW_AUTH_TOKEN_BYTES];
-  vw_worker_backend_t backend;  // --backend auto|gpu|cpu (default AUTO)
-  int gpu_device;               // --gpu-device <id>: ordinal into whisper's GPU/IGPU device list
+  vw_asr_engine_kind_t asr_engine;  // --asr-engine whisper|nemotron (default Whisper; availability checked later)
+  vw_worker_backend_t backend;      // --backend auto|gpu|cpu (default AUTO)
+  int gpu_device;                   // --gpu-device <id>: adapter-specific GPU/IGPU ordinal when supported
 } vw_worker_config_t;
 
-// Initializes worker configuration struct with default values (16kHz audio, tiny model, AUTO GPU backend).
-// Returns true on success or false if config pointer is NULL.
+// Initializes worker configuration struct with default values (16kHz audio, Whisper engine, tiny model, AUTO GPU
+// backend). Returns true on success or false if config pointer is NULL.
 bool vw_worker_config_init_defaults(vw_worker_config_t* config);
 
 // Parses command-line arguments into the worker configuration structure and performs syntax validation. Returns 0 on

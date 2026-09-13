@@ -87,7 +87,7 @@ The required lifecycle contract is that EOF/media end flushes eligible residual 
 
 ## VAD, inference, and caption construction
 
-The worker owns VAD and Whisper policy. It can use pinned Silero VAD with bounded fallback behavior; seek/pause/session transitions reset recurrent VAD state when required. Whisper segment timestamps are converted from centiseconds to microseconds and fed to the segment builder, which owns cross-window deduplication and immutable final cues. The presenter may extend visible duration for readability without changing authentic cue timing used for quality/export semantics.
+The worker owns VAD and Whisper policy. It can use pinned Silero VAD with bounded fallback behavior; seek/pause/session transitions reset recurrent VAD state when required. Worker inference, session-language changes, status metrics, and result retrieval pass through the small ASR facade; the only available adapter is Whisper. Its final-only results carry signed microsecond offsets to the segment builder, which owns cross-window deduplication and immutable final cues. The normalized result also reserves stable utterance/revision identity for native streaming adapters; zero identity means the current Whisper segment builder remains authoritative. The presenter may extend visible duration for readability without changing authentic cue timing used for quality/export semantics.
 
 ## Network and privacy
 

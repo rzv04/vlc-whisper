@@ -4,7 +4,8 @@
 -- no Lua callback performs HTTP, polling, sleeps, or other blocking translation work.
 
 local dlg = nil
-local w_engine = nil
+local w_asr_engine = nil
+local w_backend = nil
 local w_model = nil
 local w_language = nil
 local w_threads = nil
@@ -53,8 +54,10 @@ local function log_error(message)
 end
 
 -- id -> string maps for dropdown get_value() results (Lua 5.1-safe).
-local engine_map = { [1] = "auto", [2] = "gpu", [3] = "cpu" }
-local engine_labels = { [1] = "auto (default)", [2] = "GPU (Vulkan)", [3] = "CPU only" }
+local asr_engine_map = { [1] = "whisper", [2] = "nemotron" }
+local asr_engine_labels = { [1] = "Whisper.cpp", [2] = "Nemotron (experimental / unavailable)" }
+local backend_map = { [1] = "auto", [2] = "gpu", [3] = "cpu" }
+local backend_labels = { [1] = "Auto (Vulkan when available)", [2] = "GPU (Vulkan)", [3] = "CPU only" }
 local model_map = {
   [1] = "tiny.en",
   [2] = "tiny",
@@ -112,7 +115,8 @@ local language_labels = {
   [6] = "Spanish (es)",
 }
 
-local engine_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
+local asr_engine_to_id = { ["whisper"] = 1, ["nemotron"] = 2 }
+local backend_to_id = { ["auto"] = 1, ["gpu"] = 2, ["cpu"] = 3 }
 local language_to_id = { ["en"] = 1, ["ro"] = 2, ["tr"] = 3, ["de"] = 4, ["fr"] = 5, ["es"] = 6 }
 
 local trans_from_map = {
@@ -351,7 +355,8 @@ local function on_test_translate()
 end
 
 local function on_apply()
-  local eng_id = w_engine and w_engine:get_value() or 1
+  local asr_id = w_asr_engine and w_asr_engine:get_value() or 1
+  local backend_id = w_backend and w_backend:get_value() or 1
   local mod_id = w_model and w_model:get_value() or default_model_id
   local lang_id = w_language and w_language:get_value() or 1
   local thr_text = w_threads and w_threads:get_text() or "4"
@@ -362,7 +367,8 @@ local function on_apply()
   local trans_to_id = w_trans_to and w_trans_to:get_value() or 1
   local trans_mode_id = w_trans_mode and w_trans_mode:get_value() or 1
 
-  local engine = engine_map[eng_id] or "auto"
+  local asr_engine = asr_engine_map[asr_id] or "whisper"
+  local backend = backend_map[backend_id] or "auto"
   local model_label = model_map[mod_id] or "tiny"
   local model_path = model_path_map[mod_id] or default_model_path
   local language = model_is_english_only(mod_id) and "en" or language_map[lang_id] or "en"
@@ -378,7 +384,8 @@ local function on_apply()
     pcall(function() w_threads:set_text(tostring(threads)) end)
   end
 
-  pcall(function() cfg_set("whisper-backend", engine) end)
+  pcall(function() cfg_set("whisper-asr-engine", asr_engine) end)
+  pcall(function() cfg_set("whisper-backend", backend) end)
   pcall(function() cfg_set("model-path", model_path) end)
   pcall(function() cfg_set("whisper-language", language) end)
   pcall(function() cfg_set("whisper-threads", threads) end)
@@ -389,7 +396,8 @@ local function on_apply()
   pcall(function() cfg_set("whisper-translate-mode", trans_mode) end)
 
   if logging then
-    vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. engine)
+    vlc.msg.info("[VLC-Whisper] applied whisper-asr-engine=" .. asr_engine)
+    vlc.msg.info("[VLC-Whisper] applied whisper-backend=" .. backend)
     vlc.msg.info("[VLC-Whisper] applied model-path=" .. model_path .. " (" .. model_label .. ")")
     vlc.msg.info("[VLC-Whisper] applied whisper-language=" .. language)
     vlc.msg.info("[VLC-Whisper] applied whisper-threads=" .. tostring(threads))
@@ -481,6 +489,7 @@ end
 local function build_dialog()
   dlg = vlc.dialog("VLC-Whisper Settings")
 
+  local cur_asr_engine = nil
   local cur_backend = nil
   local cur_model_path = nil
   local cur_language = nil
@@ -492,6 +501,7 @@ local function build_dialog()
   local cur_trans_to = nil
   local cur_trans_mode = nil
   pcall(function() cur_backend = cfg_get("whisper-backend") end)
+  pcall(function() cur_asr_engine = cfg_get("whisper-asr-engine") end)
   pcall(function() cur_model_path = cfg_get("model-path") end)
   pcall(function() cur_language = cfg_get("whisper-language") end)
   pcall(function() cur_threads = cfg_get("whisper-threads") end)
@@ -503,6 +513,7 @@ local function build_dialog()
   pcall(function() cur_trans_mode = cfg_get("whisper-translate-mode") end)
 
   if cur_backend == nil or cur_backend == "" then cur_backend = "auto" end
+  if cur_asr_engine == nil or cur_asr_engine == "" then cur_asr_engine = "whisper" end
   if cur_model_path == nil or cur_model_path == "" then cur_model_path = default_model_path end
   if cur_language == nil or cur_language == "" then cur_language = "en" end
   if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
@@ -518,17 +529,22 @@ local function build_dialog()
   local sel_trans_to = trans_to_to_id[cur_trans_to] or 1
   local sel_trans_mode = (cur_trans_mode == 0 or cur_trans_mode == "0") and 2 or 1
 
-  local sel_engine = engine_to_id[cur_backend] or 1
+  local sel_asr_engine = asr_engine_to_id[cur_asr_engine] or 1
+  local sel_backend = backend_to_id[cur_backend] or 1
   local sel_model = resolve_model_id_from_path(cur_model_path)
   local sel_language = language_to_id[cur_language] or 1
   if model_is_english_only(sel_model) then sel_language = 1 end
 
-  dlg:add_label("Engine:", 1, 1, 1, 1)
-  w_engine = dlg:add_dropdown(2, 1, 3, 1)
-  populate_dropdown(w_engine, engine_labels, sel_engine)
+  dlg:add_label("ASR engine:", 1, 1, 1, 1)
+  w_asr_engine = dlg:add_dropdown(2, 1, 3, 1)
+  populate_dropdown(w_asr_engine, asr_engine_labels, sel_asr_engine)
 
-  dlg:add_label("Model:", 1, 2, 1, 1)
-  w_model = dlg:add_dropdown(2, 2, 3, 1)
+  dlg:add_label("Backend:", 1, 2, 1, 1)
+  w_backend = dlg:add_dropdown(2, 2, 3, 1)
+  populate_dropdown(w_backend, backend_labels, sel_backend)
+
+  dlg:add_label("Model:", 1, 3, 1, 1)
+  w_model = dlg:add_dropdown(2, 3, 3, 1)
   local model_labels = {}
   for _id = 1, #model_path_map do
     local label = model_map[_id] or "model"
@@ -542,45 +558,45 @@ local function build_dialog()
   end
   populate_dropdown(w_model, model_labels, sel_model)
 
-  dlg:add_label("Language:", 1, 3, 1, 1)
-  w_language = dlg:add_dropdown(2, 3, 3, 1)
+  dlg:add_label("Language:", 1, 4, 1, 1)
+  w_language = dlg:add_dropdown(2, 4, 3, 1)
   refresh_language_dropdown(sel_model, sel_language)
 
-  dlg:add_label("Threads (CPU engine):", 1, 4, 1, 1)
-  w_threads = dlg:add_text_input(cur_threads, 2, 4, 3, 1)
+  dlg:add_label("Threads (CPU engine):", 1, 5, 1, 1)
+  w_threads = dlg:add_text_input(cur_threads, 2, 5, 3, 1)
 
-  w_logging = dlg:add_check_box("Enable diagnostic logging", cur_logging, 1, 5, 4, 1)
+  w_logging = dlg:add_check_box("Enable diagnostic logging", cur_logging, 1, 6, 4, 1)
 
-  w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 6, 4, 1)
+  w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 7, 4, 1)
 
-  dlg:add_label("Source (from):", 1, 7, 1, 1)
-  w_trans_from = dlg:add_dropdown(2, 7, 3, 1)
+  dlg:add_label("Source (from):", 1, 8, 1, 1)
+  w_trans_from = dlg:add_dropdown(2, 8, 3, 1)
   populate_dropdown(w_trans_from, trans_from_labels, sel_trans_from)
 
-  dlg:add_label("Translation (to):", 1, 8, 1, 1)
-  w_trans_to = dlg:add_dropdown(2, 8, 3, 1)
+  dlg:add_label("Translation (to):", 1, 9, 1, 1)
+  w_trans_to = dlg:add_dropdown(2, 9, 3, 1)
   populate_dropdown(w_trans_to, trans_to_labels, sel_trans_to)
 
-  dlg:add_label("Screen placement:", 1, 9, 1, 1)
-  w_trans_mode = dlg:add_dropdown(2, 9, 3, 1)
+  dlg:add_label("Screen placement:", 1, 10, 1, 1)
+  w_trans_mode = dlg:add_dropdown(2, 10, 3, 1)
   populate_dropdown(w_trans_mode, trans_mode_labels, sel_trans_mode)
 
-  dlg:add_label("Translation test:", 1, 10, 1, 1)
-  w_trans_test_btn = dlg:add_button("How to test", on_test_translate, 2, 10, 3, 1)
+  dlg:add_label("Translation test:", 1, 11, 1, 1)
+  w_trans_test_btn = dlg:add_button("How to test", on_test_translate, 2, 11, 3, 1)
 
   w_trans_test_result =
-    dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 11, 4, 1)
+    dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 12, 4, 1)
 
-  dlg:add_button("Apply", on_apply, 1, 12, 2, 1)
-  w_download = dlg:add_button("Download Selected Model", on_download, 3, 12, 2, 1)
+  dlg:add_button("Apply", on_apply, 1, 13, 2, 1)
+  w_download = dlg:add_button("Download Selected Model", on_download, 3, 13, 2, 1)
   refresh_model_status(sel_model)
 
-  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 13, 4, 1)
+  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 14, 4, 1)
 
-  w_model_status = dlg:add_label("Model availability: checking...", 1, 14, 4, 1)
+  w_model_status = dlg:add_label("Model availability: checking...", 1, 15, 4, 1)
   refresh_model_status(sel_model)
 
-  dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 15, 4, 1)
+  dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 16, 4, 1)
 end
 
 function descriptor()
@@ -604,7 +620,8 @@ function activate()
     pcall(function() dlg:hide() end)
     dlg = nil
   end
-  w_engine = nil
+  w_asr_engine = nil
+  w_backend = nil
   w_model = nil
   w_language = nil
   w_threads = nil
@@ -630,7 +647,8 @@ function deactivate()
     pcall(function() dlg:hide() end)
     dlg = nil
   end
-  w_engine = nil
+  w_asr_engine = nil
+  w_backend = nil
   w_model = nil
   w_language = nil
   w_threads = nil
