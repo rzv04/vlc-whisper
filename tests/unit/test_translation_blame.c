@@ -88,8 +88,8 @@ static vw_translate_failure_t run_failure(blame_mode_t mode, unsigned* calls_out
   uint8_t tier = 99;
   uint32_t latency_us = 0;
   vw_translate_failure_t failure = {0};
-  bool ok =
-      vw_translate_text_detailed("failure contract", "en", "ro", out, sizeof(out), &tier, &latency_us, &failure);
+  bool ok = vw_translate_text_detailed("failure contract", "en", "ro", out, sizeof(out), &tier, &latency_us,
+                                       &failure);
 
   vw_translate_set_test_http_diagnostic_hook(NULL, NULL);
   vw_test_check_false("failure does not report success", ok);
