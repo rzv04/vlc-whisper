@@ -141,15 +141,18 @@ static void vw_blame_test_plugin_logging_and_aggregates(void) {
   vw_test_check_true("latency no longer guesses timeout cause", benchmark.translation_timeout_count == 0U);
   vw_test_check_true("caption metric path no longer emits duplicate failure log", capture.count == 0U);
 
-  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_PROVIDER,
-                                          "segment=42 cause=provider tier=mobile attempts=0x07 status=429 latency_ms=734.000");
+  vw_benchmark_record_translation_failure(
+      &benchmark, E_TRANSLATION_PROVIDER,
+      "segment=42 cause=provider tier=mobile attempts=0x07 status=429 latency_ms=734.000");
   vw_test_check_true("provider failure aggregate increments", benchmark.translation_provider_failure_count == 1U);
   vw_test_check_true("translation blame uses one VLC error event", capture.count == 1U);
   vw_test_check_true("translation blame event id is stable",
                      strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
-  vw_test_check_true("translation blame is concise and includes cause", strstr(capture.message, "cause=provider") != NULL);
+  vw_test_check_true("translation blame is concise and includes cause",
+                     strstr(capture.message, "cause=provider") != NULL);
   vw_test_check_true("translation blame includes terminal fallback", strstr(capture.message, "tier=mobile") != NULL);
-  vw_test_check_false("translation blame omits source subtitle body", strstr(capture.message, "failure contract") != NULL);
+  vw_test_check_false("translation blame omits source subtitle body",
+                      strstr(capture.message, "failure contract") != NULL);
 
   vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_TRANSPORT,
                                           "segment=43 cause=transport tier=gtx attempts=0x03 latency_ms=220.000");
