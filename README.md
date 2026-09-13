@@ -256,8 +256,15 @@ The release preset provisions the same pinned models and produces `vlc-whisper-l
 
 ```bash
 cmake --preset linux-x64-release
-cmake --build --preset linux-x64-release --target package
+# WARNING: On systems with less than 8 GB of RAM, compile with a lower number of jobs to prevent OOM
+cmake --build --preset linux-x64-release -j2 --target package
 ```
+
+> [!WARNING]
+> Compiling Vulkan shader translation units (`ggml-vulkan`) under `-O3` requires significant memory. On systems with less than 8 GB of RAM or without swap space, limit parallel build jobs (for example, `-j2` or `-j1`) to prevent compiler out-of-memory (OOM) termination:
+> ```bash
+> cmake --build --preset linux-x64-release -j2
+> ```
 
 ## Verification
 
