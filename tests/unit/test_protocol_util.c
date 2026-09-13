@@ -63,16 +63,16 @@ int main(void) {
   EXPECT(vw_utf8_safe_len("hi😀", 4) == 2);
   EXPECT(vw_utf8_safe_len("hi😀", 3) == 2);
 
-  // Overlong UTF-8 rejection (VW-057)
+  // Overlong UTF-8 rejection
   EXPECT(vw_utf8_safe_len("\xC0\x80", 2) == 0);
   EXPECT(vw_utf8_safe_len("\xC1\xBF", 2) == 0);
   EXPECT(vw_utf8_safe_len("abc\xC0\x80", 5) == 3);
 
-  // UTF-16 surrogate rejection (U+D800..U+DFFF) (VW-057)
+  // UTF-16 surrogate rejection (U+D800..U+DFFF)
   EXPECT(vw_utf8_safe_len("\xED\xA0\x80", 3) == 0);
   EXPECT(vw_utf8_safe_len("test\xED\xBF\xBF", 7) == 4);
 
-  // Beyond U+10FFFF rejection (VW-057)
+  // Beyond U+10FFFF rejection
   EXPECT(vw_utf8_safe_len("\xF4\x90\x80\x80", 4) == 0);
   EXPECT(vw_utf8_safe_len("ok\xF5\x80\x80\x80", 6) == 2);
 

@@ -90,7 +90,7 @@ int main(void) {
   (void)chunk_a_pcm;
   (void)chunk_b_pcm;
 
-  // VW-019 regression test: high playback rate (>4.0x) triggers throttling and drops audio blocks
+  // High playback rate (>4.0x) triggers throttling and drops audio blocks
   _Atomic float test_playback_rate = 8.0f;
   cap.playback_rate = &test_playback_rate;
   uint64_t prev_input_frames = cap.total_input_frames;

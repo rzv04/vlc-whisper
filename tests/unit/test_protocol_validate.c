@@ -61,7 +61,7 @@ int main(void) {
   audio.pcm_bytes = 16382;
   EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // +1 byte tolerated (even)
   audio.pcm_bytes = 16381;
-  EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // odd pcm_bytes rejected (VW-103)
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // odd pcm_bytes rejected
   audio.pcm_bytes = 16380;                                          // -1 byte: within tolerance (even)
   EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
   audio.pcm_bytes = 16379;  // -2 bytes: beyond tolerance and odd

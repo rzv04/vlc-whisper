@@ -444,7 +444,7 @@ int main(void) {
     EXPECT(!vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, buffer, written + 1U, &dec_tseg));
   }
 
-  // VW-015: Inner-pointer NULL checks when length > 0
+  // Inner-pointer NULL checks when length > 0
   {
     vw_msg_hello_t bad_hello = {.client_version_length = 5, .client_version = NULL};
     EXPECT(!vw_protocol_encode_payload(VW_MSG_HELLO, &bad_hello, buffer, sizeof(buffer), &written));
@@ -456,7 +456,7 @@ int main(void) {
     EXPECT(!vw_protocol_encode_payload(VW_MSG_AUDIO_PCM, &bad_audio, buffer, sizeof(buffer), &written));
   }
 
-  // VW-055: Verify trailing unconsumed bytes are rejected
+  // Verify trailing unconsumed bytes are rejected
   {
     vw_msg_hello_t h = {.min_major = 1, .max_major = 1, .client_version_length = 3, .client_version = (char*)"1.0"};
     EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &h, buffer, sizeof(buffer), &written));
@@ -472,7 +472,7 @@ int main(void) {
     EXPECT(!vw_protocol_decode_payload(VW_MSG_POSITION, buffer, written + 4, &dec_pos));
   }
 
-  // VW-083: Safe memcpy handling for len == 0 with NULL pointer
+  // Safe memcpy handling for len == 0 with NULL pointer
   {
     vw_msg_hello_t zero_hello = {.min_major = 1, .max_major = 1, .client_version_length = 0, .client_version = NULL};
     EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &zero_hello, buffer, sizeof(buffer), &written));

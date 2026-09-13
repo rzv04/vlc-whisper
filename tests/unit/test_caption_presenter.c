@@ -276,7 +276,7 @@ int main(void) {
 
   (void)fallback_presenter;
 
-  // Test 8: Blank presenter flushes dedicated SPU channel (preserving system OSD channel 1 per VW-020)
+  // Test 8: Blank presenter flushes dedicated SPU channel (preserving system OSD channel 1)
   g_flush_calls = 0;
   g_flush_channel = -1;
   assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0, false));
@@ -363,7 +363,7 @@ int main(void) {
   for (int i = 0; i < 10; i++) {
     vw_caption_presenter_blank(&spu_presenter);
   }
-  assert(g_flush_calls == 10);  // 10 SPU channel 43 flushes (OSD channel 1 preserved per VW-020)
+  assert(g_flush_calls == 10);  // 10 SPU channel 43 flushes (OSD channel 1 preserved)
   assert(spu_presenter.spu_channel_id == 43);
   assert(spu_presenter.spu_channel_registered == true);
 
