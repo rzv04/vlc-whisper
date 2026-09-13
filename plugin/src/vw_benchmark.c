@@ -24,9 +24,9 @@ static bool vw_benchmark_directory_exists(const char* path) {
   return path && path[0] && stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-static bool vw_benchmark_resolve_private_fallback(char* path, size_t path_size) {
-  if (!path || path_size == 0) return false;
-  int written = snprintf(path, path_size, "/tmp/vlc-whisper-%lu", (unsigned long)getuid());
+static bool vw_benchmark_resolve_private_fallback(const char* base_dir, char* path, size_t path_size) {
+  if (!base_dir || !path || path_size == 0) return false;
+  int written = snprintf(path, path_size, "%s/vlc-whisper-%lu", base_dir, (unsigned long)getuid());
   if (written < 0 || (size_t)written >= path_size) return false;
 
   if (mkdir(path, S_IRWXU) == 0) return true;
@@ -49,9 +49,10 @@ static bool vw_benchmark_resolve_report_path(char* path, size_t path_size) {
 #else
   char fallback_dir[VW_PATH_MAX_BYTES];
   const char* temp_dir = getenv("XDG_RUNTIME_DIR");
-  if (!vw_benchmark_directory_exists(temp_dir)) temp_dir = getenv("TMPDIR");
   if (!vw_benchmark_directory_exists(temp_dir)) {
-    if (!vw_benchmark_resolve_private_fallback(fallback_dir, sizeof(fallback_dir))) return false;
+    const char* base_dir = getenv("TMPDIR");
+    if (!vw_benchmark_directory_exists(base_dir)) base_dir = "/tmp";
+    if (!vw_benchmark_resolve_private_fallback(base_dir, fallback_dir, sizeof(fallback_dir))) return false;
     temp_dir = fallback_dir;
   }
   int written = snprintf(path, path_size, "%s/%s", temp_dir, VW_BENCHMARK_REPORT_FILENAME);
@@ -102,8 +103,8 @@ static bool vw_benchmark_format_ms(char* text, size_t text_size, int64_t duratio
   uint64_t magnitude = vw_benchmark_i64_magnitude(duration_us);
   uint64_t whole_ms = magnitude / 1000U;
   uint64_t fractional_us = magnitude % 1000U;
-  int written = snprintf(text, text_size, "%s%llu.%03llu", duration_us < 0 ? "-" : "",
-                         (unsigned long long)whole_ms, (unsigned long long)fractional_us);
+  int written = snprintf(text, text_size, "%s%llu.%03llu", duration_us < 0 ? "-" : "", (unsigned long long)whole_ms,
+                         (unsigned long long)fractional_us);
   return written >= 0 && (size_t)written < text_size;
 }
 
@@ -139,8 +140,8 @@ static bool vw_benchmark_format_ratio(char* text, size_t text_size, uint64_t num
     whole++;
     fractional = 0;
   }
-  int written = snprintf(text, text_size, "%llu.%06llu", (unsigned long long)whole,
-                         (unsigned long long)fractional);
+  int written =
+      snprintf(text, text_size, "%llu.%06llu", (unsigned long long)whole, (unsigned long long)fractional);
   return written >= 0 && (size_t)written < text_size;
 }
 
@@ -232,15 +233,15 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
     fprintf(report, "first_sent_caption_elapsed_ms=%s\n", value);
   fprintf(report, "utterance_latency_samples=%zu\n", benchmark->latency_sample_count);
   fprintf(report, "utterance_latency_samples_dropped=%llu\n", (unsigned long long)benchmark->latency_samples_dropped);
-  if (vw_benchmark_format_ms(
-          value, sizeof(value), benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 0) : 0))
+  if (vw_benchmark_format_ms(value, sizeof(value),
+                             benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 0) : 0))
     fprintf(report, "utterance_latency_min_ms=%s\n", value);
   if (vw_benchmark_format_ms(value, sizeof(value), vw_benchmark_percentile(benchmark, 50)))
     fprintf(report, "utterance_latency_p50_ms=%s\n", value);
   if (vw_benchmark_format_ms(value, sizeof(value), vw_benchmark_percentile(benchmark, 95)))
     fprintf(report, "utterance_latency_p95_ms=%s\n", value);
-  if (vw_benchmark_format_ms(
-          value, sizeof(value), benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 100) : 0))
+  if (vw_benchmark_format_ms(value, sizeof(value),
+                             benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 100) : 0))
     fprintf(report, "utterance_latency_max_ms=%s\n", value);
   if (vw_benchmark_format_u64_ms(value, sizeof(value), benchmark->dropped_audio_us))
     fprintf(report, "queue_audio_dropped_ms=%s\n", value);
@@ -269,7 +270,8 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   if (fclose(report) != 0) success = false;
   if (success) {
 #ifdef _WIN32
-    success = MoveFileExA(staging_path, benchmark->report_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    success =
+        MoveFileExA(staging_path, benchmark->report_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 #else
     success = rename(staging_path, benchmark->report_path) == 0;
 #endif
