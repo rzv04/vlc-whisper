@@ -2,54 +2,58 @@
 
 # Task: <short imperative title>
 
-## Goal
-One user-visible or externally verifiable outcome:
-
-## Context
-- Relevant docs/ADR:
-- VLC/worker/protocol version affected:
-- Assumptions and explicit non-goals:
+## Outcome
+One externally verifiable result.
 
 ## Scope
-- In scope:
-- Out of scope:
-- Files/components expected to change:
+- In:
+- Out:
+- Components/files:
 
-## Design
-- Inputs and outputs:
-- Ownership/threading model:
-- Bounds, time units, and failure behavior:
-- Privacy/security implications:
-- Protocol change: none | compatible minor | breaking major
+## Contract map
+For each changed behavior, record:
 
-## Acceptance criteria
-- [ ] Observable expected behavior
-- [ ] Failure behavior preserves VLC playback
-- [ ] Limits/validation are explicit
-- [ ] Automated tests cover success and failure
-- [ ] Documentation/version metadata updated
+`producer -> boundary -> consumer -> lifecycle owner`
 
-## Test plan
-Exact commands, fixtures, target OS/VLC build, and manual verification steps.
+- Invariants touched: timeline | state/API | lifecycle | identity | metric | realtime | privacy/network | other
 
-## Definition of done
-- [ ] C17 code; no project-authored C++ introduced
-- [ ] No blocking work in VLC audio callback
-- [ ] No unapproved network access, telemetry, transcript/PCM persistence, or sensitive logs introduced; any approved egress is documented and opt-in
-- [ ] Memory, audio queue, frame, text, and retry limits are bounded
-- [ ] Error path is safe: captions may stop, playback does not
-- [ ] Unit/contract/integration tests pass as applicable
-- [ ] Formatting, warnings-as-errors, and static checks pass
-- [ ] Protocol contract and compatibility version updated if needed
-- [ ] `docs/decisions.md`, roadmap, and AI context updated when assumptions change
-- [ ] Reviewer can reproduce the result from a clean checkout
+## Failure semantics
+| Boundary/failure | retry | recover | fail session | fail process/startup |
+| --- | --- | --- | --- | --- |
+| <case> | | | | |
+
+Do not use empty/zero/success as a substitute for distinct AGAIN/EOF/error states.
+
+## Lifecycle impact
+Mark affected transitions only: START/new media, pause/resume, seek/discontinuity, media swap, EOF/tail flush, STOP/shutdown, worker failure/respawn, overload/drop.
+
+For each affected transition, state what resets, survives, flushes, retries, or fails.
+
+## Identity / metrics / hot path
+- Identity-bearing values changed; overflow behavior:
+- Metrics changed; owner, units, reset domain, fallback:
+- Realtime-adjacent code changed; why callback restrictions remain satisfied:
+
+## Tests first
+List failure/boundary/seam specs that establish the contract before implementation. New C contract tests use PR #50-style named accumulating checks (`vw_test_check_*`) and one `vw_test_finish`.
+
+- Red-before-implementation specs:
+- Existing ledger regressions affected:
+- Faults to inject:
+
+## Implementation
+Smallest vertical change that makes the contract specs pass. After fixing, search every producer/copy/serializer/validator/consumer of the invariant, not only the original call site.
+
+## Verification
+- [ ] Relevant new specs failed for the intended reason before implementation
+- [ ] New/affected specs pass
+- [ ] Existing relevant regression suite passes
+- [ ] `clang-format --dry-run --Werror <modified-c-files>`
+- [ ] `cmake --preset linux-x64-debug && cmake --build --preset linux-x64-debug`
+- [ ] `ctest --preset linux-x64-debug --output-on-failure`
+- [ ] Existing memcheck gate run when available/applicable
+- [ ] Only contract-relevant docs updated
 
 ## Evidence
-- Build/test outputs or CI links:
-- Measured performance (if relevant):
+- Commands/results:
 - Known limitations/follow-ups:
-```
-
-## Slice rule
-
-A task should cut vertically through the smallest necessary layers: e.g., “show a deterministic timed caption from a worker” includes protocol fixture, receiver validation, presenter integration, and end-to-end proof. Do not create UI/API/database layers merely because a generic template expects them: MVP has no GUI, HTTP API, or database.
