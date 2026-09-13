@@ -19,17 +19,16 @@
 #define VW_BENCHMARK_REPORT_FILENAME "vlc-whisper-benchmark.txt"
 
 #ifndef _WIN32
-static bool vw_benchmark_directory_exists(const char* path) {
+static bool vw_benchmark_directory_is_usable(const char* path) {
   struct stat info;
-  return path && path[0] && stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+  return path && path[0] && stat(path, &info) == 0 && S_ISDIR(info.st_mode) && access(path, W_OK | X_OK) == 0;
 }
 
 static bool vw_benchmark_directory_is_private_runtime(const char* path) {
   struct stat info;
-  if (!path || !path[0] || stat(path, &info) != 0 || !S_ISDIR(info.st_mode)) return false;
+  if (!vw_benchmark_directory_is_usable(path) || stat(path, &info) != 0) return false;
   if (info.st_uid != getuid()) return false;
-  if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0) return false;
-  return access(path, W_OK | X_OK) == 0;
+  return (info.st_mode & (S_IRWXG | S_IRWXO)) == 0;
 }
 
 static bool vw_benchmark_resolve_private_fallback(const char* base_dir, char* path, size_t path_size) {
@@ -43,7 +42,7 @@ static bool vw_benchmark_resolve_private_fallback(const char* base_dir, char* pa
   struct stat info;
   if (lstat(path, &info) != 0 || !S_ISDIR(info.st_mode) || info.st_uid != getuid()) return false;
   if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0 && chmod(path, S_IRWXU) != 0) return false;
-  return true;
+  return access(path, W_OK | X_OK) == 0;
 }
 #endif
 
@@ -59,8 +58,12 @@ static bool vw_benchmark_resolve_report_path(char* path, size_t path_size) {
   const char* temp_dir = getenv("XDG_RUNTIME_DIR");
   if (!vw_benchmark_directory_is_private_runtime(temp_dir)) {
     const char* base_dir = getenv("TMPDIR");
-    if (!vw_benchmark_directory_exists(base_dir)) base_dir = "/tmp";
-    if (!vw_benchmark_resolve_private_fallback(base_dir, fallback_dir, sizeof(fallback_dir))) return false;
+    if (!vw_benchmark_directory_is_usable(base_dir)) base_dir = "/tmp";
+    if (!vw_benchmark_resolve_private_fallback(base_dir, fallback_dir, sizeof(fallback_dir))) {
+      if (strcmp(base_dir, "/tmp") == 0 ||
+          !vw_benchmark_resolve_private_fallback("/tmp", fallback_dir, sizeof(fallback_dir)))
+        return false;
+    }
     temp_dir = fallback_dir;
   }
   int written = snprintf(path, path_size, "%s/%s", temp_dir, VW_BENCHMARK_REPORT_FILENAME);
@@ -175,20 +178,6 @@ static int64_t vw_benchmark_trans_percentile(const vw_benchmark_t* benchmark, un
   qsort(sorted, benchmark->translation_latency_sample_count, sizeof(sorted[0]), vw_benchmark_compare_i64);
   size_t index = ((size_t)percentile * (benchmark->translation_latency_sample_count - 1U) + 99U) / 100U;
   return sorted[index];
-}
-
-static const char* vw_benchmark_translation_failure_reason(uint32_t latency_us) {
-  if (latency_us == 0) return "pipeline_saturated_or_unavailable";
-  if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US) return "deadline_exhausted";
-  return "provider_fallbacks_failed";
-}
-
-static const char* vw_benchmark_translation_failure_detail(uint32_t latency_us) {
-  if (latency_us == 0) return "translation pipeline rejected the cue before a network request could run";
-  if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US)
-    return "global 800ms cue deadline exhausted while running the Web RPC, GTX, and Mobile fallback chain";
-  return "Web RPC, GTX, and Mobile produced no valid translation before the deadline (request or response parse "
-         "failure)";
 }
 
 static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, int64_t end_us) {
@@ -354,8 +343,6 @@ void vw_benchmark_record_caption_filtered(vw_benchmark_t* benchmark, bool paused
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success) {
   if (!benchmark) return;
   if (!success) {
-    const char* reason = vw_benchmark_translation_failure_reason(latency_us);
-    const char* detail = vw_benchmark_translation_failure_detail(latency_us);
     char start_pts_s[64];
     char end_pts_s[64];
     char latency_ms[64];
@@ -363,8 +350,9 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
     if (!vw_benchmark_format_s(end_pts_s, sizeof(end_pts_s), benchmark->last_segment_end_pts_us)) return;
     if (!vw_benchmark_format_ms(latency_ms, sizeof(latency_ms), (int64_t)latency_us)) return;
     vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE",
-                 "segment=%llu start_pts_s=%s end_pts_s=%s latency_ms=%s reason=%s detail=%s",
-                 (unsigned long long)benchmark->last_segment_id, start_pts_s, end_pts_s, latency_ms, reason, detail);
+                 "segment=%llu start_pts_s=%s end_pts_s=%s latency_ms=%s reason=translation_failed "
+                 "detail=worker_did_not_provide_explicit_failure_cause",
+                 (unsigned long long)benchmark->last_segment_id, start_pts_s, end_pts_s, latency_ms);
   }
   if (!benchmark->active) return;
   benchmark->translation_requests_sent++;
