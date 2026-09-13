@@ -27,9 +27,6 @@ typedef struct vw_audio_capture {
   uint32_t resample_source_rate;
   // Sender requests resampler/PTS reset via atomics; callback clears after resetting.
   _Atomic bool* reset_pending;
-  // Producer-to-sender signal: set when valid PTS resumes after invalid stretch; sender drains old queued audio before
-  // forwarding new.
-  _Atomic bool* invalid_pts_drain_pending;  // optional external signal (points into plugin sys atomic)
   struct vw_spsc_queue* queue;
   // Optional atomic pointer to current playback rate; used to throttle/drop audio at high speeds (>4.0x).
   _Atomic float* playback_rate;

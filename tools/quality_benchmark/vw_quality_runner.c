@@ -245,13 +245,23 @@ static bool vw_quality_prepare_markers(const char* prefix) {
   if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_EOF_MARKER_SUFFIX)) return false;
   remove(path);
   if (!vw_quality_marker_path(path, sizeof(path), prefix, VW_QUALITY_DROPS_MARKER_SUFFIX)) return false;
-  FILE* drops = fopen(path, "wb");
+  char tmp_path[VW_PATH_MAX_BYTES];
+  int written = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+  if (written <= 0 || (size_t)written >= sizeof(tmp_path)) return false;
+  FILE* drops = fopen(tmp_path, "wb");
   if (!drops) return false;
   bool write_ok = fputs("uninitialized", drops) >= 0;
   bool close_ok = fclose(drops) == 0;
   bool ok = write_ok && close_ok;
-  if (!ok) remove(path);
-  return ok && vw_quality_set_marker_env(prefix);
+  if (!ok) {
+    remove(tmp_path);
+    return false;
+  }
+  if (rename(tmp_path, path) != 0) {
+    remove(tmp_path);
+    return false;
+  }
+  return vw_quality_set_marker_env(prefix);
 }
 
 static void vw_quality_cleanup_markers(const char* prefix) {

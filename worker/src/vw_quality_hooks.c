@@ -25,41 +25,53 @@ static bool vw_quality_marker_path(char* out, size_t out_size, const char* suffi
   return written > 0 && (size_t)written < out_size;
 }
 
+#include <stdatomic.h>
+
 static void vw_quality_write_marker(const char* suffix, const char* value) {
   if (!suffix || !value) return;
   char path[VW_PATH_MAX_BYTES];
+  char tmp_path[VW_PATH_MAX_BYTES];
   if (!vw_quality_marker_path(path, sizeof(path), suffix)) {
     vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "marker path exceeds maximum buffer size for suffix '%s'", suffix);
     return;
   }
-  FILE* file = fopen(path, "wb");
+  int written = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+  if (written <= 0 || (size_t)written >= sizeof(tmp_path)) return;
+
+  FILE* file = fopen(tmp_path, "wb");
   if (!file) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "cannot open quality marker file '%s': %s", path, strerror(errno));
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "cannot open quality marker file '%s': %s", tmp_path,
+                 strerror(errno));
     return;
   }
   int printed = fprintf(file, "%s", value);
-  if (printed < 0) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "fprintf failed writing to marker file '%s': %s", path,
-                 strerror(errno));
+  bool write_ok = printed >= 0;
+  bool close_ok = fclose(file) == 0;
+  if (!write_ok || !close_ok) {
+    remove(tmp_path);
+    return;
   }
-  if (fclose(file) != 0) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "fclose failed for marker file '%s': %s", path, strerror(errno));
+  if (rename(tmp_path, path) != 0) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "atomic rename failed for marker file '%s' -> '%s': %s", tmp_path,
+                 path, strerror(errno));
+    remove(tmp_path);
   }
 }
 
-static void vw_quality_write_drop_marker(uint64_t dropped_audio_us) {
+static _Atomic uint64_t s_dropped_audio_us = 0;
+static _Atomic bool s_atexit_registered = false;
+
+static void vw_quality_flush_drop_marker(void) {
+  uint64_t dropped = atomic_load(&s_dropped_audio_us);
   char value[32];
-  snprintf(value, sizeof(value), "%" PRIu64, dropped_audio_us);
+  snprintf(value, sizeof(value), "%" PRIu64, dropped);
   vw_quality_write_marker(VW_QUALITY_DROPS_MARKER_SUFFIX, value);
 }
 
 void vw_quality_hook_on_queue_drop(uint64_t dropped_audio_us) {
-  static uint64_t s_last_dropped_audio_us = 0;
-  static bool s_has_written_drop = false;
-  if (!s_has_written_drop || dropped_audio_us != s_last_dropped_audio_us) {
-    s_last_dropped_audio_us = dropped_audio_us;
-    s_has_written_drop = true;
-    vw_quality_write_drop_marker(dropped_audio_us);
+  atomic_store(&s_dropped_audio_us, dropped_audio_us);
+  if (!atomic_exchange(&s_atexit_registered, true)) {
+    atexit(vw_quality_flush_drop_marker);
   }
 }
 
@@ -68,7 +80,10 @@ vw_source_decoder_read_status_t __wrap_vw_source_decoder_read_s16le(vw_source_de
                                                                     int64_t* out_pts_us) {
   vw_source_decoder_read_status_t status =
       __real_vw_source_decoder_read_s16le(decoder, out_pcm, max_samples, out_sample_count, out_pts_us);
-  if (status == VW_SOURCE_DECODER_READ_EOF) vw_quality_write_marker(VW_QUALITY_EOF_MARKER_SUFFIX, "1");
+  if (status == VW_SOURCE_DECODER_READ_EOF) {
+    vw_quality_flush_drop_marker();
+    vw_quality_write_marker(VW_QUALITY_EOF_MARKER_SUFFIX, "1");
+  }
   return status;
 }
 

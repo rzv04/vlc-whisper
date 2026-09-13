@@ -240,27 +240,24 @@ static void* vw_worker_reader_main(void* arg) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SEQUENCE", "stale sequence %llu <= %llu type=%u; discarding",
                    (unsigned long long)header.sequence, (unsigned long long)last_plugin_sequence, header.type);
       if (header.payload_length > 0) {
-        uint8_t* tmp = (uint8_t*)malloc(header.payload_length);
-        if (tmp) {
-          uint32_t drained = 0;
-          while (drained < header.payload_length) {
-            int32_t r = vw_ipc_receive(a->handle, tmp + drained, header.payload_length - drained);
-            if (r < 0) {
-              if (r == VW_IPC_RECV_TIMEOUT) {
-                if (!atomic_load(a->running)) {
-                  free(tmp);
-                  return NULL;
-                }
-                continue;
-              }
-              free(tmp);
-              goto fatal;
-            }
-            drained += (uint32_t)r;
+        uint8_t discard_buf[512];
+        uint32_t drained = 0;
+        while (drained < header.payload_length) {
+          uint32_t to_read = header.payload_length - drained;
+          if (to_read > sizeof(discard_buf)) {
+            to_read = (uint32_t)sizeof(discard_buf);
           }
-          free(tmp);
-        } else {
-          goto fatal;
+          int32_t r = vw_ipc_receive(a->handle, discard_buf, to_read);
+          if (r < 0) {
+            if (r == VW_IPC_RECV_TIMEOUT) {
+              if (!atomic_load(a->running)) {
+                return NULL;
+              }
+              continue;
+            }
+            goto fatal;
+          }
+          drained += (uint32_t)r;
         }
       }
       continue;

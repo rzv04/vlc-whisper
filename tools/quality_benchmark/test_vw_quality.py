@@ -1,5 +1,6 @@
 import json
 import math
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from vw_benchmark import (
     validate_executable_path,
 )
 from vw_download_corpus import duration_is_eligible, safe_sample_id, write_pcm16_wav
+from vw_download_corpus_direct import parse_wav_float32_to_pcm16
 from vw_quality import (
     ErrorCounts,
     char_error_rate,
@@ -175,6 +177,18 @@ class QualityHelpersTest(unittest.TestCase):
             path = Path(tmp) / "clip.wav"
             write_pcm16_wav(path, b"\0\0" * 160)
             self.assertTrue(path.is_file())
+
+    def test_riff_chunk_boundary_validation(self):
+        malformed_wav = b"RIFF" + struct.pack("<I", 100) + b"WAVE" + b"fmt " + struct.pack("<I", 1000)
+        with self.assertRaises(ValueError):
+            parse_wav_float32_to_pcm16(malformed_wav)
+
+    def test_write_pcm16_wav_atomic_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audio.wav"
+            write_pcm16_wav(path, b"\0\0" * 160)
+            self.assertTrue(path.is_file())
+            self.assertFalse(path.with_suffix(".tmp").exists())
 
 
 if __name__ == "__main__":

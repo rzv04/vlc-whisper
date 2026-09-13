@@ -10,6 +10,7 @@ import math
 import os
 import subprocess
 import sys
+import uuid
 import wave
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -384,7 +385,8 @@ def main() -> int:
     output_path = args.output
     if output_path is None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
-        output_path = DEFAULT_RESULTS_DIR / f"quality-{stamp}.json"
+        unique_suffix = uuid.uuid4().hex[:8]
+        output_path = DEFAULT_RESULTS_DIR / f"quality-{stamp}-{unique_suffix}.json"
     output_path = output_path.resolve()
     report = {
         "schema_version": 1,
