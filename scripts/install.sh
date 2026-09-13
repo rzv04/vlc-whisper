@@ -13,8 +13,12 @@ die() {
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
-  command -v sudo >/dev/null 2>&1 || die "sudo is required to uninstall"
-  sudo apt-get remove -y vlc-whisper
+  if [ "$(id -u)" = "0" ]; then
+    apt-get remove -y vlc-whisper
+  else
+    command -v sudo >/dev/null 2>&1 || die "sudo is required to uninstall"
+    sudo apt-get remove -y vlc-whisper
+  fi
   exit 0
 fi
 
@@ -24,28 +28,38 @@ fi
 . /etc/os-release
 [ "${ID:-}" = "ubuntu" ] || die "this installer currently supports Ubuntu only"
 
-for cmd in sudo apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp; do
+for cmd in apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp; do
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 done
+if [ "$(id -u)" != "0" ]; then
+  command -v sudo >/dev/null 2>&1 || die "sudo is required to install"
+fi
 
-if ! dpkg-query -W -f='${Status}' vlc 2>/dev/null | grep -q 'install ok installed'; then
+installed="$(dpkg-query -W -f='${Version}' vlc 2>/dev/null || true)"
+candidate="$(apt-cache policy vlc 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
+[ -n "$candidate" ] && [ "$candidate" != "(none)" ] || die "Ubuntu APT has no VLC candidate"
+
+if [ -z "$installed" ]; then
   if command -v snap >/dev/null 2>&1 && snap list vlc >/dev/null 2>&1; then
     echo "vlc-whisper: Snap VLC detected; the supported APT VLC will be installed alongside it." >&2
   fi
   if command -v flatpak >/dev/null 2>&1 && flatpak info org.videolan.VLC >/dev/null 2>&1; then
     echo "vlc-whisper: Flatpak VLC detected; the supported APT VLC will be installed alongside it." >&2
   fi
+  dpkg --compare-versions "$candidate" ge "$MIN_VLC" || \
+    die "VLC >= $MIN_VLC is required; VLC is not installed and APT candidate is $candidate"
+else
+  dpkg --compare-versions "$installed" ge "$MIN_VLC" || dpkg --compare-versions "$candidate" ge "$MIN_VLC" || \
+    die "VLC >= $MIN_VLC is required; installed VLC is $installed and APT candidate is $candidate"
+  if ! dpkg --compare-versions "$installed" ge "$MIN_VLC"; then
+    echo "vlc-whisper: upgrading VLC $installed to a supported version." >&2
+  fi
 fi
 
-sudo apt-get update
-candidate="$(apt-cache policy vlc | awk '/Candidate:/ { print $2; exit }')"
-[ -n "$candidate" ] && [ "$candidate" != "(none)" ] || die "Ubuntu APT has no VLC candidate"
-dpkg --compare-versions "$candidate" ge "$MIN_VLC" || \
-  die "VLC >= $MIN_VLC is required; APT candidate is $candidate"
-
-installed="$(dpkg-query -W -f='${Version}' vlc 2>/dev/null || true)"
-if [ -n "$installed" ] && ! dpkg --compare-versions "$installed" ge "$MIN_VLC"; then
-  echo "vlc-whisper: upgrading VLC $installed to a supported version." >&2
+if [ "$(id -u)" = "0" ]; then
+  apt-get update
+else
+  sudo apt-get update
 fi
 
 tmp="$(mktemp -d)"
@@ -57,7 +71,11 @@ expected="$(grep -Eo '[[:xdigit:]]{64}' "$tmp/$CHECKSUM" | head -n 1)"
 actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1 }')"
 [ "$actual" = "$expected" ] || die "release checksum mismatch"
 
-sudo apt-get install -y "$tmp/$PACKAGE"
+if [ "$(id -u)" = "0" ]; then
+  apt-get install -y "$tmp/$PACKAGE"
+else
+  sudo apt-get install -y "$tmp/$PACKAGE"
+fi
 
 installed="$(dpkg-query -W -f='${Version}' vlc 2>/dev/null || true)"
 [ -n "$installed" ] && dpkg --compare-versions "$installed" ge "$MIN_VLC" || \
