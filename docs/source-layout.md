@@ -24,6 +24,8 @@ All project-authored C is C17. The plugin does not link Whisper; the worker owns
 
 **Protocol:** codecs serialize; validators enforce structural and semantic contracts. Identity values must be rejected before any truncating copy.
 
+**Runtime benchmark:** the plugin owns one per-user temporary `vlc-whisper-benchmark.txt` last-session report. Snapshot writes use unique same-directory staging files; internal timing stays in microseconds while report v2 presents seconds/milliseconds.
+
 **Tests:** `tests/unit/` covers local contracts; `tests/integration/` covers cross-component/process/lifecycle seams; `tests/support/` contains harnesses only; `tests/e2e/` covers real VLC/environment-heavy acceptance. `tests/include/vw_test.h` provides PR #50-style named accumulating checks.
 
 ## Adding or moving code

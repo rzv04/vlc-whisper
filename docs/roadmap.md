@@ -16,7 +16,7 @@ The known-defect master ledger and subsequent hardening are tracked in issue #47
 
 ## Milestone 5 — Quality baseline and reliability gate
 
-Before expanding feature surface, establish reproducible quality/reliability evidence while preserving local-file seeking, live behavior, caption stability, privacy, and playback safety. The `milestone-5`-based reconciliation fixes active P2 session, seek/timeline, decoder, transport, translation-resource, and close-tail defects with deterministic regressions; see `issues.md` and `test-strategy.md`. This does not complete the corpus, optional quality pass, P1/P3 inventory, or the final clean-machine release gate.
+Before expanding feature surface, establish reproducible quality/reliability evidence while preserving local-file seeking, live behavior, caption stability, privacy, and playback safety. The `milestone-5`-based reconciliation fixes active P2 session, seek/timeline, decoder, transport, translation-resource, and close-tail defects with deterministic regressions; see `issues.md` and `test-strategy.md`. This does not complete the corpus, optional quality pass, P1/P3 inventory, or the final clean-machine release gate. Runtime benchmark diagnostics use one per-user last-session text report with human-readable second/millisecond timing, while translation failures remain visible in privacy-safe plugin diagnostics.
 
 ### 24. Finish regression corpus and quality/latency baseline
 

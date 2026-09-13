@@ -6,38 +6,142 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "vw_log.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <fcntl.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 
-static bool vw_benchmark_create_report(char* path, size_t path_size) {
+#define VW_BENCHMARK_REPORT_FILENAME "vlc-whisper-benchmark.txt"
+
+#ifndef _WIN32
+static bool vw_benchmark_directory_exists(const char* path) {
+  struct stat info;
+  return path && path[0] && stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+static bool vw_benchmark_resolve_private_fallback(char* path, size_t path_size) {
+  if (!path || path_size == 0) return false;
+  int written = snprintf(path, path_size, "/tmp/vlc-whisper-%lu", (unsigned long)getuid());
+  if (written < 0 || (size_t)written >= path_size) return false;
+
+  if (mkdir(path, S_IRWXU) == 0) return true;
+  if (errno != EEXIST) return false;
+
+  struct stat info;
+  if (lstat(path, &info) != 0 || !S_ISDIR(info.st_mode) || info.st_uid != getuid()) return false;
+  if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0 && chmod(path, S_IRWXU) != 0) return false;
+  return true;
+}
+#endif
+
+static bool vw_benchmark_resolve_report_path(char* path, size_t path_size) {
   if (!path || path_size == 0) return false;
 #ifdef _WIN32
-  char temp_dir[MAX_PATH];
+  char temp_dir[VW_PATH_MAX_BYTES];
   DWORD length = GetTempPathA((DWORD)sizeof(temp_dir), temp_dir);
   if (length == 0 || length >= sizeof(temp_dir)) return false;
-  UINT result = GetTempFileNameA(temp_dir, "vwb", 0, path);
-  return result != 0 && strlen(path) < path_size;
+  int written = snprintf(path, path_size, "%s%s", temp_dir, VW_BENCHMARK_REPORT_FILENAME);
 #else
-  char template_path[] = "/tmp/vlc-whisper-benchmark-XXXXXX";
-  int fd = mkstemp(template_path);
-  if (fd < 0) return false;
-  close(fd);
-  if (strlen(template_path) >= path_size) {
-    unlink(template_path);
-    return false;
+  char fallback_dir[VW_PATH_MAX_BYTES];
+  const char* temp_dir = getenv("XDG_RUNTIME_DIR");
+  if (!vw_benchmark_directory_exists(temp_dir)) temp_dir = getenv("TMPDIR");
+  if (!vw_benchmark_directory_exists(temp_dir)) {
+    if (!vw_benchmark_resolve_private_fallback(fallback_dir, sizeof(fallback_dir))) return false;
+    temp_dir = fallback_dir;
   }
-  snprintf(path, path_size, "%s", template_path);
-  return true;
+  int written = snprintf(path, path_size, "%s/%s", temp_dir, VW_BENCHMARK_REPORT_FILENAME);
+#endif
+  return written >= 0 && (size_t)written < path_size;
+}
+
+static FILE* vw_benchmark_open_staging_report(const char* report_path, char* staging_path, size_t staging_size) {
+  if (!report_path || !staging_path || staging_size == 0) return NULL;
+#ifdef _WIN32
+  char temp_dir[VW_PATH_MAX_BYTES];
+  int copied = snprintf(temp_dir, sizeof(temp_dir), "%s", report_path);
+  if (copied < 0 || (size_t)copied >= sizeof(temp_dir)) return NULL;
+  char* slash = strrchr(temp_dir, '\\');
+  char* forward_slash = strrchr(temp_dir, '/');
+  if (!slash || (forward_slash && forward_slash > slash)) slash = forward_slash;
+  if (!slash) return NULL;
+  slash[1] = '\0';
+  if (GetTempFileNameA(temp_dir, "vwb", 0, staging_path) == 0) return NULL;
+  FILE* report = fopen(staging_path, "w");
+  if (!report) remove(staging_path);
+  return report;
+#else
+  int written = snprintf(staging_path, staging_size, "%s.XXXXXX", report_path);
+  if (written < 0 || (size_t)written >= staging_size) return NULL;
+  int fd = mkstemp(staging_path);
+  if (fd < 0) return NULL;
+  if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
+    close(fd);
+    remove(staging_path);
+    return NULL;
+  }
+  FILE* report = fdopen(fd, "w");
+  if (!report) {
+    close(fd);
+    remove(staging_path);
+  }
+  return report;
 #endif
 }
 
-static double vw_benchmark_ratio(uint64_t numerator, uint64_t denominator) {
-  return denominator == 0 ? 0.0 : (double)numerator / (double)denominator;
+static uint64_t vw_benchmark_i64_magnitude(int64_t value) {
+  if (value >= 0) return (uint64_t)value;
+  return (uint64_t)(-(value + 1)) + 1U;
+}
+
+static bool vw_benchmark_format_ms(char* text, size_t text_size, int64_t duration_us) {
+  uint64_t magnitude = vw_benchmark_i64_magnitude(duration_us);
+  uint64_t whole_ms = magnitude / 1000U;
+  uint64_t fractional_us = magnitude % 1000U;
+  int written = snprintf(text, text_size, "%s%llu.%03llu", duration_us < 0 ? "-" : "",
+                         (unsigned long long)whole_ms, (unsigned long long)fractional_us);
+  return written >= 0 && (size_t)written < text_size;
+}
+
+static bool vw_benchmark_format_s(char* text, size_t text_size, int64_t duration_us) {
+  uint64_t magnitude = vw_benchmark_i64_magnitude(duration_us);
+  uint64_t total_ms = magnitude / 1000U;
+  if (magnitude % 1000U >= 500U) total_ms++;
+  int written = snprintf(text, text_size, "%s%llu.%03llu", duration_us < 0 ? "-" : "",
+                         (unsigned long long)(total_ms / 1000U), (unsigned long long)(total_ms % 1000U));
+  return written >= 0 && (size_t)written < text_size;
+}
+
+static bool vw_benchmark_format_u64_ms(char* text, size_t text_size, uint64_t duration_us) {
+  int written = snprintf(text, text_size, "%llu.%03llu", (unsigned long long)(duration_us / 1000U),
+                         (unsigned long long)(duration_us % 1000U));
+  return written >= 0 && (size_t)written < text_size;
+}
+
+static bool vw_benchmark_format_u64_s(char* text, size_t text_size, uint64_t duration_us) {
+  uint64_t total_ms = duration_us / 1000U;
+  if (duration_us % 1000U >= 500U) total_ms++;
+  int written = snprintf(text, text_size, "%llu.%03llu", (unsigned long long)(total_ms / 1000U),
+                         (unsigned long long)(total_ms % 1000U));
+  return written >= 0 && (size_t)written < text_size;
+}
+
+static bool vw_benchmark_format_ratio(char* text, size_t text_size, uint64_t numerator, uint64_t denominator) {
+  if (denominator == 0) return snprintf(text, text_size, "0.000000") == 8;
+  long double ratio = (long double)numerator / (long double)denominator;
+  uint64_t whole = (uint64_t)ratio;
+  uint64_t fractional = (uint64_t)(((ratio - (long double)whole) * 1000000.0L) + 0.5L);
+  if (fractional == 1000000U && whole < UINT64_MAX) {
+    whole++;
+    fractional = 0;
+  }
+  int written = snprintf(text, text_size, "%llu.%06llu", (unsigned long long)whole,
+                         (unsigned long long)fractional);
+  return written >= 0 && (size_t)written < text_size;
 }
 
 static int vw_benchmark_compare_i64(const void* lhs, const void* rhs) {
@@ -64,27 +168,44 @@ static int64_t vw_benchmark_trans_percentile(const vw_benchmark_t* benchmark, un
   size_t index = ((size_t)percentile * (benchmark->translation_latency_sample_count - 1U) + 99U) / 100U;
   return sorted[index];
 }
+
+static const char* vw_benchmark_translation_failure_reason(uint32_t latency_us) {
+  if (latency_us == 0) return "pipeline_saturated_or_unavailable";
+  if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US) return "deadline_exhausted";
+  return "provider_fallbacks_failed";
+}
+
+static const char* vw_benchmark_translation_failure_detail(uint32_t latency_us) {
+  if (latency_us == 0) return "translation pipeline rejected the cue before a network request could run";
+  if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US)
+    return "global 800ms cue deadline exhausted while running the Web RPC, GTX, and Mobile fallback chain";
+  return "Web RPC, GTX, and Mobile produced no valid translation before the deadline (request or response parse "
+         "failure)";
+}
+
 static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, int64_t end_us) {
   if (!benchmark || !benchmark->active || benchmark->report_path[0] == '\0') return false;
-  char temp_path[VW_PATH_MAX_BYTES];
-  int path_length = snprintf(temp_path, sizeof(temp_path), "%s.next", benchmark->report_path);
-  if (path_length < 0 || (size_t)path_length >= sizeof(temp_path)) return false;
-  FILE* report = fopen(temp_path, "w");
+  char staging_path[VW_PATH_MAX_BYTES];
+  FILE* report = vw_benchmark_open_staging_report(benchmark->report_path, staging_path, sizeof(staging_path));
   if (!report) return false;
-#ifndef _WIN32
-  chmod(temp_path, S_IRUSR | S_IWUSR);
-#endif
 
   uint64_t processing_audio_us = benchmark->audio_duration_us;
   if (processing_audio_us == 0) processing_audio_us = benchmark->segment_audio_duration_us;
   int64_t duration_us = end_us > benchmark->started_us ? end_us - benchmark->started_us : 0;
-  fprintf(report, "report_version=1\n");
+  int64_t translation_latency_min_us =
+      benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 0) : 0;
+  int64_t translation_latency_max_us =
+      benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 100) : 0;
+  char value[64];
+
+  fprintf(report, "report_version=2\n");
   fprintf(report, "state=%s\n", finalized ? "finalized" : "active");
   fprintf(report, "model=%s\n", benchmark->model_id[0] ? benchmark->model_id : "unknown");
   fprintf(report, "backend=%s\n", benchmark->backend[0] ? benchmark->backend : "unknown");
-  fprintf(report, "session_duration_us=%lld\n", (long long)duration_us);
+  if (vw_benchmark_format_s(value, sizeof(value), duration_us)) fprintf(report, "session_duration_s=%s\n", value);
   fprintf(report, "audio_chunks_sent=%llu\n", (unsigned long long)benchmark->audio_chunks_sent);
-  fprintf(report, "audio_duration_us=%llu\n", (unsigned long long)benchmark->audio_duration_us);
+  if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->audio_duration_us))
+    fprintf(report, "audio_duration_s=%s\n", value);
   fprintf(report, "worker_frames_received=%llu\n", (unsigned long long)benchmark->worker_frames_received);
   fprintf(report, "captions_received=%llu\n", (unsigned long long)benchmark->captions_received);
   fprintf(report, "captions_sent=%llu\n", (unsigned long long)benchmark->captions_sent);
@@ -93,24 +214,36 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "captions_stale=%llu\n", (unsigned long long)benchmark->captions_stale);
   fprintf(report, "captions_presenter_rejected=%llu\n", (unsigned long long)benchmark->captions_presenter_rejected);
   fprintf(report, "segment_count=%llu\n", (unsigned long long)benchmark->captions_received);
-  fprintf(report, "segment_audio_duration_us=%llu\n", (unsigned long long)benchmark->segment_audio_duration_us);
+  if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->segment_audio_duration_us))
+    fprintf(report, "segment_audio_duration_s=%s\n", value);
   fprintf(report, "segment_text_bytes=%llu\n", (unsigned long long)benchmark->segment_text_bytes);
-  fprintf(report, "segment_transcription_duration_us=%llu\n", (unsigned long long)benchmark->inference_us);
-  fprintf(report, "inference_processing_duration_us=%llu\n", (unsigned long long)benchmark->inference_us);
-  fprintf(report, "processing_audio_duration_us=%llu\n", (unsigned long long)processing_audio_us);
-  fprintf(report, "real_time_factor=%.6f\n", vw_benchmark_ratio(benchmark->inference_us, processing_audio_us));
-  fprintf(report, "processing_speed_ratio=%.6f\n", vw_benchmark_ratio(processing_audio_us, benchmark->inference_us));
-  fprintf(report, "first_sent_caption_elapsed_us=%lld\n",
-          (long long)(benchmark->first_caption_recorded ? benchmark->first_caption_elapsed_us : 0));
+  if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->inference_us)) {
+    fprintf(report, "segment_transcription_duration_s=%s\n", value);
+    fprintf(report, "inference_processing_duration_s=%s\n", value);
+  }
+  if (vw_benchmark_format_u64_s(value, sizeof(value), processing_audio_us))
+    fprintf(report, "processing_audio_duration_s=%s\n", value);
+  if (vw_benchmark_format_ratio(value, sizeof(value), benchmark->inference_us, processing_audio_us))
+    fprintf(report, "real_time_factor=%s\n", value);
+  if (vw_benchmark_format_ratio(value, sizeof(value), processing_audio_us, benchmark->inference_us))
+    fprintf(report, "processing_speed_ratio=%s\n", value);
+  if (vw_benchmark_format_ms(value, sizeof(value),
+                             benchmark->first_caption_recorded ? benchmark->first_caption_elapsed_us : 0))
+    fprintf(report, "first_sent_caption_elapsed_ms=%s\n", value);
   fprintf(report, "utterance_latency_samples=%zu\n", benchmark->latency_sample_count);
   fprintf(report, "utterance_latency_samples_dropped=%llu\n", (unsigned long long)benchmark->latency_samples_dropped);
-  fprintf(report, "utterance_latency_min_us=%lld\n",
-          (long long)(benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 0) : 0));
-  fprintf(report, "utterance_latency_p50_us=%lld\n", (long long)vw_benchmark_percentile(benchmark, 50));
-  fprintf(report, "utterance_latency_p95_us=%lld\n", (long long)vw_benchmark_percentile(benchmark, 95));
-  fprintf(report, "utterance_latency_max_us=%lld\n",
-          (long long)(benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 100) : 0));
-  fprintf(report, "queue_audio_dropped_us=%llu\n", (unsigned long long)benchmark->dropped_audio_us);
+  if (vw_benchmark_format_ms(
+          value, sizeof(value), benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 0) : 0))
+    fprintf(report, "utterance_latency_min_ms=%s\n", value);
+  if (vw_benchmark_format_ms(value, sizeof(value), vw_benchmark_percentile(benchmark, 50)))
+    fprintf(report, "utterance_latency_p50_ms=%s\n", value);
+  if (vw_benchmark_format_ms(value, sizeof(value), vw_benchmark_percentile(benchmark, 95)))
+    fprintf(report, "utterance_latency_p95_ms=%s\n", value);
+  if (vw_benchmark_format_ms(
+          value, sizeof(value), benchmark->latency_sample_count ? vw_benchmark_percentile(benchmark, 100) : 0))
+    fprintf(report, "utterance_latency_max_ms=%s\n", value);
+  if (vw_benchmark_format_u64_ms(value, sizeof(value), benchmark->dropped_audio_us))
+    fprintf(report, "queue_audio_dropped_ms=%s\n", value);
   fprintf(report, "translation_requests_sent=%llu\n", (unsigned long long)benchmark->translation_requests_sent);
   fprintf(report, "translation_success_count=%llu\n", (unsigned long long)benchmark->translation_success_count);
   fprintf(report, "translation_tier1_count=%llu\n", (unsigned long long)benchmark->translation_tier1_count);
@@ -118,39 +251,42 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "translation_tier3_count=%llu\n", (unsigned long long)benchmark->translation_tier3_count);
   fprintf(report, "translation_failure_count=%llu\n", (unsigned long long)benchmark->translation_failure_count);
   fprintf(report, "translation_timeout_count=%llu\n", (unsigned long long)benchmark->translation_timeout_count);
-  fprintf(report, "translation_duration_us=%llu\n", (unsigned long long)benchmark->translation_duration_us);
+  if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->translation_duration_us))
+    fprintf(report, "translation_duration_s=%s\n", value);
   fprintf(report, "translation_latency_samples=%zu\n", benchmark->translation_latency_sample_count);
-  fprintf(report, "translation_latency_min_us=%lld\n",
-          (long long)(benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 0) : 0));
-  fprintf(report, "translation_latency_p50_us=%lld\n", (long long)vw_benchmark_trans_percentile(benchmark, 50));
-  fprintf(report, "translation_latency_p95_us=%lld\n", (long long)vw_benchmark_trans_percentile(benchmark, 95));
-  fprintf(report, "translation_latency_max_us=%lld\n",
-          (long long)(benchmark->translation_latency_sample_count ? vw_benchmark_trans_percentile(benchmark, 100) : 0));
+  if (vw_benchmark_format_ms(value, sizeof(value), translation_latency_min_us))
+    fprintf(report, "translation_latency_min_ms=%s\n", value);
+  if (vw_benchmark_format_ms(value, sizeof(value), vw_benchmark_trans_percentile(benchmark, 50)))
+    fprintf(report, "translation_latency_p50_ms=%s\n", value);
+  if (vw_benchmark_format_ms(value, sizeof(value), vw_benchmark_trans_percentile(benchmark, 95)))
+    fprintf(report, "translation_latency_p95_ms=%s\n", value);
+  if (vw_benchmark_format_ms(value, sizeof(value), translation_latency_max_us))
+    fprintf(report, "translation_latency_max_ms=%s\n", value);
   fprintf(report, "latency_clock=live_pts_to_monotonic_only\n");
   fprintf(report, "post_filtering_included_in_speed=false\n");
+
   bool success = fflush(report) == 0;
   if (fclose(report) != 0) success = false;
   if (success) {
 #ifdef _WIN32
-    success = MoveFileExA(temp_path, benchmark->report_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    success = MoveFileExA(staging_path, benchmark->report_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 #else
-    success = rename(temp_path, benchmark->report_path) == 0;
+    success = rename(staging_path, benchmark->report_path) == 0;
 #endif
   }
-  if (!success) remove(temp_path);
+  if (!success) remove(staging_path);
   return success;
 }
 
 bool vw_benchmark_begin(vw_benchmark_t* benchmark, const char* model_id, const char* backend, int64_t now_us) {
   if (!benchmark || now_us < 0) return false;
   memset(benchmark, 0, sizeof(*benchmark));
-  if (!vw_benchmark_create_report(benchmark->report_path, sizeof(benchmark->report_path))) return false;
+  if (!vw_benchmark_resolve_report_path(benchmark->report_path, sizeof(benchmark->report_path))) return false;
   benchmark->active = true;
   benchmark->started_us = now_us;
   if (model_id) snprintf(benchmark->model_id, sizeof(benchmark->model_id), "%s", model_id);
   if (backend) snprintf(benchmark->backend, sizeof(benchmark->backend), "%s", backend);
   if (!vw_benchmark_write(benchmark, false, now_us)) {
-    remove(benchmark->report_path);
     memset(benchmark, 0, sizeof(*benchmark));
     return false;
   }
@@ -178,7 +314,11 @@ void vw_benchmark_reset_live_clock(vw_benchmark_t* benchmark) {
 
 void vw_benchmark_record_caption_received(vw_benchmark_t* benchmark, const vw_caption_segment_t* segment,
                                           int64_t now_us, bool source_mode) {
-  if (!benchmark || !benchmark->active || !segment) return;
+  if (!benchmark || !segment) return;
+  benchmark->last_segment_id = segment->segment_id;
+  benchmark->last_segment_start_pts_us = segment->start_pts_us;
+  benchmark->last_segment_end_pts_us = segment->end_pts_us;
+  if (!benchmark->active) return;
   benchmark->captions_received++;
   if (segment->end_pts_us > segment->start_pts_us) {
     benchmark->segment_audio_duration_us += (uint64_t)(segment->end_pts_us - segment->start_pts_us);
@@ -203,7 +343,21 @@ void vw_benchmark_record_caption_filtered(vw_benchmark_t* benchmark, bool paused
 }
 
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success) {
-  if (!benchmark || !benchmark->active) return;
+  if (!benchmark) return;
+  if (!success) {
+    const char* reason = vw_benchmark_translation_failure_reason(latency_us);
+    const char* detail = vw_benchmark_translation_failure_detail(latency_us);
+    char start_pts_s[64];
+    char end_pts_s[64];
+    char latency_ms[64];
+    if (!vw_benchmark_format_s(start_pts_s, sizeof(start_pts_s), benchmark->last_segment_start_pts_us)) return;
+    if (!vw_benchmark_format_s(end_pts_s, sizeof(end_pts_s), benchmark->last_segment_end_pts_us)) return;
+    if (!vw_benchmark_format_ms(latency_ms, sizeof(latency_ms), (int64_t)latency_us)) return;
+    vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE",
+                 "segment=%llu start_pts_s=%s end_pts_s=%s latency_ms=%s reason=%s detail=%s",
+                 (unsigned long long)benchmark->last_segment_id, start_pts_s, end_pts_s, latency_ms, reason, detail);
+  }
+  if (!benchmark->active) return;
   benchmark->translation_requests_sent++;
   benchmark->translation_duration_us += latency_us;
   if (latency_us > 0 && benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
@@ -224,6 +378,7 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
     benchmark->translation_failure_count++;
   }
 }
+
 void vw_benchmark_record_caption_sent(vw_benchmark_t* benchmark, int64_t now_us) {
   if (!benchmark || !benchmark->active) return;
   benchmark->captions_sent++;
