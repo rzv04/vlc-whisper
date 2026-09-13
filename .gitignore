@@ -196,7 +196,7 @@ opencode.json
 
 .commandcode/
 .omp/
-.agents/
+.agents/skills/
 .opencode/
 .playwright-mcp/
 skills-lock.json

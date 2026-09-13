@@ -22,15 +22,13 @@
     }                                                                                        \
   } while (0)
 
-// Returns the per-test translation-unit failure counter used by accumulating checks, allowing multiple independent
-// contract violations to be reported before the executable exits.
+// Returns this test translation unit's accumulating contract-failure counter.
 static inline int* vw_test_failure_counter(void) {
   static int failures = 0;
   return &failures;
 }
 
-// Records a named failure when condition is false, preserving execution so failure-path tests can expose every violated
-// contract in a single run.
+// Records a named failed expectation without aborting the remaining contract checks.
 static inline void vw_test_check_true(const char* name, bool condition) {
   if (!condition) {
     fprintf(stderr, "FAIL: %s\n", name);
@@ -38,8 +36,7 @@ static inline void vw_test_check_true(const char* name, bool condition) {
   }
 }
 
-// Records a named failure when condition is true, complementing the positive helper for contracts that require invalid
-// states or inputs to be rejected.
+// Records a named expectation that required the supplied condition to remain false.
 static inline void vw_test_check_false(const char* name, bool condition) {
   if (condition) {
     fprintf(stderr, "FAIL: %s\n", name);
@@ -47,8 +44,7 @@ static inline void vw_test_check_false(const char* name, bool condition) {
   }
 }
 
-// Prints the final accumulated result for a test executable and returns zero on success or one when any named contract
-// check failed.
+// Prints one final test result after all independent named checks have executed.
 static inline int vw_test_finish(const char* test_name) {
   int failures = *vw_test_failure_counter();
   if (failures != 0) {
