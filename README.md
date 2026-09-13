@@ -1,12 +1,5 @@
 # VLC-Whisper
 
-Milestone 5 reliability notes: POSIX `worker-path` must be an absolute executable path; bare names are not searched
-through `PATH`. Opt-in worker diagnostics use exclusive per-process temporary files (`vlc-whisper-worker-<pid>.log`;
-Windows inherited stdout/stderr also includes a tick suffix). Existing default files are never followed or appended
-to; an explicit `--log-file` retains overwrite semantics. No transcript or PCM logging is added. Normal media-end
-close waits for final inference/translation and accounts its captions; a stuck worker can delay teardown for up to
-the 120-second receive watchdog before process cleanup. See [architecture](docs/architecture.md) and
-[P2 reconciliation](docs/issues.md) for scope and platform-verification limits.
 
 <p align="center">
   <img src="./assets/vlc-whisper-logo-animation.gif" width="700" alt="VLC-Whisper">
@@ -160,7 +153,7 @@ On Windows, use **Control Panel > Programs > Uninstall a program**, Windows **In
 
 _*The insertion-free columns are reconstructed diagnostic rates from the preserved per-sample hypotheses and references using the benchmark's normalizer and the same minimum Levenshtein-distance objective. They remove insertion edit operations from the error numerator while retaining substitutions, deletions, and the original reference denominator. Where multiple minimum-distance alignments exist, the reconstruction uses the minimum insertion count, making the adjustment conservative. These are not standard WER/CER scores; duplicate rolling-window re-emission is a major source of insertions in livestream mode, but the adjustment removes all aligned insertions rather than attempting to label individual insertions as duplicates._
 
-See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and [`docs/quality-benchmark-report.md`](docs/quality-benchmark-report.md) for the detailed historical analysis.
+See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and benchmark options.
 
 # Developer & Contributor Guide
 
@@ -305,9 +298,8 @@ Use [`tools/quality_benchmark/README.md`](tools/quality_benchmark/README.md) for
 
 Start with [`AGENTS.md`](AGENTS.md) and [`docs/invariants.md`](docs/invariants.md), then open only the technical reference relevant to the changed behavior.
 
-- [`docs/architecture.md`](docs/architecture.md) — process/lifecycle architecture.
-- [`docs/api-contracts.md`](docs/api-contracts.md) — IPC/API semantics.
-- [`docs/test-strategy.md`](docs/test-strategy.md) — failure-path and seam-test rules.
+- [`docs/architecture.md`](docs/architecture.md) — process and lifecycle architecture.
+- [`docs/api-contracts.md`](docs/api-contracts.md) — IPC protocol and API wire semantics.
 - [`docs/roadmap.md`](docs/roadmap.md) — current and planned work.
 
 ## License

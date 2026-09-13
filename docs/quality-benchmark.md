@@ -76,7 +76,7 @@ The `vlcw-basic-v1` normalizer applies Unicode NFC, canonicalizes Romanian cedil
 - **CER:** corpus-total character errors / reference characters after spaces are removed.
 - Aggregation is corpus-weighted per `{language, mode}`, not an average of sample percentages.
 
-The root README contains the currently published anecdotal table. `quality-benchmark-report.md` retains the detailed historical analysis.
+The root README contains the currently published anecdotal table.
 
 ## Reports / reproducibility
 

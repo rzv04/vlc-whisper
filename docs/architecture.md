@@ -13,7 +13,7 @@ VLC-Whisper is an ensemble: a native C VLC integration and a separate local work
 | Caption presenter | validate/schedule/clear generated captions | trust stale session IDs or malformed timing/text |
 | Model/translation workers | explicit model download; optional finalized-text translation | receive PCM for network egress |
 
-See `source-layout.md` for directory ownership and `api-contracts.md` for wire details.
+See `api-contracts.md` for wire details.
 
 ## Audio and backpressure
 
@@ -54,10 +54,7 @@ Seek/discontinuity/source-epoch reset clears stale captions and buffered state, 
 
 The required lifecycle contract is that EOF/media end flushes eligible residual speech exactly once before final session teardown. This branch introduces tail flush handling for live/non-seekable `MEDIA_END` (`vw_worker_flush_audio_tail`). Worker failure/respawn must rebuild state rather than reuse stale session fields.
 
-## Milestone 5 P2 reliability boundaries
-
-The P2 reconciliation against `milestone-5` is tracked in [issues.md](issues.md). It hardens existing components;
-it introduces no inference backend, network permission, realtime work, or wire-version change.
+## Reliability and Teardown Boundaries
 
 - Caption SPU channel IDs belong to the held video output. Blanking and output replacement flush that output's
   private channel before releasing its reference, never an unrelated channel on a newly discovered output.
