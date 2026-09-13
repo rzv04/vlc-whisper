@@ -24,6 +24,14 @@ static bool vw_benchmark_directory_exists(const char* path) {
   return path && path[0] && stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
+static bool vw_benchmark_directory_is_private_runtime(const char* path) {
+  struct stat info;
+  if (!path || !path[0] || stat(path, &info) != 0 || !S_ISDIR(info.st_mode)) return false;
+  if (info.st_uid != getuid()) return false;
+  if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0) return false;
+  return access(path, W_OK | X_OK) == 0;
+}
+
 static bool vw_benchmark_resolve_private_fallback(const char* base_dir, char* path, size_t path_size) {
   if (!base_dir || !path || path_size == 0) return false;
   int written = snprintf(path, path_size, "%s/vlc-whisper-%lu", base_dir, (unsigned long)getuid());
@@ -49,7 +57,7 @@ static bool vw_benchmark_resolve_report_path(char* path, size_t path_size) {
 #else
   char fallback_dir[VW_PATH_MAX_BYTES];
   const char* temp_dir = getenv("XDG_RUNTIME_DIR");
-  if (!vw_benchmark_directory_exists(temp_dir)) {
+  if (!vw_benchmark_directory_is_private_runtime(temp_dir)) {
     const char* base_dir = getenv("TMPDIR");
     if (!vw_benchmark_directory_exists(base_dir)) base_dir = "/tmp";
     if (!vw_benchmark_resolve_private_fallback(base_dir, fallback_dir, sizeof(fallback_dir))) return false;
