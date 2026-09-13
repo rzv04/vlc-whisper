@@ -50,7 +50,7 @@ int main(void) {
   start.sample_format = 1;
   strncpy(start.model_id, "ggml-tiny.en.bin", sizeof(start.model_id) - 1);
   strncpy(start.language, "en", sizeof(start.language) - 1);
-  start.source_kind = VW_SOURCE_LOCAL_FILE;
+  start.source_kind = VW_SOURCE_LIVE_AUDIO;
 
   uint8_t start_payload[256];
   size_t start_len = 0;

@@ -279,6 +279,7 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
   pid_t pid = fork();
   if (pid < 0) return false;
   if (pid == 0) {
+    setpgid(0, 0);
 #ifdef __linux__
     // The downloader owns an open descriptor to the .part inode. Never allow
     // it to outlive the worker and mutate an inode after a replacement worker
@@ -291,6 +292,7 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
     execvp("curl", argv);
     _exit(127);
   }
+  setpgid(pid, pid);
   pthread_mutex_lock(&dl->lock);
   dl->child_pid = pid;
   pthread_mutex_unlock(&dl->lock);
@@ -299,10 +301,17 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
   int status = 0;
   while (1) {
     if (atomic_load(&dl->abort_requested)) {
-      kill(pid, SIGTERM);
-      vw_sleep_ms(100);
-      kill(pid, SIGKILL);
-      waitpid(pid, &status, 0);
+      int st = 0;
+      pid_t r = waitpid(pid, &st, WNOHANG);
+      if (r == 0) {
+        kill(pid, SIGTERM);
+        vw_sleep_ms(100);
+        r = waitpid(pid, &st, WNOHANG);
+        if (r == 0) {
+          kill(pid, SIGKILL);
+        }
+        waitpid(pid, &st, 0);
+      }
       pthread_mutex_lock(&dl->lock);
       dl->child_pid = 0;
       pthread_mutex_unlock(&dl->lock);
@@ -319,10 +328,17 @@ static bool vw_download_via_curl(vw_model_download_t* dl) {
     }
     uint64_t sz = vw_file_size(dl->part_path);
     if (sz > dl->entry.bytes) {
-      kill(pid, SIGTERM);
-      vw_sleep_ms(100);
-      kill(pid, SIGKILL);
-      waitpid(pid, &status, 0);
+      int st = 0;
+      pid_t r2 = waitpid(pid, &st, WNOHANG);
+      if (r2 == 0) {
+        kill(pid, SIGTERM);
+        vw_sleep_ms(100);
+        r2 = waitpid(pid, &st, WNOHANG);
+        if (r2 == 0) {
+          kill(pid, SIGKILL);
+        }
+        waitpid(pid, &st, 0);
+      }
       pthread_mutex_lock(&dl->lock);
       dl->child_pid = 0;
       pthread_mutex_unlock(&dl->lock);
@@ -675,7 +691,10 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
   dl->hRequest = NULL;
   dl->lock_handle = INVALID_HANDLE_VALUE;
 #endif
-  pthread_mutex_init(&dl->lock, NULL);
+  if (pthread_mutex_init(&dl->lock, NULL) != 0) {
+    free(dl);
+    return NULL;
+  }
   if (!vw_model_download_acquire_lock(dl)) {
     vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "model destination is busy for '%s'", entry->filename);
     pthread_mutex_destroy(&dl->lock);
@@ -701,16 +720,9 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
 
 void vw_model_download_abort(vw_model_download_t* dl) {
   if (!dl) return;
+  // Cancellation is owner-only: this thread publishes intent but never snapshots, waits on, or signals child_pid.
+  // The downloader thread that forked curl observes abort_requested and is solely responsible for kill/waitpid.
   atomic_store(&dl->abort_requested, true);
-#ifndef _WIN32
-  pthread_mutex_lock(&dl->lock);
-  pid_t pid = dl->child_pid;
-  pthread_mutex_unlock(&dl->lock);
-  if (pid > 0) kill(pid, SIGTERM);
-#else
-  // The downloader thread owns WinHTTP handles and observes this flag between
-  // short receive timeouts; closing them here would race an in-flight read.
-#endif
   pthread_mutex_lock(&dl->lock);
   if (dl->progress.stage != VW_MODEL_STAGE_DONE && dl->progress.stage != VW_MODEL_STAGE_FAILED &&
       dl->progress.stage != VW_MODEL_STAGE_IDLE) {
@@ -735,12 +747,11 @@ void vw_model_download_free(vw_model_download_t* dl) {
     dl->thread_started = false;
   }
 #ifndef _WIN32
-  if (dl->child_pid > 0) {
-    kill(dl->child_pid, SIGTERM);
-    int st = 0;
-    waitpid(dl->child_pid, &st, 0);
-    dl->child_pid = 0;
-  }
+  // After joining, the downloader owner has already reaped or observed termination of its curl child. Never perform a
+  // second wait/kill from the freeing thread: a stale numeric PID could already refer to an unrelated worker child.
+  pthread_mutex_lock(&dl->lock);
+  dl->child_pid = 0;
+  pthread_mutex_unlock(&dl->lock);
 #endif
   vw_model_download_release_lock(dl);
   pthread_mutex_destroy(&dl->lock);

@@ -189,7 +189,7 @@ static void vw_source_decoder_copy_samples(vw_source_decoder_t* decoder, const i
   }
 }
 
-static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
+static bool vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
                                             size_t* inout_total_samples, int64_t* out_pts_us) {
   AVStream* stream = decoder->fmt_ctx->streams[decoder->audio_stream_idx];
   int64_t frame_pts = decoder->frame->pts;
@@ -208,25 +208,39 @@ static void vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_
   uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
   int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)),
                               (const uint8_t**)decoder->frame->extended_data, decoder->frame->nb_samples);
-  if (converted > 0)
+  if (converted < 0) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RESAMPLE", "swr_convert failed (%d)", converted);
+    return false;
+  }
+  if (converted > 0) {
     vw_source_decoder_copy_samples(decoder, resample_buf, (size_t)converted, out_pcm, max_samples, inout_total_samples);
+  }
+  return true;
 }
 
-static bool vw_source_decoder_drain_swr(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                        size_t* inout_total_samples, int64_t* out_pts_us) {
+static vw_source_decoder_read_status_t vw_source_decoder_drain_swr(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                                   size_t max_samples, size_t* inout_total_samples,
+                                                                   int64_t* out_pts_us) {
   int16_t resample_buf[4096];
   uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
   int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)), NULL, 0);
-  if (converted < 0) return true;
-  if (converted == 0) return true;
+  if (converted < 0) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RESAMPLE", "swr_convert drain failed (%d)", converted);
+    return VW_SOURCE_DECODER_READ_ERROR;
+  }
+  if (converted == 0) return VW_SOURCE_DECODER_READ_EOF;
   if (out_pts_us && *inout_total_samples == 0) *out_pts_us = decoder->current_pts_us;
   vw_source_decoder_copy_samples(decoder, resample_buf, (size_t)converted, out_pcm, max_samples, inout_total_samples);
-  return false;
+  return VW_SOURCE_DECODER_READ_OK;
 }
 
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us) {
-  if (!decoder || !decoder->fmt_ctx || !out_pcm || max_samples == 0) return 0;
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us) {
+  if (out_sample_count) *out_sample_count = 0;
+  if (!decoder || !decoder->fmt_ctx || !out_pcm || max_samples == 0 || !out_sample_count)
+    return VW_SOURCE_DECODER_READ_ERROR;
+  if (decoder->eof_reached) return VW_SOURCE_DECODER_READ_EOF;
 
   size_t total_samples = 0;
   if (decoder->leftover_count > 0) {
@@ -239,7 +253,8 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       memmove(decoder->leftover_buffer, decoder->leftover_buffer + to_copy,
               (decoder->leftover_count - to_copy) * sizeof(int16_t));
       decoder->leftover_count -= to_copy;
-      return total_samples;
+      *out_sample_count = total_samples;
+      return VW_SOURCE_DECODER_READ_OK;
     }
     decoder->leftover_count = 0;
   }
@@ -253,18 +268,21 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
           decoder->flush_sent = true;
         } else if (flush_ret != AVERROR(EAGAIN)) {
           vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_FLUSH", "avcodec_send_packet(NULL) failed (%d)", flush_ret);
-          decoder->flush_sent = true;
+          return VW_SOURCE_DECODER_READ_ERROR;
         }
       }
 
       int recv_ret = avcodec_receive_frame(decoder->codec_ctx, decoder->frame);
       if (recv_ret >= 0) {
-        vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+        if (!vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us))
+          return VW_SOURCE_DECODER_READ_ERROR;
         continue;
       }
       if (recv_ret == AVERROR_EOF) {
-        bool swr_empty = vw_source_decoder_drain_swr(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
-        if (swr_empty && decoder->leftover_count == 0) decoder->eof_reached = true;
+        vw_source_decoder_read_status_t drain_status =
+            vw_source_decoder_drain_swr(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+        if (drain_status == VW_SOURCE_DECODER_READ_ERROR) return drain_status;
+        if (drain_status == VW_SOURCE_DECODER_READ_EOF && decoder->leftover_count == 0) decoder->eof_reached = true;
         continue;
       }
       if (recv_ret == AVERROR(EAGAIN)) {
@@ -272,15 +290,22 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
         break;
       }
       vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RECV", "avcodec_receive_frame failed (%d)", recv_ret);
-      decoder->eof_reached = true;
-      break;
+      return VW_SOURCE_DECODER_READ_ERROR;
     }
 
     if (!decoder->pkt_pending) {
       int ret = av_read_frame(decoder->fmt_ctx, decoder->pkt);
-      if (ret < 0) {
+      if (ret == AVERROR_EOF) {
         decoder->demux_eof = true;
         continue;
+      }
+      if (ret == AVERROR(EAGAIN)) {
+        *out_sample_count = total_samples;
+        return total_samples > 0 ? VW_SOURCE_DECODER_READ_OK : VW_SOURCE_DECODER_READ_AGAIN;
+      }
+      if (ret < 0) {
+        vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_READ", "av_read_frame failed (%d)", ret);
+        return VW_SOURCE_DECODER_READ_ERROR;
       }
       decoder->pkt_pending = true;
     }
@@ -290,18 +315,30 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       int progress_leftover = (int)decoder->leftover_count;
       int send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
       if (send_ret == AVERROR(EAGAIN)) {
+        int recv_ret = 0;
         while (total_samples < max_samples && decoder->leftover_count == 0 &&
-               avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
-          vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+               (recv_ret = avcodec_receive_frame(decoder->codec_ctx, decoder->frame)) >= 0) {
+          if (!vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us))
+            return VW_SOURCE_DECODER_READ_ERROR;
+        }
+        if (recv_ret < 0 && recv_ret != AVERROR(EAGAIN) && recv_ret != AVERROR_EOF) {
+          vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RECV", "avcodec_receive_frame failed (%d)", recv_ret);
+          return VW_SOURCE_DECODER_READ_ERROR;
         }
         if (total_samples < max_samples && decoder->leftover_count == 0)
           send_ret = avcodec_send_packet(decoder->codec_ctx, decoder->pkt);
       }
 
       if (send_ret >= 0) {
+        int recv_ret = 0;
         while (total_samples < max_samples && decoder->leftover_count == 0 &&
-               avcodec_receive_frame(decoder->codec_ctx, decoder->frame) >= 0) {
-          vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us);
+               (recv_ret = avcodec_receive_frame(decoder->codec_ctx, decoder->frame)) >= 0) {
+          if (!vw_source_decoder_process_frame(decoder, out_pcm, max_samples, &total_samples, out_pts_us))
+            return VW_SOURCE_DECODER_READ_ERROR;
+        }
+        if (recv_ret < 0 && recv_ret != AVERROR(EAGAIN) && recv_ret != AVERROR_EOF) {
+          vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RECV", "avcodec_receive_frame failed (%d)", recv_ret);
+          return VW_SOURCE_DECODER_READ_ERROR;
         }
         av_packet_unref(decoder->pkt);
         decoder->pkt_pending = false;
@@ -313,11 +350,15 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
           defer_no_progress = 0;
         if (defer_no_progress >= 2) break;
         decoder->pkt_pending = true;
-      } else {
-        if (send_ret != AVERROR_EOF)
-          vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
+      } else if (send_ret == AVERROR_EOF) {
         av_packet_unref(decoder->pkt);
         decoder->pkt_pending = false;
+        decoder->demux_eof = true;
+      } else {
+        vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_SEND", "avcodec_send_packet failed (%d)", send_ret);
+        av_packet_unref(decoder->pkt);
+        decoder->pkt_pending = false;
+        return VW_SOURCE_DECODER_READ_ERROR;
       }
     } else {
       av_packet_unref(decoder->pkt);
@@ -325,7 +366,9 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
     }
   }
 
-  return total_samples;
+  *out_sample_count = total_samples;
+  if (total_samples > 0) return VW_SOURCE_DECODER_READ_OK;
+  return decoder->eof_reached ? VW_SOURCE_DECODER_READ_EOF : VW_SOURCE_DECODER_READ_AGAIN;
 }
 
 int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) {
@@ -361,13 +404,15 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return false;
 }
 
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us) {
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us) {
   (void)decoder;
   (void)out_pcm;
   (void)max_samples;
   (void)out_pts_us;
-  return 0;
+  if (out_sample_count) *out_sample_count = 0;
+  return VW_SOURCE_DECODER_READ_ERROR;
 }
 
 int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) {

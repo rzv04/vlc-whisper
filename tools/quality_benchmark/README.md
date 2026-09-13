@@ -11,3 +11,5 @@ python tools/quality_benchmark/vw_benchmark.py --build-dir build/linux-x64-debug
 ```
 
 Windows: use a Windows developer/test preset/build directory in the last two commands. Details: `docs/quality-benchmark.md`.
+
+The orchestrator validates every normalized reference and manifest WAV SHA-256 before launching a benchmark runner.

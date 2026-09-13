@@ -308,7 +308,7 @@ to REVISE already-emitted subtitles.
 - **Zero Flash Cues**: Every subtitle is displayed with sufficient human reading time ($\ge 1.0\text{s}$ wall clock).
 - **No Cue Collisions**: Cues display sequentially without visual overlap in VLC's SPU subpicture pipeline.
 - **Deterministic Latency**: Greedy decoding ensures bounded, single-pass inference without search latency spikes.
-- **Overlap prevention mechanism (corrected 2026-08-26)**: `b_ephemer = true` remains a secondary SPU selection safeguard, but it does not synchronously replace a queued same-channel subpicture. For live PCM, the presenter explicitly queues `vout_FlushSubpictureChannel()` immediately before `vout_PutSubpicture()`; VLC's FIFO vout control queue rejects the prior live cue before adding its replacement. Look-ahead source cues do not flush the channel: their successor-aware interval clipping remains the precision mechanism that permits multiple future cues to coexist without overlap.
+- **Overlap prevention mechanism (corrected 2026-09-08)**: `b_ephemer = false` is required so finite-duration captions remain visible across VLC video-frame refreshes. Live PCM replacement is handled explicitly by `vout_FlushSubpictureChannel()` immediately before `vout_PutSubpicture()`; look-ahead source cues do not flush the channel, and successor-aware interval clipping remains the precision mechanism that permits multiple future cues to coexist without overlap.
 
 ## ADR-022: Settings GUI via VLC Lua Extension (Spike, Non-Bundled Concept)
 

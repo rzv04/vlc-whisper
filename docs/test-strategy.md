@@ -52,6 +52,14 @@ Inject relevant transient/no-progress, explicit EOF vs error, seek/reset, IPC di
 
 Treat issue #47 / `docs/issues.md` as a regression specification. Fixed defects gain named behavioral tests where practical; search by invariant or VW ID rather than loading the ledger wholesale.
 
+The P1 defect resolution suite adds regression coverage across:
+- `tests/unit/test_log.c`: Multi-instance logger concurrency, `g_log_mutex` synchronization, and atomic `vw_log_flush()` (VW-018).
+- `tests/unit/test_caption_presenter.c`: Non-ephemeral SPU subpicture persistence (`b_ephemer = false`, VW-001), OSD channel 1 preservation (VW-020), and model progress channel lifecycle (VW-002).
+- `tests/unit/test_audio_capture.c`: High-playback-rate (>4.0x) audio drop throttling (VW-019).
+- `tests/unit/test_oversized_uri_rejected_before_truncation.c`: Safe URI length validation before copy (Finding #22).
+- `tests/unit/test_protocol_start_failure_paths.c` & `tests/unit/test_worker_config_failure_paths.c`: Reject-on-overflow boundary checks.
+- `tests/integration/test_queue_audio_timeline.c`, `test_decoder_again_never_becomes_eof.c`, `test_source_error_never_becomes_clean_eof.c`, `test_live_media_end_flushes_tail.c`, and `test_new_session_resets_all_session_state.c`: Seam tests for queue timeline gaps, decoder three-way state transitions, and media-end tail flushing.
+
 Fixtures must be legal, small, deterministic, and versioned when committed. Never commit user/proprietary media, personal transcripts, or production model binaries. Pin model hash and exact Whisper revision for model-sensitive regressions.
 
 The EN/RO benchmark is developer-only and headless; invalid corpus evidence is rejected, not scored. See `quality-benchmark.md`.

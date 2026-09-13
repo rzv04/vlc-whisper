@@ -247,7 +247,7 @@ int main(void) {
   assert(g_flush_channel == 42);
   assert(g_last_flush_sequence < g_last_put_sequence);
   // Ephemeral selection remains a secondary VLC cleanup mechanism after the explicit live-channel replacement.
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
 
   // Subsequent call reuses already-registered channel
   assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0, false));
@@ -275,7 +275,7 @@ int main(void) {
 
   (void)fallback_presenter;
 
-  // Test 8: Blank presenter flushes both SPU channel and OSD channel
+  // Test 8: Blank presenter flushes dedicated SPU channel (preserving system OSD channel 1 per VW-020)
   g_flush_calls = 0;
   g_flush_channel = -1;
   assert(vw_caption_presenter_show_segment(&spu_presenter, &sys_segment, 0, false));
@@ -283,7 +283,15 @@ int main(void) {
   vw_caption_presenter_blank(&spu_presenter);
   assert(!spu_presenter.has_pending);
   assert(spu_presenter.p_filter_ctx == &fake_filter);
-  assert(g_flush_calls >= 2);  // SPU channel 42 + OSD channel 1
+  assert(g_flush_calls == 1);  // Dedicated SPU channel 42 flushed; system OSD channel 1 preserved
+  assert(g_flush_channel == 42);
+
+  // Fallback presenter without registered SPU channel flushes OSD channel 1
+  g_flush_calls = 0;
+  g_flush_channel = -1;
+  vw_caption_presenter_blank(&fallback_presenter);
+  assert(g_flush_calls == 1);
+  assert(g_flush_channel == 1);
 
   // Test 9: Clear presenter resets filter context, held vout, and SPU channel
   vw_caption_presenter_clear(&spu_presenter);
@@ -347,7 +355,7 @@ int main(void) {
   for (int i = 0; i < 10; i++) {
     vw_caption_presenter_blank(&spu_presenter);
   }
-  assert(g_flush_calls == 20);  // 10 SPU channel 43 flushes + 10 OSD channel 1 flushes
+  assert(g_flush_calls == 10);  // 10 SPU channel 43 flushes (OSD channel 1 preserved per VW-020)
   assert(spu_presenter.spu_channel_id == 43);
   assert(spu_presenter.spu_channel_registered == true);
 
@@ -404,7 +412,7 @@ int main(void) {
   assert(g_last_subpic_start == 100000000LL);
   assert(g_last_subpic_stop == 100000000LL + 1000000LL);  // Clamped to 1.0s minimum floor (101.0s)
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(g_last_subpic_b_subtitle == false);
 
   // Test 16: Adjacent cue floor policy preserves readability, allowing a short overlap.
@@ -429,7 +437,7 @@ int main(void) {
   int64_t cueA_stop = g_last_subpic_stop;
   assert(cueA_start == 100000000LL);
   assert(cueA_stop == 100000000LL + 1000000LL);  // Keep the one-second floor; overlap cueB when necessary.
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(g_last_subpic_b_subtitle == false);
 
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
@@ -438,7 +446,7 @@ int main(void) {
   int64_t cueB_stop = g_last_subpic_stop;
   assert(cueB_start == 100000000LL + 600000LL);
   assert(cueB_stop == 100000000LL + 1600000LL);  // 1.0s floor
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(g_last_subpic_b_subtitle == false);
 
   // The documented floor takes precedence over clipping when cues begin less than one second apart.
@@ -452,7 +460,7 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(g_last_subpic_b_subtitle == false);
 
   // At 0.5x rate: 200ms raw acoustic duration -> clamped to 0.5s media floor -> 1.0s wall-clock duration
@@ -462,7 +470,7 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 1000000LL);  // 1.0s wall-clock duration
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(g_last_subpic_b_subtitle == false);
 
   // Test 18: Long duration preserved (3.5s speech utterance at 1.0x rate)
@@ -477,7 +485,7 @@ int main(void) {
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
   assert(g_last_subpic_stop - g_last_subpic_start == 3500000LL);  // Full 3.5s duration preserved
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(g_last_subpic_b_subtitle == false);
 
   // Test 19: A late live-network cue ignores INPUT_GET_TIME and renders immediately at mdate(). Its system-date
@@ -527,7 +535,7 @@ int main(void) {
   assert(g_last_subpic_start == 200000000LL);
   assert(g_last_subpic_stop == 200000000LL + VW_MODEL_PROGRESS_DISPLAY_DURATION_US);
   assert(g_last_subpic_b_subtitle == false);
-  assert(g_last_subpic_b_ephemer == true);
+  assert(g_last_subpic_b_ephemer == false);
   assert(strcmp(g_last_subpic_text, "Model tiny: downloading (42%)") == 0);
 
   g_flush_calls = 0;

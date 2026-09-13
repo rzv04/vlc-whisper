@@ -10,7 +10,8 @@ int main(void) {
   assert(vw_source_decoder_open(NULL, NULL) == NULL);
   assert(vw_source_decoder_open("", NULL) == NULL);
   assert(vw_source_decoder_seek(NULL, 0) == false);
-  assert(vw_source_decoder_read_s16le(NULL, NULL, 0, NULL) == 0);
+  size_t invalid_samples = 0;
+  assert(vw_source_decoder_read_s16le(NULL, NULL, 0, &invalid_samples, NULL) == VW_SOURCE_DECODER_READ_ERROR);
   assert(vw_source_decoder_get_duration_us(NULL) == -1);
   vw_source_decoder_close(NULL);
 
@@ -84,7 +85,10 @@ int main(void) {
 
       int16_t pcm_buf[16000];  // 1 second of 16kHz audio
       int64_t pts_us = -1;
-      size_t samples_read = vw_source_decoder_read_s16le(dec, pcm_buf, 16000, &pts_us);
+      size_t samples_read = 0;
+      vw_source_decoder_read_status_t read_status =
+          vw_source_decoder_read_s16le(dec, pcm_buf, 16000, &samples_read, &pts_us);
+      assert(read_status == VW_SOURCE_DECODER_READ_OK);
       assert(samples_read > 0);
       assert(pts_us >= 0);
       (void)samples_read;
@@ -93,7 +97,8 @@ int main(void) {
       bool seek_ok = vw_source_decoder_seek(dec, 1000000LL);  // Seek to 1s
       if (seek_ok) {
         int64_t post_seek_pts = -1;
-        size_t post_seek_samples = vw_source_decoder_read_s16le(dec, pcm_buf, 4000, &post_seek_pts);
+        size_t post_seek_samples = 0;
+        vw_source_decoder_read_s16le(dec, pcm_buf, 4000, &post_seek_samples, &post_seek_pts);
         (void)post_seek_samples;
         (void)post_seek_pts;
       }

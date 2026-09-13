@@ -207,9 +207,13 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return false;
 }
 
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us) {
-  if (!decoder || !decoder->p_reader || !out_pcm || max_samples == 0) return 0;
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us) {
+  if (out_sample_count) *out_sample_count = 0;
+  if (!decoder || !decoder->p_reader || !out_pcm || max_samples == 0 || !out_sample_count)
+    return VW_SOURCE_DECODER_READ_ERROR;
+  if (decoder->eof_reached) return VW_SOURCE_DECODER_READ_EOF;
 
   size_t total_samples = 0;
 
@@ -227,7 +231,8 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       memmove(decoder->leftover_buffer, decoder->leftover_buffer + to_copy,
               (decoder->leftover_count - to_copy) * sizeof(int16_t));
       decoder->leftover_count -= to_copy;
-      return total_samples;
+      *out_sample_count = total_samples;
+      return VW_SOURCE_DECODER_READ_OK;
     } else {
       decoder->leftover_count = 0;
     }
@@ -242,14 +247,20 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
     HRESULT hr = decoder->p_reader->lpVtbl->ReadSample(decoder->p_reader, (DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0,
                                                        &dwStreamIndex, &dwStreamFlags, &llTimestamp, &pSample);
 
-    if (FAILED(hr) || (dwStreamFlags & MF_SOURCE_READERF_ENDOFSTREAM)) {
+    if (FAILED(hr)) {
+      if (pSample) pSample->lpVtbl->Release(pSample);
+      return VW_SOURCE_DECODER_READ_ERROR;
+    }
+
+    if (dwStreamFlags & MF_SOURCE_READERF_ENDOFSTREAM) {
       decoder->eof_reached = true;
       if (pSample) pSample->lpVtbl->Release(pSample);
       break;
     }
 
     if (!pSample) {
-      continue;
+      *out_sample_count = total_samples;
+      return total_samples > 0 ? VW_SOURCE_DECODER_READ_OK : VW_SOURCE_DECODER_READ_AGAIN;
     }
 
     IMFMediaBuffer* pBuffer = NULL;
@@ -258,64 +269,73 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       BYTE* pAudioData = NULL;
       DWORD cbCurrentLength = 0;
       hr = pBuffer->lpVtbl->Lock(pBuffer, &pAudioData, NULL, &cbCurrentLength);
-      if (SUCCEEDED(hr) && pAudioData && cbCurrentLength > 0) {
-        size_t samples_in_sample = cbCurrentLength / sizeof(int16_t);
-        const int16_t* in_samples = (const int16_t*)pAudioData;
+      if (SUCCEEDED(hr)) {
+        if (pAudioData && cbCurrentLength > 0) {
+          size_t samples_in_sample = cbCurrentLength / sizeof(int16_t);
+          const int16_t* in_samples = (const int16_t*)pAudioData;
 
-        if (out_pts_us && total_samples == 0) {
-          *out_pts_us = (int64_t)(llTimestamp / 10);
-          decoder->current_pts_us = *out_pts_us;
-        }
-
-        size_t needed = max_samples - total_samples;
-        if (samples_in_sample <= needed) {
-          memcpy(out_pcm + total_samples, in_samples, samples_in_sample * sizeof(int16_t));
-          total_samples += samples_in_sample;
-          decoder->current_pts_us += (int64_t)((samples_in_sample * 1000000ULL) / 16000ULL);
-        } else {
-          memcpy(out_pcm + total_samples, in_samples, needed * sizeof(int16_t));
-          total_samples += needed;
-          decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
-
-          size_t remainder = samples_in_sample - needed;
-          if (remainder > decoder->leftover_capacity) {
-            size_t new_capacity = decoder->leftover_capacity > 0 ? decoder->leftover_capacity : 4096;
-            while (new_capacity < remainder) {
-              if (new_capacity > SIZE_MAX / 2) {
-                new_capacity = remainder;
-                break;
-              }
-              new_capacity *= 2;
-            }
-            if (new_capacity > SIZE_MAX / sizeof(int16_t)) {
-              pBuffer->lpVtbl->Unlock(pBuffer);
-              pBuffer->lpVtbl->Release(pBuffer);
-              pSample->lpVtbl->Release(pSample);
-              decoder->eof_reached = true;
-              break;
-            }
-            int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
-            if (!new_buffer) {
-              pBuffer->lpVtbl->Unlock(pBuffer);
-              pBuffer->lpVtbl->Release(pBuffer);
-              pSample->lpVtbl->Release(pSample);
-              decoder->eof_reached = true;
-              break;
-            }
-            decoder->leftover_buffer = new_buffer;
-            decoder->leftover_capacity = new_capacity;
+          if (out_pts_us && total_samples == 0) {
+            *out_pts_us = (int64_t)(llTimestamp / 10);
+            decoder->current_pts_us = *out_pts_us;
           }
-          memcpy(decoder->leftover_buffer, in_samples + needed, remainder * sizeof(int16_t));
-          decoder->leftover_count = remainder;
+
+          size_t needed = max_samples - total_samples;
+          if (samples_in_sample <= needed) {
+            memcpy(out_pcm + total_samples, in_samples, samples_in_sample * sizeof(int16_t));
+            total_samples += samples_in_sample;
+            decoder->current_pts_us += (int64_t)((samples_in_sample * 1000000ULL) / 16000ULL);
+          } else {
+            memcpy(out_pcm + total_samples, in_samples, needed * sizeof(int16_t));
+            total_samples += needed;
+            decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
+
+            size_t remainder = samples_in_sample - needed;
+            if (remainder > decoder->leftover_capacity) {
+              size_t new_capacity = decoder->leftover_capacity > 0 ? decoder->leftover_capacity : 4096;
+              while (new_capacity < remainder) {
+                if (new_capacity > SIZE_MAX / 2) {
+                  new_capacity = remainder;
+                  break;
+                }
+                new_capacity *= 2;
+              }
+              if (new_capacity > SIZE_MAX / sizeof(int16_t)) {
+                pBuffer->lpVtbl->Unlock(pBuffer);
+                pBuffer->lpVtbl->Release(pBuffer);
+                pSample->lpVtbl->Release(pSample);
+                return VW_SOURCE_DECODER_READ_ERROR;
+              }
+              int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
+              if (!new_buffer) {
+                pBuffer->lpVtbl->Unlock(pBuffer);
+                pBuffer->lpVtbl->Release(pBuffer);
+                pSample->lpVtbl->Release(pSample);
+                return VW_SOURCE_DECODER_READ_ERROR;
+              }
+              decoder->leftover_buffer = new_buffer;
+              decoder->leftover_capacity = new_capacity;
+            }
+            memcpy(decoder->leftover_buffer, in_samples + needed, remainder * sizeof(int16_t));
+            decoder->leftover_count = remainder;
+          }
         }
         pBuffer->lpVtbl->Unlock(pBuffer);
+      } else {
+        pBuffer->lpVtbl->Release(pBuffer);
+        pSample->lpVtbl->Release(pSample);
+        return VW_SOURCE_DECODER_READ_ERROR;
       }
       pBuffer->lpVtbl->Release(pBuffer);
+    } else {
+      pSample->lpVtbl->Release(pSample);
+      return VW_SOURCE_DECODER_READ_ERROR;
     }
     pSample->lpVtbl->Release(pSample);
   }
 
-  return total_samples;
+  *out_sample_count = total_samples;
+  if (total_samples > 0) return VW_SOURCE_DECODER_READ_OK;
+  return decoder->eof_reached ? VW_SOURCE_DECODER_READ_EOF : VW_SOURCE_DECODER_READ_AGAIN;
 }
 
 int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) {

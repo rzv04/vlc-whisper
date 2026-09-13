@@ -52,7 +52,7 @@ IDLE -> STARTING -> PLAYING <-> PAUSED
 
 Seek/discontinuity/source-epoch reset clears stale captions and buffered state, sends `STOP(SEEK_DISCONTINUITY)`, and starts a fresh caption session. In source look-ahead mode the worker process/IPC transport can remain alive while the caption epoch changes; translation settings are reapplied after the fresh `START`.
 
-The required lifecycle contract is that EOF/media end flushes eligible residual speech exactly once before final session teardown. The current PR base does not yet guarantee that behavior for live/non-seekable `MEDIA_END`; the runtime fix and regression are tracked in PR #50. Until that lands, treat tail flush as a known lifecycle defect rather than established behavior. Worker failure/respawn must rebuild state rather than reuse stale session fields.
+The required lifecycle contract is that EOF/media end flushes eligible residual speech exactly once before final session teardown. This branch introduces tail flush handling for live/non-seekable `MEDIA_END` (`vw_worker_flush_audio_tail`). Worker failure/respawn must rebuild state rather than reuse stale session fields.
 
 ## Source modes
 
