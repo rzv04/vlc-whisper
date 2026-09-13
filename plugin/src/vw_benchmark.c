@@ -140,8 +140,7 @@ static bool vw_benchmark_format_ratio(char* text, size_t text_size, uint64_t num
     whole++;
     fractional = 0;
   }
-  int written =
-      snprintf(text, text_size, "%llu.%06llu", (unsigned long long)whole, (unsigned long long)fractional);
+  int written = snprintf(text, text_size, "%llu.%06llu", (unsigned long long)whole, (unsigned long long)fractional);
   return written >= 0 && (size_t)written < text_size;
 }
 
