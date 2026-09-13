@@ -41,6 +41,14 @@ int main(int argc, char *argv[]) {
     dlclose(handle);
     return 1;
   }
+#if defined(__linux__)
+  void *sym_t64 = dlsym(handle, "vlc_entry__3_0_0ft64");
+  if (!sym_t64) {
+    fprintf(stderr, "Failed to find vlc_entry__3_0_0ft64 in %s: %s\n", plugin_path, dlerror());
+    dlclose(handle);
+    return 1;
+  }
+#endif
   dlclose(handle);
 #endif
 

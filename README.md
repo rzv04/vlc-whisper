@@ -1,12 +1,5 @@
 # VLC-Whisper
 
-Milestone 5 reliability notes: POSIX `worker-path` must be an absolute executable path; bare names are not searched
-through `PATH`. Opt-in worker diagnostics use exclusive per-process temporary files (`vlc-whisper-worker-<pid>.log`;
-Windows inherited stdout/stderr also includes a tick suffix). Existing default files are never followed or appended
-to; an explicit `--log-file` retains overwrite semantics. No transcript or PCM logging is added. Normal media-end
-close waits for final inference/translation and accounts its captions; a stuck worker can delay teardown for up to
-the 120-second receive watchdog before process cleanup. See [architecture](docs/architecture.md) and
-[P2 reconciliation](docs/issues.md) for scope and platform-verification limits.
 
 <p align="center">
   <img src="./assets/vlc-whisper-logo-animation.gif" width="700" alt="VLC-Whisper">
@@ -16,7 +9,7 @@ the 120-second receive watchdog before process cleanup. See [architecture](docs/
   <a href="https://github.com/rzv04/vlc-whisper/releases"><img src="https://img.shields.io/github/v/release/rzv04/vlc-whisper?color=blue&label=version" alt="Release"></a>
   <a href="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml"><img src="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20(Official)%20%7C%20Linux%20(Preview)-informational" alt="Platforms">
-  <img src="https://img.shields.io/badge/VLC-3.0%2B%20(64--bit)-orange" alt="VLC 3.0+">
+  <img src="https://img.shields.io/badge/VLC-3.0.23%2B%20(64--bit)-orange" alt="VLC 3.0.23+">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
 </p>
@@ -53,6 +46,34 @@ vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
 ```
 
 3. Enable the VLC-Whisper audio filter in VLC preferences.
+
+## Quick Start — Ubuntu x64
+
+VLC-Whisper currently supports the Ubuntu APT build of VLC **3.0.23 or newer**. Snap and Flatpak VLC are detected by the installer but are not modified because their sandboxed plugin trees are separate.
+
+### Install script (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rzv04/vlc-whisper/main/scripts/install.sh | sh
+```
+
+The script checks Ubuntu/x86_64, discovers the installed Ubuntu version (`24.04` or `26.04`), checks the available VLC version, downloads the matching checksummed release `.deb`, and installs required runtime dependencies through APT. It discovers VLC's multiarch plugin/Lua paths from the installed Debian packages rather than assuming an `x86_64-linux-gnu` path.
+
+### DEB
+
+Download the matching `vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubuntu-26.04-amd64.deb` package and its checksum from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
+
+```bash
+sudo apt install ./vlc-whisper-ubuntu-<version>-amd64.deb
+```
+
+The package installs the native audio filter, isolated worker, bundled models, and `VLC-Whisper Settings` Lua extension and refreshes VLC's plugin cache.
+
+Uninstall either installation with:
+
+```bash
+sudo apt remove vlc-whisper
+```
 
 ## Features
 
@@ -113,7 +134,7 @@ Open `View > VLC-Whisper Settings`.
 <details>
 <summary><b>How do I uninstall VLC-Whisper?</b></summary>
 
-Use **Control Panel > Programs > Uninstall a program**, Windows **Installed apps**, or the installed `uninstall-vlc-whisper.exe`.
+On Windows, use **Control Panel > Programs > Uninstall a program**, Windows **Installed apps**, or the installed `uninstall-vlc-whisper.exe`. On Ubuntu, run `sudo apt remove vlc-whisper`.
 </details>
 
 ## Benchmark Results
@@ -132,7 +153,7 @@ Use **Control Panel > Programs > Uninstall a program**, Windows **Installed apps
 
 _*The insertion-free columns are reconstructed diagnostic rates from the preserved per-sample hypotheses and references using the benchmark's normalizer and the same minimum Levenshtein-distance objective. They remove insertion edit operations from the error numerator while retaining substitutions, deletions, and the original reference denominator. Where multiple minimum-distance alignments exist, the reconstruction uses the minimum insertion count, making the adjustment conservative. These are not standard WER/CER scores; duplicate rolling-window re-emission is a major source of insertions in livestream mode, but the adjustment removes all aligned insertions rather than attempting to label individual insertions as duplicates._
 
-See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and [`docs/quality-benchmark-report.md`](docs/quality-benchmark-report.md) for the detailed historical analysis.
+See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and benchmark options.
 
 # Developer & Contributor Guide
 
@@ -177,9 +198,9 @@ Cross-component contracts are summarized in [`docs/invariants.md`](docs/invarian
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr nsis \
+sudo apt-get install -y cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr nsis curl pkg-config dpkg-dev \
   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
-  libvulkan-dev glslc
+  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libvulkan-dev glslc
 ```
 
 ### Fedora / RHEL
@@ -198,6 +219,7 @@ cd vlc-whisper
 
 | Preset | Purpose |
 | --- | --- |
+| `linux-x64-release` | Ubuntu/Debian x64 release + DEB packaging |
 | `linux-x64-debug` | Native Linux development/tests |
 | `linux-x64-debug-cpu` | CPU-only Linux development |
 | `linux-x64-coverage` | Linux coverage build |
@@ -228,6 +250,22 @@ cpack --config build/windows-x64-release/CPackConfig.cmake
 ```
 
 For offline packaging, provide the pinned model files manually and omit `VW_PROVISION_MODELS=ON`; the same SHA-256 checks still run.
+
+## Linux Packaging
+
+The release preset provisions the same pinned models and produces `vlc-whisper-linux-amd64.deb` plus its SHA-256 file:
+
+```bash
+cmake --preset linux-x64-release
+# WARNING: On systems with less than 8 GB of RAM, compile with a lower number of jobs to prevent OOM
+cmake --build --preset linux-x64-release -j2 --target package
+```
+
+> [!WARNING]
+> Compiling Vulkan shader translation units (`ggml-vulkan`) under `-O3` requires significant memory. On systems with less than 8 GB of RAM or without swap space, limit parallel build jobs (for example, `-j2` or `-j1`) to prevent compiler out-of-memory (OOM) termination:
+> ```bash
+> cmake --build --preset linux-x64-release -j2
+> ```
 
 ## Verification
 
@@ -260,9 +298,8 @@ Use [`tools/quality_benchmark/README.md`](tools/quality_benchmark/README.md) for
 
 Start with [`AGENTS.md`](AGENTS.md) and [`docs/invariants.md`](docs/invariants.md), then open only the technical reference relevant to the changed behavior.
 
-- [`docs/architecture.md`](docs/architecture.md) — process/lifecycle architecture.
-- [`docs/api-contracts.md`](docs/api-contracts.md) — IPC/API semantics.
-- [`docs/test-strategy.md`](docs/test-strategy.md) — failure-path and seam-test rules.
+- [`docs/architecture.md`](docs/architecture.md) — process and lifecycle architecture.
+- [`docs/api-contracts.md`](docs/api-contracts.md) — IPC protocol and API wire semantics.
 - [`docs/roadmap.md`](docs/roadmap.md) — current and planned work.
 
 ## License

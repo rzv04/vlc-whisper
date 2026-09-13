@@ -1,0 +1,112 @@
+name: Release Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-tag:
+    name: Verify Tag on Main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag originates from main
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag '$TAG_NAME' ($GITHUB_SHA) does not originate from main branch. Releases must be tagged from main."
+            exit 1
+          fi
+          echo "Verified: commit $GITHUB_SHA for tag '$TAG_NAME' is an ancestor of main."
+
+  build-linux-packages:
+    name: Build ${{ matrix.name }}
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "Ubuntu 24.04 (Noble)"
+            container: "ubuntu:24.04"
+            pkg_name: "vlc-whisper-ubuntu-24.04-amd64"
+          - name: "Ubuntu 26.04 (Resolute)"
+            container: "ubuntu:26.04"
+            pkg_name: "vlc-whisper-ubuntu-26.04-amd64"
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y git cmake ninja-build build-essential gcc g++ curl \
+            pkg-config dpkg-dev file libavformat-dev libavcodec-dev libswresample-dev \
+            libavutil-dev libvulkan-dev glslc spirv-headers
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Configure CMake
+        run: |
+          cmake --preset linux-x64-release \
+            -DCPACK_PACKAGE_FILE_NAME=${{ matrix.pkg_name }} \
+            -DVW_PROVISION_MODELS=ON
+
+      - name: Build Debian package
+        run: cmake --build --preset linux-x64-release -j2 --target package
+
+      - name: Verify package output
+        run: |
+          ls -lh build/linux-x64-release/${{ matrix.pkg_name }}.deb
+          ls -lh build/linux-x64-release/${{ matrix.pkg_name }}.deb.sha256
+          dpkg-deb --info build/linux-x64-release/${{ matrix.pkg_name }}.deb
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.pkg_name }}
+          path: |
+            build/linux-x64-release/${{ matrix.pkg_name }}.deb
+            build/linux-x64-release/${{ matrix.pkg_name }}.deb.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build-linux-packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify asset checksums
+        run: |
+          ls -lh release-assets/
+          cd release-assets && sha256sum --check *.sha256
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
