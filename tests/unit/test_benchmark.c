@@ -72,7 +72,8 @@ static void test_translation_failure_logging(void) {
                      strstr(capture.message, "reason=pipeline_saturated_or_unavailable") != NULL);
   vw_test_check_true("pipeline failure explains pre-request rejection",
                      strstr(capture.message, "before a network request could run") != NULL);
-  vw_test_check_false("pipeline failure omits microsecond presentation fields", strstr(capture.message, "_us=") != NULL);
+  vw_test_check_false("pipeline failure omits microsecond presentation fields",
+                      strstr(capture.message, "_us=") != NULL);
 
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, 100000, false);
@@ -87,7 +88,8 @@ static void test_translation_failure_logging(void) {
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
   vw_test_check_true("deadline failure includes latency", strstr(capture.message, "latency_ms=800.000") != NULL);
-  vw_test_check_true("deadline failure class is explicit", strstr(capture.message, "reason=deadline_exhausted") != NULL);
+  vw_test_check_true("deadline failure class is explicit",
+                     strstr(capture.message, "reason=deadline_exhausted") != NULL);
   vw_test_check_true("deadline failure explains global budget",
                      strstr(capture.message, "global 800ms cue deadline exhausted") != NULL);
   vw_test_check_false("deadline failure omits source subtitle text", strstr(capture.message, "source") != NULL);
