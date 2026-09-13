@@ -13,8 +13,8 @@ struct vw_asr_engine {
 static const vw_asr_engine_descriptor_t k_whisper_descriptor = {
     .kind = VW_ASR_ENGINE_WHISPER,
     .id = "whisper",
-    .capabilities = VW_ASR_CAP_LOCAL | VW_ASR_CAP_FINAL_ONLY | VW_ASR_CAP_SOURCE_LOOKAHEAD | VW_ASR_CAP_CPU |
-                    VW_ASR_CAP_VULKAN,
+    .capabilities =
+        VW_ASR_CAP_LOCAL | VW_ASR_CAP_FINAL_ONLY | VW_ASR_CAP_SOURCE_LOOKAHEAD | VW_ASR_CAP_CPU | VW_ASR_CAP_VULKAN,
     .available = true,
 };
 
@@ -81,6 +81,17 @@ void vw_asr_engine_free(vw_asr_engine_t* engine) {
   if (!engine) return;
   if (engine->whisper) vw_whisper_engine_free(engine->whisper);
   free(engine);
+}
+
+bool vw_asr_engine_set_language(vw_asr_engine_t* engine, const char* language) {
+  if (!engine || !language) return false;
+  switch (engine->kind) {
+    case VW_ASR_ENGINE_WHISPER:
+      return vw_whisper_engine_set_language(engine->whisper, language);
+    case VW_ASR_ENGINE_NEMOTRON:
+    default:
+      return false;
+  }
 }
 
 bool vw_asr_engine_transcribe_pcm(vw_asr_engine_t* engine, const float* pcm32, size_t sample_count) {

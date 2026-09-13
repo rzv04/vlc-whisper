@@ -6,6 +6,10 @@ Create a small worker-owned ASR abstraction that preserves current `whisper.cpp`
 
 This PR does **not** link or execute NeMo-Speech.cpp, download Nemotron weights, render mutable subtitles, or send transcription audio to a network provider.
 
+## Wiring checkpoint after main synchronization
+
+The worker now owns a `vw_asr_engine_t` rather than a direct Whisper pointer. START language changes, PCM inference, result enumeration, EOF tail flush, STATUS inference time/GPU truth, and teardown cross the facade. The existing window schedulers, VAD, timestamp translation, segment builder, and IPC captions remain in the worker. The immutable caption path accepts only final results. Selecting the known unavailable Nemotron identity reports an explicit unavailable error at START rather than silently loading Whisper. Adapter seam and worker IPC tests cover these boundaries; the worker lifecycle regression suite must also pass before this draft is ready. The Lua selector and plugin-side forwarding remain separate unfinished work on this abstraction branch.
+
 ## Scope
 
 - In:

@@ -68,6 +68,9 @@ const vw_asr_engine_descriptor_t* vw_asr_engine_get_descriptor(vw_asr_engine_kin
 // until destruction. Returns NULL when configuration or the selected adapter cannot initialize.
 vw_asr_engine_t* vw_asr_engine_create(const vw_asr_engine_config_t* config);
 
+// Updates the active session language through the selected adapter; rejects invalid languages without changing state.
+bool vw_asr_engine_set_language(vw_asr_engine_t* engine, const char* language);
+
 // Destroys the selected adapter and all engine-specific resources owned by the facade; accepting NULL keeps worker
 // teardown paths simple and preserves existing fail-safe cleanup behavior.
 void vw_asr_engine_free(vw_asr_engine_t* engine);
@@ -80,8 +83,8 @@ bool vw_asr_engine_transcribe_pcm(vw_asr_engine_t* engine, const float* pcm32, s
 // NULL engines and adapters that currently have no result available.
 int vw_asr_engine_get_result_count(const vw_asr_engine_t* engine);
 
-// Copies one normalized result using signed microsecond offsets and explicit finality while retaining adapter-owned text
-// storage. Returns false for invalid indexes, unavailable results, or malformed adapter state.
+// Copies one normalized result using signed microsecond offsets and explicit finality while retaining adapter-owned
+// text storage. Returns false for invalid indexes, unavailable results, or malformed adapter state.
 bool vw_asr_engine_get_result(const vw_asr_engine_t* engine, int index, vw_asr_result_t* out_result);
 
 // Returns cumulative inference time in microseconds from the adapter's authoritative metric producer, excluding

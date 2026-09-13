@@ -122,17 +122,17 @@ static bool vw_worker_send_model_progress(vw_ipc_handle_t* handle, const uint8_t
 
 // Sends cumulative inference timing and queue-drop status without adding a new wire message or blocking inference.
 static bool vw_worker_send_status(vw_ipc_handle_t* handle, const uint8_t session_id[VW_SESSION_ID_BYTES],
-                                  const vw_worker_config_t* config, const vw_whisper_engine_t* engine,
+                                  const vw_worker_config_t* config, const vw_asr_engine_t* engine,
                                   const vw_worker_queue_t* queue, uint64_t* sequence) {
   if (!handle || !session_id || !config || !sequence) return false;
   vw_msg_status_t status;
   memset(&status, 0, sizeof(status));
   memcpy(status.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
   status.state = 1;
-  status.inference_us = (int64_t)(engine ? vw_whisper_engine_get_total_inference_us(engine) : 0);
+  status.inference_us = (int64_t)(engine ? vw_asr_engine_get_total_inference_us(engine) : 0);
   status.dropped_audio_us = queue ? (int64_t)vw_worker_queue_get_dropped_audio_us(queue) : 0;
   const char* resolved =
-      (config->backend == VW_WORKER_BACKEND_CPU || !engine || !vw_whisper_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
+      (config->backend == VW_WORKER_BACKEND_CPU || !engine || !vw_asr_engine_is_gpu_active(engine)) ? "cpu" : "gpu";
   snprintf(status.resolved_backend, sizeof(status.resolved_backend), "%s", resolved);
 
   uint8_t payload[64];
@@ -294,7 +294,7 @@ fatal:
   return NULL;
 }
 
-static bool vw_worker_flush_audio_tail(vw_audio_buffer_t* audio_buf, float* window_samples, vw_whisper_engine_t* engine,
+static bool vw_worker_flush_audio_tail(vw_audio_buffer_t* audio_buf, float* window_samples, vw_asr_engine_t* engine,
                                        struct whisper_vad_context* vad_ctx, vw_segment_builder_t* builder) {
   if (!audio_buf || !window_samples || !engine || !builder) return false;
 
@@ -313,14 +313,15 @@ static bool vw_worker_flush_audio_tail(vw_audio_buffer_t* audio_buf, float* wind
       vw_audio_buffer_drain(audio_buf, silence_drain);
       continue;
     }
-    if (!vw_whisper_engine_transcribe_pcm(engine, window_samples, cut_samples)) return false;
+    if (!vw_asr_engine_transcribe_pcm(engine, window_samples, cut_samples)) return false;
 
-    int segment_count = vw_whisper_engine_get_segment_count(engine);
+    int segment_count = vw_asr_engine_get_result_count(engine);
     for (int index = 0; index < segment_count; index++) {
-      vw_whisper_segment_t segment;
-      if (!vw_whisper_engine_get_segment(engine, index, &segment) || segment.no_speech_prob >= 0.60f) continue;
-      int64_t start_pts_us = vw_saturating_add_i64(window_pts_us, segment.t0_us);
-      int64_t end_pts_us = vw_saturating_add_i64(window_pts_us, segment.t1_us);
+      vw_asr_result_t segment;
+      if (!vw_asr_engine_get_result(engine, index, &segment) || !segment.is_final || segment.no_speech_prob >= 0.60f)
+        continue;
+      int64_t start_pts_us = vw_saturating_add_i64(window_pts_us, segment.start_offset_us);
+      int64_t end_pts_us = vw_saturating_add_i64(window_pts_us, segment.end_offset_us);
       vw_segment_builder_push_hypothesis(builder, segment.text_utf8, start_pts_us, end_pts_us);
     }
     vw_audio_buffer_drain(audio_buf, cut_samples);
@@ -422,23 +423,16 @@ int vw_worker_run(const vw_worker_config_t* config) {
     vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE", "VW_FORCE_CPU=1 override active; forcing CPU backend");
   }
   const char* effective_language = config->language[0] ? config->language : "en";
-  vw_whisper_engine_t* engine = vw_whisper_engine_init(effective_model_path, effective_backend, config->gpu_device);
-  if (engine) {
-    if (!vw_whisper_engine_set_language(engine, effective_language)) {
-      vw_log_event(VW_LOG_LEVEL_ERROR, "WORKER_ENGINE", "invalid Whisper language '%s'; refusing to start engine",
-                   effective_language);
-      vw_whisper_engine_free(engine);
-      engine = NULL;
-    } else {
-      vw_whisper_engine_set_n_threads(engine, config->n_threads);
-      vw_log_event(VW_LOG_LEVEL_INFO, "WORKER_ENGINE", "engine language=%s threads=%d", engine->language,
-                   engine->n_threads);
-    }
-  }
-  vw_log_event(
-      engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE",
-      engine ? "whisper engine loaded from '%s'" : "whisper engine init FAILED for '%s' (model missing/invalid)",
-      effective_model_path);
+  const vw_asr_engine_descriptor_t* descriptor = vw_asr_engine_get_descriptor(config->asr_engine);
+  vw_asr_engine_config_t asr_config = {.kind = config->asr_engine,
+                                       .model_path = effective_model_path,
+                                       .backend = effective_backend,
+                                       .gpu_device = config->gpu_device,
+                                       .language = effective_language,
+                                       .n_threads = config->n_threads};
+  vw_asr_engine_t* engine = vw_asr_engine_create(&asr_config);
+  vw_log_event(engine ? VW_LOG_LEVEL_INFO : VW_LOG_LEVEL_WARN, "WORKER_ENGINE", "ASR engine '%s' %s",
+               descriptor ? descriptor->id : "unknown", engine ? "loaded" : "unavailable or model invalid");
   char resolved_vad_model_path[VW_PATH_MAX_BYTES];
   const char* effective_vad_model_path = NULL;
   if (vw_worker_config_resolve_vad_model_path(config, effective_model_path, resolved_vad_model_path,
@@ -484,7 +478,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   if (!audio_buf || !builder) {
     if (audio_buf) vw_audio_buffer_free(audio_buf);
     if (builder) vw_segment_builder_free(builder);
-    if (engine) vw_whisper_engine_free(engine);
+    if (engine) vw_asr_engine_free(engine);
     if (vad_ctx) vw_vad_free(vad_ctx);
     if (model_dl) {
       vw_model_download_abort(model_dl);
@@ -524,7 +518,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
     free(window_samples);
     if (audio_buf) vw_audio_buffer_free(audio_buf);
     if (builder) vw_segment_builder_free(builder);
-    if (engine) vw_whisper_engine_free(engine);
+    if (engine) vw_asr_engine_free(engine);
     if (vad_ctx) vw_vad_free(vad_ctx);
     if (model_dl) {
       vw_model_download_abort(model_dl);
@@ -553,7 +547,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
     free(window_samples);
     if (audio_buf) vw_audio_buffer_free(audio_buf);
     if (builder) vw_segment_builder_free(builder);
-    if (engine) vw_whisper_engine_free(engine);
+    if (engine) vw_asr_engine_free(engine);
     if (vad_ctx) vw_vad_free(vad_ctx);
     if (model_dl) {
       vw_model_download_abort(model_dl);
@@ -729,16 +723,19 @@ int vw_worker_run(const vw_worker_config_t* config) {
             break;
           }
           if (!engine) {
+            const vw_asr_engine_descriptor_t* selected = vw_asr_engine_get_descriptor(config->asr_engine);
+            bool unavailable = !selected || !selected->available;
             vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_MODEL_MISSING");
             if (!send_error(handle, payload_decoded.start.session_id.bytes, E_MODEL_MISSING, 0,
-                            "Whisper model file missing or invalid", &sequence)) {
+                            unavailable ? "Selected ASR engine unavailable" : "Whisper model file missing or invalid",
+                            &sequence)) {
               atomic_store(&fatal_exit, true);
               atomic_store(&running, false);
             }
             break;
           }
 
-          if (!vw_whisper_engine_set_language(engine, payload_decoded.start.language)) {
+          if (!vw_asr_engine_set_language(engine, payload_decoded.start.language)) {
             if (!send_error(handle, payload_decoded.start.session_id.bytes, E_INTERNAL, 1,
                             "Invalid session transcription language", &sequence)) {
               atomic_store(&fatal_exit, true);
@@ -961,23 +958,24 @@ int vw_worker_run(const vw_worker_config_t* config) {
                   vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
                                "PCM speech window %zu samples @%lldus progressive=%d; transcribing", read_cnt,
                                (long long)window_pts_us, live_progressive_mode ? 1 : 0);
-                  if (vw_whisper_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
+                  if (vw_asr_engine_transcribe_pcm(engine, window_samples, read_cnt)) {
                     if (builder) {
-                      int n_segs = vw_whisper_engine_get_segment_count(engine);
+                      int n_segs = vw_asr_engine_get_result_count(engine);
                       for (int s_idx = 0; s_idx < n_segs; s_idx++) {
-                        vw_whisper_segment_t seg_info;
-                        if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info)) {
-                          if (seg_info.no_speech_prob >= 0.60f) {
+                        vw_asr_result_t seg_info;
+                        if (vw_asr_engine_get_result(engine, s_idx, &seg_info)) {
+                          if (!seg_info.is_final || seg_info.no_speech_prob >= 0.60f) {
                             continue;
                           }
-                          if (growing_live_window && seg_info.t1_us > read_duration_us - VW_LIVE_EDGE_HOLDBACK_US) {
+                          if (growing_live_window &&
+                              seg_info.end_offset_us > read_duration_us - VW_LIVE_EDGE_HOLDBACK_US) {
                             vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
                                          "holding progressive trailing segment end=%lldus frontier=%lldus",
-                                         (long long)seg_info.t1_us, (long long)read_duration_us);
+                                         (long long)seg_info.end_offset_us, (long long)read_duration_us);
                             continue;
                           }
-                          int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.t0_us);
-                          int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.t1_us);
+                          int64_t seg_start_pts = vw_saturating_add_i64(window_pts_us, seg_info.start_offset_us);
+                          int64_t seg_end_pts = vw_saturating_add_i64(window_pts_us, seg_info.end_offset_us);
                           vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                         }
                       }
@@ -1317,17 +1315,17 @@ int vw_worker_run(const vw_worker_config_t* config) {
             vw_log_event(VW_LOG_LEVEL_DEBUG, "WORKER_INFERENCE",
                          "lookahead speech chunk %zu samples @%lldus; transcribing", cut_samples,
                          (long long)boundary_pts_us);
-            if (engine && vw_whisper_engine_transcribe_pcm(engine, window_samples, cut_samples)) {
+            if (engine && vw_asr_engine_transcribe_pcm(engine, window_samples, cut_samples)) {
               if (builder) {
-                int n_segs = vw_whisper_engine_get_segment_count(engine);
+                int n_segs = vw_asr_engine_get_result_count(engine);
                 for (int s_idx = 0; s_idx < n_segs; s_idx++) {
-                  vw_whisper_segment_t seg_info;
-                  if (vw_whisper_engine_get_segment(engine, s_idx, &seg_info)) {
-                    if (seg_info.no_speech_prob >= 0.60f) {
+                  vw_asr_result_t seg_info;
+                  if (vw_asr_engine_get_result(engine, s_idx, &seg_info)) {
+                    if (!seg_info.is_final || seg_info.no_speech_prob >= 0.60f) {
                       continue;
                     }
-                    int64_t seg_start_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.t0_us);
-                    int64_t seg_end_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.t1_us);
+                    int64_t seg_start_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.start_offset_us);
+                    int64_t seg_end_pts = vw_saturating_add_i64(boundary_pts_us, seg_info.end_offset_us);
                     vw_segment_builder_push_hypothesis(builder, seg_info.text_utf8, seg_start_pts, seg_end_pts);
                   }
                 }
@@ -1461,7 +1459,7 @@ int vw_worker_run(const vw_worker_config_t* config) {
   free(window_samples);
   if (audio_buf) vw_audio_buffer_free(audio_buf);
   if (builder) vw_segment_builder_free(builder);
-  if (engine) vw_whisper_engine_free(engine);
+  if (engine) vw_asr_engine_free(engine);
   if (vad_ctx) vw_vad_free(vad_ctx);
 
   vw_ipc_close(handle);
