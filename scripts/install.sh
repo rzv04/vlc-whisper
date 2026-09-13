@@ -3,8 +3,6 @@ set -eu
 
 REPO="rzv04/vlc-whisper"
 MIN_VLC="3.0.23"
-PACKAGE="vlc-whisper-linux-amd64.deb"
-CHECKSUM="vlc-whisper-linux-amd64.deb.sha256"
 BASE="https://github.com/${REPO}/releases/latest/download"
 
 die() {
@@ -27,6 +25,19 @@ fi
 [ -r /etc/os-release ] || die "cannot identify this Linux distribution"
 . /etc/os-release
 [ "${ID:-}" = "ubuntu" ] || die "this installer currently supports Ubuntu only"
+
+case "${VERSION_ID:-}" in
+  24.04)
+    PACKAGE="vlc-whisper-ubuntu-24.04-amd64.deb"
+    ;;
+  26.04)
+    PACKAGE="vlc-whisper-ubuntu-26.04-amd64.deb"
+    ;;
+  *)
+    PACKAGE="vlc-whisper-ubuntu-${VERSION_ID:-unknown}-amd64.deb"
+    ;;
+esac
+CHECKSUM="${PACKAGE}.sha256"
 
 for cmd in apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp; do
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
@@ -64,6 +75,16 @@ fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsIL "$BASE/$PACKAGE" >/dev/null 2>&1; then
+  if curl -fsIL "$BASE/vlc-whisper-linux-amd64.deb" >/dev/null 2>&1; then
+    PACKAGE="vlc-whisper-linux-amd64.deb"
+    CHECKSUM="vlc-whisper-linux-amd64.deb.sha256"
+  else
+    die "release package $PACKAGE not found for Ubuntu ${VERSION_ID:-unknown} at $BASE"
+  fi
+fi
+
 curl -fsSL "$BASE/$PACKAGE" -o "$tmp/$PACKAGE"
 curl -fsSL "$BASE/$CHECKSUM" -o "$tmp/$CHECKSUM"
 expected="$(grep -Eo '[[:xdigit:]]{64}' "$tmp/$CHECKSUM" | head -n 1)"

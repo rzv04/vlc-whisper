@@ -56,14 +56,14 @@ VLC-Whisper currently supports the Ubuntu APT build of VLC **3.0.23 or newer**. 
 curl -fsSL https://raw.githubusercontent.com/rzv04/vlc-whisper/main/scripts/install.sh | sh
 ```
 
-The script checks Ubuntu/x86_64 and the available VLC version, downloads the checksummed `vlc-whisper-linux-amd64.deb` release asset, and installs required runtime dependencies through APT. It discovers VLC's multiarch plugin/Lua paths from the installed Debian packages rather than assuming an `x86_64-linux-gnu` path.
+The script checks Ubuntu/x86_64, discovers the installed Ubuntu version (`24.04` or `26.04`), checks the available VLC version, downloads the matching checksummed release `.deb`, and installs required runtime dependencies through APT. It discovers VLC's multiarch plugin/Lua paths from the installed Debian packages rather than assuming an `x86_64-linux-gnu` path.
 
 ### DEB
 
-Download `vlc-whisper-linux-amd64.deb` and its checksum from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
+Download the matching `vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubuntu-26.04-amd64.deb` package and its checksum from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
 
 ```bash
-sudo apt install ./vlc-whisper-linux-amd64.deb
+sudo apt install ./vlc-whisper-ubuntu-<version>-amd64.deb
 ```
 
 The package installs the native audio filter, isolated worker, bundled models, and `VLC-Whisper Settings` Lua extension and refreshes VLC's plugin cache.

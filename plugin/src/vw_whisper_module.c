@@ -1879,3 +1879,8 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
                                                 change_integer_range(0, 1)
                                                     set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
 #pragma GCC diagnostic pop
+
+#if defined(__linux__) && defined(__GNUC__)
+                                                        EXTERN_SYMBOL DLL_SYMBOL
+    int vlc_entry__3_0_0ft64(vlc_set_cb vlc_set, void* opaque) __attribute__((alias("vlc_entry__3_0_0f")));
+#endif
