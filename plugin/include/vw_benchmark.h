@@ -56,9 +56,8 @@ typedef struct vw_benchmark {
   bool live_clock_valid;
 } vw_benchmark_t;
 
-// Records translation telemetry and emits privacy-safe VLC diagnostics with second/millisecond timing for attempted
-// failures, distinguishing pipeline unavailability, deadline exhaustion, and provider fallback failure without
-// subtitle text.
+// Records translation telemetry and emits privacy-safe VLC failure diagnostics with second/millisecond timing,
+// preserving the worker's explicit-cause boundary without inferring provider-specific failure reasons.
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
 
 // Starts a bounded benchmark session, replacing the per-user temporary directory's single last-session `.txt` report
