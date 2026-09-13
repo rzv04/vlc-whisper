@@ -40,6 +40,10 @@ typedef struct vw_asr_engine_descriptor {
 typedef struct vw_asr_result {
   int64_t start_offset_us;
   int64_t end_offset_us;
+  // Optional stable identity for native streaming hypotheses. Zero means this adapter does not expose one; the
+  // worker's current Whisper segment builder remains the identity owner in that case.
+  uint64_t utterance_id;
+  uint32_t revision;
   bool is_final;
   float no_speech_prob;
   const char* text_utf8;

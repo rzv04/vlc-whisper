@@ -8,7 +8,9 @@ This PR does **not** link or execute NeMo-Speech.cpp, download Nemotron weights,
 
 ## Wiring checkpoint after main synchronization
 
-The worker now owns a `vw_asr_engine_t` rather than a direct Whisper pointer. START language changes, PCM inference, result enumeration, EOF tail flush, STATUS inference time/GPU truth, and teardown cross the facade. The existing window schedulers, VAD, timestamp translation, segment builder, and IPC captions remain in the worker. The immutable caption path accepts only final results. Selecting the known unavailable Nemotron identity reports an explicit unavailable error at START rather than silently loading Whisper. Adapter seam and worker IPC tests cover these boundaries; the worker lifecycle regression suite must also pass before this draft is ready. The Lua selector and plugin-side forwarding remain separate unfinished work on this abstraction branch.
+The worker now owns a `vw_asr_engine_t` rather than a direct Whisper pointer. START language changes, PCM inference, result enumeration, EOF tail flush, STATUS inference time/GPU truth, and teardown cross the facade. The existing window schedulers, VAD, timestamp translation, segment builder, and IPC captions remain in the worker. The immutable caption path accepts only final results. Selecting the known unavailable Nemotron identity reports an explicit unavailable error at START rather than silently loading Whisper. Adapter seam, launch-boundary, and worker IPC tests cover these boundaries; the worker lifecycle regression suite must also pass before this draft is ready.
+
+The plugin-side wiring is now included: `whisper-asr-engine` is an independent setting from `whisper-backend`, is forwarded on initial launch and bounded worker respawn, and is exposed in the Lua settings dialog as Whisper.cpp or an explicitly marked unavailable Nemotron option. The launch seam rejects unknown engine identities before process creation. The facade's normalized results carry optional stable utterance/revision metadata for a future native streaming adapter; Whisper leaves those fields zero and remains final-only.
 
 ## Scope
 

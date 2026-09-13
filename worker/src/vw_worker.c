@@ -725,8 +725,10 @@ int vw_worker_run(const vw_worker_config_t* config) {
           if (!engine) {
             const vw_asr_engine_descriptor_t* selected = vw_asr_engine_get_descriptor(config->asr_engine);
             bool unavailable = !selected || !selected->available;
-            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: E_MODEL_MISSING");
-            if (!send_error(handle, payload_decoded.start.session_id.bytes, E_MODEL_MISSING, 0,
+            vw_error_code_t start_error = unavailable ? E_ENGINE_UNAVAILABLE : E_MODEL_MISSING;
+            vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SESSION", "START rejected: %s",
+                         unavailable ? "E_ENGINE_UNAVAILABLE" : "E_MODEL_MISSING");
+            if (!send_error(handle, payload_decoded.start.session_id.bytes, start_error, 0,
                             unavailable ? "Selected ASR engine unavailable" : "Whisper model file missing or invalid",
                             &sequence)) {
               atomic_store(&fatal_exit, true);

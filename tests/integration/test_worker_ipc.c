@@ -127,7 +127,7 @@ int main(void) {
   }
   EXPECT(got == (int32_t)reply_hdr.payload_length);
   EXPECT(vw_protocol_decode_payload(VW_MSG_ERROR, rpayload, reply_hdr.payload_length, &dec));
-  EXPECT(dec.error.error_code == E_MODEL_MISSING);
+  EXPECT(dec.error.error_code == E_ENGINE_UNAVAILABLE);
   EXPECT(strstr(dec.error.message, "unavailable") != NULL);
 
   // Send a valid SHUTDOWN message after HELLO (sequence 1) and START (sequence 2).

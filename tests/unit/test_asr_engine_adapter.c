@@ -64,8 +64,8 @@ int main(void) {
   vw_asr_result_t result = {0};
   vw_test_check_true("result preserves microsecond offsets and finality",
                      vw_asr_engine_get_result(engine, 0, &result) && result.start_offset_us == 120000 &&
-                         result.end_offset_us == 760000 && result.is_final &&
-                         strcmp(result.text_utf8, "spoken words") == 0);
+                         result.end_offset_us == 760000 && result.is_final && result.utterance_id == 0 &&
+                         result.revision == 0 && strcmp(result.text_utf8, "spoken words") == 0);
   vw_test_check_true("status uses adapter metrics",
                      vw_asr_engine_get_total_inference_us(engine) == 42 && !vw_asr_engine_is_gpu_active(engine));
   vw_asr_engine_free(engine);

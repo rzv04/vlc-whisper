@@ -124,6 +124,8 @@ bool vw_asr_engine_get_result(const vw_asr_engine_t* engine, int index, vw_asr_r
       if (!vw_whisper_engine_get_segment(engine->whisper, index, &whisper_result)) return false;
       out_result->start_offset_us = whisper_result.t0_us;
       out_result->end_offset_us = whisper_result.t1_us;
+      out_result->utterance_id = 0;
+      out_result->revision = 0;
       out_result->is_final = true;
       out_result->no_speech_prob = whisper_result.no_speech_prob;
       out_result->text_utf8 = whisper_result.text_utf8;
