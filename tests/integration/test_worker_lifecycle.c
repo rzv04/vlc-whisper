@@ -193,7 +193,8 @@ int main(void) {
     vw_worker_config_t with_model = config;
     memset(with_model.pipe_name, 0, sizeof(with_model.pipe_name));
 #ifdef _WIN32
-    strncpy(with_model.pipe_name, "\\\\.\\pipe\\test_lifecycle_model_socket", sizeof(with_model.pipe_name) - 1);
+    snprintf(with_model.pipe_name, sizeof(with_model.pipe_name), "\\\\.\\pipe\\test_lifecycle_model_socket-%lu",
+             (unsigned long)GetCurrentProcessId());
 #else
     snprintf(with_model.pipe_name, sizeof(with_model.pipe_name), "/tmp/vlc-whisper-test-lifecycle-model-%ld.sock",
              (long)getpid());

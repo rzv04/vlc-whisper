@@ -67,6 +67,7 @@ The P2 defect resolution suite adds regression coverage across:
 - `tests/unit/vw_test_ipc_transport.c`: Large-frame round trips (960 kB), POSIX truncated records, signal-interrupted accept, and send deadlines.
 - `tests/unit/vw_test_translate_stack.c`: Offline translation on a constrained 128 KiB pthread stack.
 - `tests/unit/vw_test_vad_trailing_silence.c`: Deterministic Silero-result seam checking the raw speech endpoint silence cap (300 ms).
+- `tests/unit/test_worker_log_pruning.c`: Bounded retention and pruning of per-process default diagnostic logs.
 
 Fixtures must be legal, small, deterministic, and versioned when committed. Never commit user/proprietary media, personal transcripts, or production model binaries. Pin model hash and exact Whisper revision for model-sensitive regressions.
 
