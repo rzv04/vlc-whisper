@@ -39,7 +39,11 @@ struct vw_source_decoder {
 static const char* vw_source_decoder_normalize_posix_path(const char* url, char* buf, size_t buf_len) {
   if (!url || !buf || buf_len == 0) return NULL;
   const char* src = url;
-  if (strncmp(src, "file://", 7) == 0) src += 7;
+  if (strncmp(src, "file://localhost/", 17) == 0) {
+    src += 16;
+  } else if (strncmp(src, "file://", 7) == 0) {
+    src += 7;
+  }
   size_t idx = 0;
   while (*src && idx + 1 < buf_len) {
     if (*src == '%' && src[1] && src[2]) {
@@ -143,6 +147,7 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
     snprintf(info->container_format, sizeof(info->container_format), "%s",
              fmt_ctx->iformat ? fmt_ctx->iformat->name : "ffmpeg");
   }
+  dec->seek_target_us = INT64_MIN;
   return dec;
 }
 bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us) {
@@ -186,13 +191,19 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
 
 static void vw_source_decoder_copy_samples(vw_source_decoder_t* decoder, const int16_t* samples, size_t count,
                                            int16_t* out_pcm, size_t max_samples, size_t* inout_total_samples) {
-  if (decoder->current_pts_us < decoder->seek_target_us) {
-    uint64_t delta = (uint64_t)decoder->seek_target_us - (uint64_t)decoder->current_pts_us;
-    uint64_t skip = delta / 125U * 2U + ((delta % 125U) * 2U + 124U) / 125U;
-    size_t trimmed = skip < count ? (size_t)skip : count;
-    samples += trimmed;
-    count -= trimmed;
-    decoder->current_pts_us += (int64_t)(trimmed * 125U / 2U);
+  if (decoder->seek_target_us != INT64_MIN && decoder->current_pts_us < decoder->seek_target_us) {
+    int64_t delta = decoder->seek_target_us - decoder->current_pts_us;
+    if (delta > 0) {
+      uint64_t udelta = (uint64_t)delta;
+      uint64_t skip = udelta / 125U * 2U + ((udelta % 125U) * 2U + 124U) / 125U;
+      size_t trimmed = skip < count ? (size_t)skip : count;
+      samples += trimmed;
+      count -= trimmed;
+      decoder->current_pts_us += (int64_t)(trimmed * 125U / 2U);
+    }
+    if (decoder->current_pts_us >= decoder->seek_target_us) {
+      decoder->seek_target_us = INT64_MIN;
+    }
   }
   size_t needed = max_samples - *inout_total_samples;
   size_t to_copy = count < needed ? count : needed;
@@ -229,7 +240,7 @@ static bool vw_source_decoder_process_frame(vw_source_decoder_t* decoder, int16_
   int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)),
                               (const uint8_t**)decoder->frame->extended_data, decoder->frame->nb_samples);
   if (converted < 0) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RESAMPLE", "swr_convert failed (%d)", converted);
+    vw_log_event(VW_LOG_LEVEL_ERROR, "DECODER_FFMPEG_RESAMPLE", "swr_convert failed (%d)", converted);
     return false;
   }
   if (converted > 0) {
@@ -248,7 +259,7 @@ static vw_source_decoder_read_status_t vw_source_decoder_drain_swr(vw_source_dec
   uint8_t* out_ptrs[1] = {(uint8_t*)resample_buf};
   int converted = swr_convert(decoder->swr_ctx, out_ptrs, (int)(sizeof(resample_buf) / sizeof(int16_t)), NULL, 0);
   if (converted < 0) {
-    vw_log_event(VW_LOG_LEVEL_WARN, "DECODER_FFMPEG_RESAMPLE", "swr_convert drain failed (%d)", converted);
+    vw_log_event(VW_LOG_LEVEL_ERROR, "DECODER_FFMPEG_RESAMPLE", "swr_convert drain failed (%d)", converted);
     return VW_SOURCE_DECODER_READ_ERROR;
   }
   if (converted == 0) return VW_SOURCE_DECODER_READ_EOF;

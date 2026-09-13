@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "vw_model_download.h"
 #include "whisper.h"
 
 #ifdef _WIN32
@@ -459,6 +460,18 @@ bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char*
       vw_worker_config_join_path(install_model_dir, sizeof(install_model_dir), executable_dir, "models") &&
       vw_worker_config_join_path(out, out_size, install_model_dir, filename) && vw_worker_config_file_exists(out)) {
     return true;
+  }
+
+  // Fallback probe for the default per-user model directory before giving up.
+  char default_dir[VW_PATH_MAX_BYTES];
+  if (vw_model_download_default_dir(default_dir, sizeof(default_dir))) {
+    char candidate[VW_PATH_MAX_BYTES];
+    if (vw_worker_config_join_path(candidate, sizeof(candidate), default_dir, filename) &&
+        vw_worker_config_file_exists(candidate)) {
+      if (strlen(candidate) >= out_size) return false;
+      snprintf(out, out_size, "%s", candidate);
+      return true;
+    }
   }
 
   return false;

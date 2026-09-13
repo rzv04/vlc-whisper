@@ -139,7 +139,10 @@ bool vw_html_unescape(const char* src, char* dst, size_t dst_size) {
       for (size_t n = 0; n < sizeof(named) / sizeof(named[0]); n++) {
         size_t len = strlen(named[n].entity);
         if (strncmp(src + i, named[n].entity, len) == 0) {
-          if (dst_idx + 1 >= dst_size) return false;
+          if (dst_idx + 1 >= dst_size) {
+            dst[dst_idx < dst_size ? dst_idx : dst_size - 1] = '\0';
+            return false;
+          }
           dst[dst_idx++] = named[n].value;
           i += len - 1;
           matched = true;
@@ -161,21 +164,37 @@ bool vw_html_unescape(const char* src, char* dst, size_t dst_size) {
             number[digit_count] = '\0';
             char* parse_end = NULL;
             unsigned long code = strtoul(number, &parse_end, hex ? 16 : 10);
-            if (parse_end && *parse_end == '\0' && code <= 0x10FFFFUL &&
-                append_utf8_scalar((uint32_t)code, dst, dst_size, &dst_idx)) {
-              i = end_idx;
-              continue;
+            if (parse_end && *parse_end == '\0') {
+              if (code > 0x10FFFFUL || (code >= 0xD800UL && code <= 0xDFFFUL) || code == 0) {
+                // Invalid code point: entity cannot be parsed, emit '&' and keep original characters cleanly.
+              } else {
+                if (!append_utf8_scalar((uint32_t)code, dst, dst_size, &dst_idx)) {
+                  dst[dst_size - 1] = '\0';
+                  return false;
+                }
+                i = end_idx;
+                continue;
+              }
             }
           }
         }
       }
     }
 
-    if (dst_idx + 1 >= dst_size) return false;
+    if (dst_idx + 1 >= dst_size) {
+      dst[dst_size - 1] = '\0';
+      return false;
+    }
     dst[dst_idx++] = src[i];
   }
   dst[dst_idx] = '\0';
   return true;
+}
+
+// In-place HTML unescape helper for string buffers.
+static inline bool html_unescape_in_place(char* str) {
+  if (!str) return false;
+  return vw_html_unescape(str, str, strlen(str) + 1);
 }
 
 static bool parse_hex4(const char* src, uint32_t* out) {

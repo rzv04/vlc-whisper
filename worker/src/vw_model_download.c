@@ -256,10 +256,16 @@ static void vw_model_download_release_lock(vw_model_download_t* dl) {
     close(dl->lock_fd);
     dl->lock_fd = -1;
   }
+  if (dl->lock_path[0]) {
+    unlink(dl->lock_path);
+  }
 #else
   if (dl->lock_handle != INVALID_HANDLE_VALUE) {
     CloseHandle(dl->lock_handle);
     dl->lock_handle = INVALID_HANDLE_VALUE;
+  }
+  if (dl->lock_path[0]) {
+    vw_unlink_wide_utf8(dl->lock_path);
   }
 #endif
 }
@@ -612,6 +618,22 @@ static void* vw_download_thread(void* arg) {
       }
       pthread_mutex_lock(&dl->lock);
       dl->progress.stage = VW_MODEL_STAGE_FAILED;
+      pthread_mutex_unlock(&dl->lock);
+      return NULL;
+    }
+    if (atomic_load(&dl->abort_requested)) {
+#ifndef _WIN32
+      unlink(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
+#endif
+      pthread_mutex_lock(&dl->lock);
+      dl->progress.stage = VW_MODEL_STAGE_ABORTING;
+      dl->progress.bytes_done = 0;
+      dl->progress.pct = 0;
+      pthread_mutex_unlock(&dl->lock);
+      pthread_mutex_lock(&dl->lock);
+      dl->progress.stage = VW_MODEL_STAGE_IDLE;
       pthread_mutex_unlock(&dl->lock);
       return NULL;
     }
