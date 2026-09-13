@@ -61,30 +61,37 @@ static void test_translation_failure_logging(void) {
   vw_log_set_enabled(true);
 
   vw_benchmark_record_translation(&benchmark, 0, 0, false);
-  EXPECT(capture.level == VW_LOG_LEVEL_ERROR);
-  EXPECT_EQ_STR(capture.event_id, "PLUGIN_TRANSLATION_FAILURE");
-  EXPECT(strstr(capture.message, "segment=42") != NULL);
-  EXPECT(strstr(capture.message, "start_pts_s=12.000") != NULL);
-  EXPECT(strstr(capture.message, "end_pts_s=13.500") != NULL);
-  EXPECT(strstr(capture.message, "latency_ms=0.000") != NULL);
-  EXPECT(strstr(capture.message, "reason=pipeline_saturated_or_unavailable") != NULL);
-  EXPECT(strstr(capture.message, "before a network request could run") != NULL);
-  EXPECT(strstr(capture.message, "_us=") == NULL);
+  vw_test_check_true("pipeline failure uses error level", capture.level == VW_LOG_LEVEL_ERROR);
+  vw_test_check_true("pipeline failure uses translation event id",
+                     strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
+  vw_test_check_true("pipeline failure includes segment id", strstr(capture.message, "segment=42") != NULL);
+  vw_test_check_true("pipeline failure includes start seconds", strstr(capture.message, "start_pts_s=12.000") != NULL);
+  vw_test_check_true("pipeline failure includes end seconds", strstr(capture.message, "end_pts_s=13.500") != NULL);
+  vw_test_check_true("pipeline failure includes zero latency", strstr(capture.message, "latency_ms=0.000") != NULL);
+  vw_test_check_true("pipeline failure class is explicit",
+                     strstr(capture.message, "reason=pipeline_saturated_or_unavailable") != NULL);
+  vw_test_check_true("pipeline failure explains pre-request rejection",
+                     strstr(capture.message, "before a network request could run") != NULL);
+  vw_test_check_false("pipeline failure omits microsecond presentation fields", strstr(capture.message, "_us=") != NULL);
 
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, 100000, false);
-  EXPECT(strstr(capture.message, "latency_ms=100.000") != NULL);
-  EXPECT(strstr(capture.message, "reason=provider_fallbacks_failed") != NULL);
-  EXPECT(strstr(capture.message, "Web RPC, GTX, and Mobile produced no valid translation") != NULL);
-  EXPECT(strstr(capture.message, "request or response parse failure") != NULL);
+  vw_test_check_true("provider failure includes latency", strstr(capture.message, "latency_ms=100.000") != NULL);
+  vw_test_check_true("provider failure class is explicit",
+                     strstr(capture.message, "reason=provider_fallbacks_failed") != NULL);
+  vw_test_check_true("provider failure names fallback chain",
+                     strstr(capture.message, "Web RPC, GTX, and Mobile produced no valid translation") != NULL);
+  vw_test_check_true("provider failure explains request or parse cause",
+                     strstr(capture.message, "request or response parse failure") != NULL);
 
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
-  EXPECT(strstr(capture.message, "latency_ms=800.000") != NULL);
-  EXPECT(strstr(capture.message, "reason=deadline_exhausted") != NULL);
-  EXPECT(strstr(capture.message, "global 800ms cue deadline exhausted") != NULL);
-  EXPECT(strstr(capture.message, "source") == NULL);
-  EXPECT(strstr(capture.message, "translated") == NULL);
+  vw_test_check_true("deadline failure includes latency", strstr(capture.message, "latency_ms=800.000") != NULL);
+  vw_test_check_true("deadline failure class is explicit", strstr(capture.message, "reason=deadline_exhausted") != NULL);
+  vw_test_check_true("deadline failure explains global budget",
+                     strstr(capture.message, "global 800ms cue deadline exhausted") != NULL);
+  vw_test_check_false("deadline failure omits source subtitle text", strstr(capture.message, "source") != NULL);
+  vw_test_check_false("deadline failure omits translated subtitle text", strstr(capture.message, "translated") != NULL);
 
   vw_log_set_enabled(false);
   vw_log_set_sink(NULL, NULL);
@@ -101,16 +108,32 @@ static void test_posix_fallback_is_per_user(void) {
   if (had_xdg) snprintf(saved_xdg, sizeof(saved_xdg), "%s", xdg);
   if (had_tmp) snprintf(saved_tmp, sizeof(saved_tmp), "%s", tmp);
 
+  char expected[VW_PATH_MAX_BYTES];
+  snprintf(expected, sizeof(expected), "/tmp/vlc-whisper-%lu/vlc-whisper-benchmark.txt", (unsigned long)getuid());
+
   unsetenv("XDG_RUNTIME_DIR");
   unsetenv("TMPDIR");
 
-  vw_benchmark_t benchmark;
-  EXPECT(vw_benchmark_begin(&benchmark, "tiny", "cpu", 1000000));
-  char expected[VW_PATH_MAX_BYTES];
-  snprintf(expected, sizeof(expected), "/tmp/vlc-whisper-%lu/vlc-whisper-benchmark.txt", (unsigned long)getuid());
-  EXPECT_EQ_STR(benchmark.report_path, expected);
-  vw_benchmark_finalize(&benchmark, 2000000);
-  remove(benchmark.report_path);
+  vw_benchmark_t missing_runtime = {0};
+  bool missing_runtime_started = vw_benchmark_begin(&missing_runtime, "tiny", "cpu", 1000000);
+  vw_test_check_true("missing runtime directory uses uid fallback", missing_runtime_started);
+  if (missing_runtime_started) {
+    vw_test_check_true("missing runtime fallback path is per user", strcmp(missing_runtime.report_path, expected) == 0);
+    vw_benchmark_finalize(&missing_runtime, 2000000);
+    remove(missing_runtime.report_path);
+  }
+
+  setenv("XDG_RUNTIME_DIR", "/tmp", 1);
+  unsetenv("TMPDIR");
+
+  vw_benchmark_t shared_runtime = {0};
+  bool shared_runtime_started = vw_benchmark_begin(&shared_runtime, "tiny", "cpu", 3000000);
+  vw_test_check_true("shared XDG runtime directory is rejected", shared_runtime_started);
+  if (shared_runtime_started) {
+    vw_test_check_true("shared XDG runtime falls back per user", strcmp(shared_runtime.report_path, expected) == 0);
+    vw_benchmark_finalize(&shared_runtime, 4000000);
+    remove(shared_runtime.report_path);
+  }
 
   if (had_xdg) {
     setenv("XDG_RUNTIME_DIR", saved_xdg, 1);
@@ -246,5 +269,5 @@ int main(void) {
   vw_benchmark_record_caption_received(&epoch, &segment, 4200000, false);
   EXPECT(epoch.latency_samples[0] == 200000);
   EXPECT(epoch.audio_chunks_sent == 2);
-  return 0;
+  return vw_test_finish("test_benchmark");
 }
