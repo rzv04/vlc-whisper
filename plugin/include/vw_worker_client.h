@@ -43,8 +43,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_p
                                                         const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                         const char* model_path);
 
-// Extended launch forwards backend, language, threads, logging, gpu-device, and model-directory flags to worker argv;
-// NULL or empty values are defaulted or omitted automatically, including model_dir when absent.
+// Extended legacy launch forwards backend, language, threads, logging, gpu-device, and model-directory flags to worker
+// argv and selects Whisper. Use the engine-aware variant when a caller has an explicit ASR engine identity.
 vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
                                                            const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                            const char* model_path, const char* backend,
