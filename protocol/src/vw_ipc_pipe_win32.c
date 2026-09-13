@@ -9,6 +9,8 @@
 
 #include "vw_ipc_transport.h"
 
+#define VW_IPC_MAX_RECORD_BYTES 65536U
+
 // Fail-closed same-user pipe security: create a DACL that grants GENERIC_READ|GENERIC_WRITE
 // only to the current user. On any failure the caller gets NULL and no pipe is created,
 // so a permissive DACL is never used. Requires linking with advapi32 (MinGW: -ladvapi32).
@@ -174,35 +176,40 @@ vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
 }
 
 bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
-  if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE) return false;
-  HANDLE pipe = (HANDLE)handle->pipe_handle;
-
-  OVERLAPPED ov = {0};
-  ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
-  if (!ov.hEvent) {
+  if (!handle || !handle->pipe_handle || handle->pipe_handle == INVALID_HANDLE_VALUE || (!data && size != 0))
     return false;
-  }
-  DWORD bytes_written = 0;
-  BOOL res = WriteFile(pipe, data, (DWORD)size, &bytes_written, &ov);
-  if (!res) {
-    DWORD err = GetLastError();
-    if (err == ERROR_IO_PENDING) {
-      DWORD w = WaitForSingleObject(ov.hEvent, 3000);
-      if (w == WAIT_OBJECT_0) {
-        res = GetOverlappedResult(pipe, &ov, &bytes_written, FALSE);
-      } else if (w == WAIT_TIMEOUT) {
-        CancelIoEx(pipe, &ov);
-        vw_pipe_reap_cancel(pipe, &ov);
-        res = FALSE;
-      } else {
-        CancelIoEx(pipe, &ov);
-        vw_pipe_reap_cancel(pipe, &ov);
-        res = FALSE;
+  HANDLE pipe = (HANDLE)handle->pipe_handle;
+  const unsigned char* bytes = (const unsigned char*)data;
+  ULONGLONG deadline_ms = GetTickCount64() + 3000ULL;
+  while (size > 0) {
+    if (GetTickCount64() >= deadline_ms) return false;
+    DWORD record_size = (DWORD)(size < VW_IPC_MAX_RECORD_BYTES ? size : VW_IPC_MAX_RECORD_BYTES);
+    OVERLAPPED ov = {0};
+    ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!ov.hEvent) return false;
+    DWORD bytes_written = 0;
+    BOOL res = WriteFile(pipe, bytes, record_size, &bytes_written, &ov);
+    if (!res) {
+      DWORD err = GetLastError();
+      if (err == ERROR_IO_PENDING) {
+        ULONGLONG now_ms = GetTickCount64();
+        DWORD remaining_ms = now_ms >= deadline_ms ? 0U : (DWORD)(deadline_ms - now_ms);
+        DWORD w = WaitForSingleObject(ov.hEvent, remaining_ms);
+        if (w == WAIT_OBJECT_0) {
+          res = GetOverlappedResult(pipe, &ov, &bytes_written, FALSE);
+        } else {
+          CancelIoEx(pipe, &ov);
+          vw_pipe_reap_cancel(pipe, &ov);
+          res = FALSE;
+        }
       }
     }
+    CloseHandle(ov.hEvent);
+    if (!res || bytes_written != record_size) return false;
+    bytes += record_size;
+    size -= record_size;
   }
-  CloseHandle(ov.hEvent);
-  return res && (bytes_written == size);
+  return true;
 }
 
 int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buffer_size, uint32_t timeout_us) {
@@ -234,6 +241,7 @@ int32_t vw_ipc_receive_timeout(vw_ipc_handle_t* handle, void* buffer, size_t buf
       }
     }
   }
+  if (!res && bytes_read > 0 && GetLastError() == ERROR_MORE_DATA) res = TRUE;
   CloseHandle(ov.hEvent);
 
   if (timed_out) return VW_IPC_RECV_TIMEOUT;  // timeout — keep waiting

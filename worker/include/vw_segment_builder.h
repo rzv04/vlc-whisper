@@ -7,15 +7,23 @@
 
 #include "vw_protocol_types.h"
 
-#define VW_SEGMENT_BUILDER_INITIAL_CAPACITY 32  // Initial pending caption queue capacity
-#define VW_SEGMENT_HISTORY_CAPACITY 16          // 16 committed caption segments in deduplication history
-#define VW_SEGMENT_BUILDER_MAX_TEXT_BYTES 1024  // 1 KB max text length
-#define VW_AUDIO_SAMPLE_RATE 16000              // 16kHz sample rate
-#define VW_HOP_DURATION_US 2000000              // 2s hop length for segmenting audio
-#define VW_WINDOW_DURATION_US 8000000           // 8s max window length
-#define VW_WINDOW_SAMPLES 128000                // 8s window sample count (128,000 samples at 16kHz)
-#define VW_HOP_SAMPLES 32000                    // 2s hop sample count (32,000 samples at 16kHz)
-#define VW_DEDUP_TIME_TOLERANCE_US 500000LL     // 500ms timestamp tolerance for hop deduplication
+#define VW_SEGMENT_BUILDER_INITIAL_CAPACITY 32
+#define VW_SEGMENT_HISTORY_CAPACITY 16
+#define VW_SEGMENT_BUILDER_MAX_TEXT_BYTES 1024
+#define VW_AUDIO_SAMPLE_RATE 16000
+
+// Live PCM begins progressively after 2 seconds, grows to the 8-second analysis window, then advances every second.
+// Seekable local-file PCM fallback deliberately preserves the legacy 8-second window / 2-second hop behavior.
+#define VW_LIVE_STARTUP_DURATION_US 2000000
+#define VW_LIVE_HOP_DURATION_US 1000000
+#define VW_LOCAL_FALLBACK_HOP_DURATION_US 2000000
+#define VW_WINDOW_DURATION_US 8000000
+#define VW_LIVE_STARTUP_SAMPLES 32000
+#define VW_WINDOW_SAMPLES 128000
+#define VW_LIVE_HOP_SAMPLES 16000
+#define VW_LOCAL_FALLBACK_HOP_SAMPLES 32000
+#define VW_LIVE_EDGE_HOLDBACK_US 500000LL
+#define VW_DEDUP_TIME_TOLERANCE_US 500000LL
 
 // Record of a previously committed phrase retained for sliding-window deduplication across hops.
 typedef struct vw_history_entry {
@@ -29,7 +37,7 @@ typedef struct vw_segment_builder {
   vw_caption_segment_t* segment_queue;                      // Dynamically growable circular buffer of pending segments
   size_t capacity;                                          // Allocated capacity of segment_queue
   size_t head;                                              // Next write position in segment_queue
-  size_t count;                                             // Active pending item count in segment_queue
+  size_t count;                                             // Active pending item count
   vw_history_entry_t history[VW_SEGMENT_HISTORY_CAPACITY];  // Sliding history of committed phrases for deduplication
   size_t history_head;                                      // Next write index in history (0..15)
   size_t history_count;                                     // Count of active history entries (0..16)

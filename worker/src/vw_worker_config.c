@@ -40,7 +40,9 @@ static bool vw_worker_config_file_exists(const char* path) {
 static bool vw_worker_config_is_absolute_path(const char* path) {
   if (!path || !path[0]) return false;
 #ifdef _WIN32
-  return path[0] == '\\' || (path[1] != '\0' && path[1] == ':');
+  return (path[0] == '\\' && path[1] == '\\') ||
+         (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' &&
+          (path[2] == '\\' || path[2] == '/'));
 #else
   return path[0] == '/';
 #endif
@@ -304,7 +306,12 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "missing value for --pipe\n");
         return 2;
       }
-      snprintf(config->pipe_name, sizeof(config->pipe_name), "%s", argv[++i]);
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->pipe_name)) {
+        fprintf(stderr, "bad --pipe: too long (max %zu)\n", sizeof(config->pipe_name) - 1);
+        return 2;
+      }
+      snprintf(config->pipe_name, sizeof(config->pipe_name), "%s", v);
     } else if (strcmp(argv[i], "--model") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --model\n");
@@ -332,13 +339,23 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
         fprintf(stderr, "missing value for --vad-model\n");
         return 2;
       }
-      snprintf(config->vad_model_path, sizeof(config->vad_model_path), "%s", argv[++i]);
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->vad_model_path)) {
+        fprintf(stderr, "bad --vad-model: too long (max %zu)\n", sizeof(config->vad_model_path) - 1);
+        return 2;
+      }
+      snprintf(config->vad_model_path, sizeof(config->vad_model_path), "%s", v);
     } else if (strcmp(argv[i], "--log-file") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "missing value for --log-file\n");
         return 2;
       }
-      snprintf(config->log_file, sizeof(config->log_file), "%s", argv[++i]);
+      const char* v = argv[++i];
+      if (strlen(v) >= sizeof(config->log_file)) {
+        fprintf(stderr, "bad --log-file: too long (max %zu)\n", sizeof(config->log_file) - 1);
+        return 2;
+      }
+      snprintf(config->log_file, sizeof(config->log_file), "%s", v);
       config->logging_enabled = true;
     } else if (strcmp(argv[i], "--enable-logging") == 0) {
       config->logging_enabled = true;

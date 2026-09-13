@@ -12,6 +12,13 @@ extern "C" {
 // Opaque source decoder handle wrapping platform demuxers (Media Foundation on Windows, FFmpeg on Linux).
 typedef struct vw_source_decoder vw_source_decoder_t;
 
+typedef enum vw_source_decoder_read_status {
+  VW_SOURCE_DECODER_READ_OK = 0,
+  VW_SOURCE_DECODER_READ_AGAIN,
+  VW_SOURCE_DECODER_READ_EOF,
+  VW_SOURCE_DECODER_READ_ERROR,
+} vw_source_decoder_read_status_t;
+
 // Stream metadata populated upon successfully opening a media file container.
 typedef struct vw_source_decoder_info {
   int64_t duration_us;        // Media duration in microseconds (-1 if unknown or live)
@@ -28,10 +35,11 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
 // buffers and re-anchoring presentation timestamps without tearing down the underlying demuxer context.
 bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us);
 
-// Reads decoded and resampled 16kHz 16-bit mono PCM audio samples into the destination buffer, returning sample
-// count read along with presentation timestamp in microseconds for the first sample.
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us);
+// Reads normalized S16LE source audio, returning an explicit progress state and writing sample count plus first-sample
+// media PTS; AGAIN never implies permanent EOF.
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us);
 
 // Queries the total duration of the currently opened media file in microseconds, returning negative one if
 // duration is indeterminate, stream is live, or decoder handle is invalid.

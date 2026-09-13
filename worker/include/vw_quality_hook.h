@@ -1,0 +1,8 @@
+#ifndef VW_QUALITY_HOOK_H_
+#define VW_QUALITY_HOOK_H_
+
+#define VW_QUALITY_MARKER_ENV "VW_QUALITY_MARKER_PREFIX"
+#define VW_QUALITY_EOF_MARKER_SUFFIX ".source-eof"
+#define VW_QUALITY_DROPS_MARKER_SUFFIX ".dropped-audio-us"
+
+#endif  // VW_QUALITY_HOOK_H_

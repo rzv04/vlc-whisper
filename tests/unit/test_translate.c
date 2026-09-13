@@ -10,6 +10,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "vw_translate.h"
@@ -244,6 +246,29 @@ static void test_global_deadline(void) {
   assert(latency_us < 1200000U);
 }
 
+#ifndef _WIN32
+static void test_nonblocking_setup_failure_fails_closed(const char* self_path) {
+  assert(self_path && self_path[0]);
+  vw_translate_set_test_http_hook(NULL, NULL);
+  assert(setenv("VW_TEST_TRANSLATE_EXECUTABLE", self_path, 1) == 0);
+  assert(setenv("VW_TEST_TRANSLATE_FAIL_NONBLOCKING_CALL", "all", 1) == 0);
+
+  char out[256];
+  uint8_t tier = 99;
+  uint32_t latency_us = 0;
+  int64_t started = test_monotonic_us();
+  bool ok = vw_translate_text("pipe setup failure", "en", "ro", out, sizeof(out), &tier, &latency_us);
+  int64_t elapsed = test_monotonic_us() - started;
+
+  unsetenv("VW_TEST_TRANSLATE_FAIL_NONBLOCKING_CALL");
+  unsetenv("VW_TEST_TRANSLATE_EXECUTABLE");
+  assert(!ok);
+  assert(tier == VW_TRANSLATE_TIER_NONE);
+  assert(elapsed < 1500000LL);
+  assert(latency_us < 1500000U);
+}
+#endif
+
 static void test_tier_constants(void) {
   assert(VW_TRANSLATE_TIER_NONE == 0);
   assert(VW_TRANSLATE_TIER_WEB_RPC == 1);
@@ -266,7 +291,16 @@ static void test_language_code_sanitization(void) {
   assert(strcmp(out, "Salut lume") == 0);
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+#ifndef _WIN32
+  if (argc > 1 && strcmp(argv[1], "--disable") == 0) {
+    const char byte = 'x';
+    (void)write(STDOUT_FILENO, &byte, 1);
+    test_sleep_ms(3000);
+    return 0;
+  }
+#endif
+
   test_url_encode();
   test_html_unescape();
   test_parse_rpc_response();
@@ -275,6 +309,12 @@ int main(void) {
   test_rpc_request_escaping();
   test_real_fallback_path_with_hook();
   test_global_deadline();
+#ifndef _WIN32
+  test_nonblocking_setup_failure_fails_closed(argv[0]);
+#else
+  (void)argc;
+  (void)argv;
+#endif
   test_tier_constants();
   test_language_code_sanitization();
   printf("All translate unit tests PASSED.\n");

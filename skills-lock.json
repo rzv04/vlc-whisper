@@ -43,6 +43,24 @@
       "skillPath": "skills/caveman-stats/SKILL.md",
       "computedHash": "47ce2de3d6cb39a75047b5c962e4eb3da15594e7397c94103e9a104d42626553"
     },
+    "computer-use": {
+      "source": "stablyai/orca",
+      "sourceType": "github",
+      "skillPath": "skills/computer-use/SKILL.md",
+      "computedHash": "eaa770000cf2e806485dc142c815580de3c6df4dfdd0afc792c79498aa93cfec"
+    },
+    "orca-cli": {
+      "source": "stablyai/orca",
+      "sourceType": "github",
+      "skillPath": "skills/orca-cli/SKILL.md",
+      "computedHash": "83ece910d035d0684195095bb9df5911a028002b2efba1ebbeb4ae66de5e0903"
+    },
+    "orchestration": {
+      "source": "stablyai/orca",
+      "sourceType": "github",
+      "skillPath": "skills/orchestration/SKILL.md",
+      "computedHash": "f81deaefdeb9bedaa195ea59de9d505346121a991624a6469ae41a1a15e5381c"
+    },
     "ponytail": {
       "source": "dietrichgebert/ponytail",
       "sourceType": "github",

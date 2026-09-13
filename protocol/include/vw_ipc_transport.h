@@ -18,8 +18,8 @@ vw_ipc_handle_t* vw_ipc_listen(const char* endpoint_name);
 // Connects to local IPC endpoint.
 vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name);
 
-// Sends raw frame bytes over transport handle (3-second send timeout).
-// Returns true on success, false on error or timeout.
+// Sends raw frame bytes over transport handle with 3-second timeout and SIGPIPE suppression; returns true on success,
+// false on error or peer disconnect.
 bool vw_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size);
 
 // vw_ipc_receive() return codes.

@@ -21,8 +21,15 @@ endif()
 # producing a CPU-only artifact under the canonical release preset name.
 option(VW_WITH_VULKAN "worker: build whisper.cpp with ggml-vulkan GPU backend" ON)
 option(VW_REQUIRE_VULKAN "worker: fail configure when Vulkan was requested but cannot be enabled" OFF)
+option(VW_QUALITY_BENCHMARK_HOOKS "worker: enable developer-only ASR benchmark completion hooks" OFF)
 if(VW_REQUIRE_VULKAN AND NOT VW_WITH_VULKAN)
     message(FATAL_ERROR "VW_REQUIRE_VULKAN=ON requires VW_WITH_VULKAN=ON")
+endif()
+if(VW_QUALITY_BENCHMARK_HOOKS AND NOT BUILD_TESTING)
+    message(FATAL_ERROR "VW_QUALITY_BENCHMARK_HOOKS=ON requires BUILD_TESTING=ON")
+endif()
+if(VW_QUALITY_BENCHMARK_HOOKS AND NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    message(FATAL_ERROR "VW_QUALITY_BENCHMARK_HOOKS requires a GNU/Clang-compatible linker with --wrap support")
 endif()
 
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
@@ -79,8 +86,18 @@ else()
     endif()
 endif()
 
+# Preinclude the POSIX translation pipe policy so original descriptors are CLOEXEC, curl stdin/stdout stay blocking,
+# and only parent endpoints become nonblocking after spawn through the same namespaced production/test seam.
+if(NOT WIN32)
+    set_source_files_properties(src/vw_translate.c PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translate_pipe_policy.h"
+        COMPILE_DEFINITIONS "VW_TRANSLATE_PIPE_POLICY_OVERRIDE=1"
+    )
+endif()
+
 add_executable(vlc-whisper-worker
     src/main.c
+    src/vw_worker_log_policy.c
     src/vw_worker.c
     src/vw_whisper_engine.c
     src/vw_vad.c
@@ -97,6 +114,18 @@ add_executable(vlc-whisper-worker
     ../plugin/src/vw_platform_linux.c
     ../plugin/src/vw_platform_win32.c
 )
+
+# Explicit opt-in keeps benchmark-only completion hooks out of normal debug/release/package workers.
+# When enabled, GNU/Clang and MinGW --wrap intercepts expose only temporary EOF/drop metadata when
+# VW_QUALITY_MARKER_PREFIX is set by the benchmark runner; ordinary worker protocol behavior is unchanged.
+if(VW_QUALITY_BENCHMARK_HOOKS)
+    target_sources(vlc-whisper-worker PRIVATE src/vw_quality_hooks.c)
+    target_compile_definitions(vlc-whisper-worker PRIVATE VW_QUALITY_LINK_WRAPS=1)
+    target_link_options(vlc-whisper-worker PRIVATE
+        -Wl,--wrap=vw_source_decoder_read_s16le
+        -Wl,--wrap=vw_worker_queue_push
+    )
+endif()
 
 if(FFMPEG_FOUND AND NOT WIN32)
     target_compile_definitions(vlc-whisper-worker PRIVATE -DVW_WITH_FFMPEG)
@@ -133,6 +162,11 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 )
 
 if(WIN32)
+    # Windows: reserve a bigger stack. The MinGW default of 2 MiB overflows during
+    # whisper.cpp model loading (STATUS_STACK_OVERFLOW 0xC00000FD) because GNU ld
+    # does not apply the 8 MiB Linux main-thread default. All clean worker exit
+    # paths run on the main thread, so this reserve covers them too.
+    target_link_options(vlc-whisper-worker PRIVATE -Wl,--stack,16777216)
     # Windows Media Foundation, Crypto, and ACL/SID APIs plus WinHTTP model/translation transport.
     target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp advapi32
                                                        shell32)

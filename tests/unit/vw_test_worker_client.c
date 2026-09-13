@@ -43,7 +43,7 @@ static void* vw_fake_server_thread(void* arg) {
   // Step 2: Send HELLO_ACK payload to confirm version & capability handshakes
   vw_msg_hello_ack_t ack = {
       .selected_major = VW_PROTOCOL_VERSION_MAJOR,
-      .selected_minor = 0,
+      .selected_minor = VW_PROTOCOL_VERSION_MINOR + 1,
       .capability_flags = VW_CAPABILITY_PCM_S16LE_16K_MONO,
   };
   size_t ack_len = 0;
@@ -104,17 +104,23 @@ static void* vw_fake_server_thread(void* arg) {
     return (void*)17;
   }
 
-  // Step 5: Delay 100ms (testing client's polling/waiting loop), then reply with zero-payload STARTED frame
+  // Step 5: Delay 100ms (testing client's polling/waiting loop), then reply with a full STARTED frame.
+  // Forward-minor workers use the current payload contract, including the session identity.
   vw_platform_sleep_ms(100);
+  vw_msg_started_t started = {.source_active = VW_SOURCE_ACTIVE_INACTIVE};
+  memcpy(started.session_id.bytes, start.session_id.bytes, VW_SESSION_ID_BYTES);
+  size_t started_len = 0;
+  assert(vw_protocol_encode_payload(VW_MSG_STARTED, &started, payload, sizeof(payload), &started_len));
   vw_frame_header_t started_hdr = {
       .magic = VW_PROTOCOL_MAGIC,
       .major = VW_PROTOCOL_VERSION_MAJOR,
       .type = VW_MSG_STARTED,
-      .payload_length = 0,
+      .payload_length = (uint32_t)started_len,
       .sequence = 2,
   };
   vw_protocol_encode_header(&started_hdr, hdr_buf, 20);
   vw_ipc_send(server, hdr_buf, 20);
+  vw_ipc_send(server, payload, started_len);
 
   // Step 6: Receive AUDIO_PCM payload sent by vw_worker_client_send_audio (verifying vw_ipc_receive_timeout)
   if (vw_ipc_receive(server, hdr_buf, 20) != 20) {

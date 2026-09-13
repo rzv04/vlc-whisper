@@ -65,10 +65,10 @@ dkms.conf
 # KDE directory preferences
 .directory
 
-# Linux trash folder which might appear on any partition or disk
+# Linux trash folder which might appear on any partition
 .Trash-*
 
-# .nfs files are created when an open file is removed but is still being accessed
+# .nfs files
 .nfs*
 
 ### VisualStudioCode ###
@@ -195,6 +195,11 @@ opencode.jsonc
 opencode.json
 
 .commandcode/
+.omp/
+.agents/skills/
+.opencode/
+.playwright-mcp/
+skills-lock.json
 
 graphify-out/
 .graphifyignore
@@ -207,12 +212,6 @@ _CPack_Packages/
 samples/snippets/*.as
 samples/snippets/*.png
 
-# Local agent/tooling workspace files (never committed)
-.agents/skills/
-.omp/
-.opencode/
-.playwright-mcp/
-__pycache__/
-
-# Local quality-benchmark corpus and results (developer-local, not for commit)
+# Developer-only ASR quality corpus, transcripts, hypotheses, and reports
 tools/quality_benchmark/local/
+tools/quality_benchmark/__pycache__/

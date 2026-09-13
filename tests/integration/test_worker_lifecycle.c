@@ -5,6 +5,9 @@
 #include <string.h>
 #define _XOPEN_SOURCE 500
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "vw_ipc_transport.h"
 #include "vw_protocol_codec.h"
@@ -45,7 +48,8 @@ int main(void) {
   memset(&config, 0, sizeof(config));
 #ifdef _WIN32
   // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
-  strncpy(config.pipe_name, "\\\\.\\pipe\\test_lifecycle_socket", sizeof(config.pipe_name) - 1);
+  snprintf(config.pipe_name, sizeof(config.pipe_name), "\\\\.\\pipe\\test_lifecycle_socket-%lu",
+           (unsigned long)GetCurrentProcessId());
 #else
   snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-lifecycle-%ld.sock", (long)getpid());
 #endif
@@ -82,7 +86,7 @@ int main(void) {
                               .sample_format = 1,
                               .model_id = "ggml-tiny.en.bin",
                               .language = "en",
-                              .source_kind = VW_SOURCE_LOCAL_FILE};
+                              .source_kind = VW_SOURCE_LIVE_AUDIO};
 
   uint8_t payload_buf[1024];
   size_t written = 0;
@@ -189,7 +193,8 @@ int main(void) {
     vw_worker_config_t with_model = config;
     memset(with_model.pipe_name, 0, sizeof(with_model.pipe_name));
 #ifdef _WIN32
-    strncpy(with_model.pipe_name, "\\\\.\\pipe\\test_lifecycle_model_socket", sizeof(with_model.pipe_name) - 1);
+    snprintf(with_model.pipe_name, sizeof(with_model.pipe_name), "\\\\.\\pipe\\test_lifecycle_model_socket-%lu",
+             (unsigned long)GetCurrentProcessId());
 #else
     snprintf(with_model.pipe_name, sizeof(with_model.pipe_name), "/tmp/vlc-whisper-test-lifecycle-model-%ld.sock",
              (long)getpid());

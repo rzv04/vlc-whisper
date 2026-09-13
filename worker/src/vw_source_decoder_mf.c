@@ -18,6 +18,7 @@ struct vw_source_decoder {
   IMFSourceReader* p_reader;
   int64_t duration_us;
   int64_t current_pts_us;
+  int64_t seek_target_us;
   bool eof_reached;
   int16_t* leftover_buffer;
   size_t leftover_capacity;
@@ -27,8 +28,8 @@ struct vw_source_decoder {
 
 // URL decode helper to convert file URI (e.g. file:///C:/video%20file.mp4) to native Windows path.
 // Preserves UNC authority: file://server/share/video.mp4 -> \\server\share\video.mp4
-static void vw_source_decoder_normalize_win32_path(const char* url, char* out_path, size_t max_out) {
-  if (!url || !out_path || max_out == 0) return;
+static bool vw_source_decoder_normalize_win32_path(const char* url, char* out_path, size_t max_out) {
+  if (!url || !out_path || max_out == 0) return false;
   const char* src = url;
   bool is_unc = false;
 
@@ -54,7 +55,7 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
   if (is_unc) {
     if (max_out < 3) {
       out_path[0] = '\0';
-      return;
+      return false;
     }
     out_path[0] = '\\';
     out_path[1] = '\\';
@@ -66,6 +67,7 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
       char* end = NULL;
       long val = strtol(hex, &end, 16);
       if (end == hex + 2) {
+        if (val == 0) return false;
         out_path[dst_idx++] = (char)val;
         src += 3;
         continue;
@@ -79,6 +81,7 @@ static void vw_source_decoder_normalize_win32_path(const char* url, char* out_pa
     src++;
   }
   out_path[dst_idx] = '\0';
+  return *src == '\0';
 }
 
 vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_info_t* info) {
@@ -99,7 +102,10 @@ vw_source_decoder_t* vw_source_decoder_open(const char* url, vw_source_decoder_i
   bool need_com_uninit_on_fail = com_initialized;
 
   char clean_path[4096];
-  vw_source_decoder_normalize_win32_path(url, clean_path, sizeof(clean_path));
+  if (!vw_source_decoder_normalize_win32_path(url, clean_path, sizeof(clean_path))) {
+    if (need_com_uninit_on_fail) CoUninitialize();
+    return NULL;
+  }
 
   int wlen = MultiByteToWideChar(CP_UTF8, 0, clean_path, -1, NULL, 0);
   if (wlen <= 0) {
@@ -200,6 +206,7 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
 
   if (SUCCEEDED(hr)) {
     decoder->current_pts_us = target_pts_us;
+    decoder->seek_target_us = target_pts_us;
     decoder->eof_reached = false;
     decoder->leftover_count = 0;
     return true;
@@ -207,9 +214,13 @@ bool vw_source_decoder_seek(vw_source_decoder_t* decoder, int64_t target_pts_us)
   return false;
 }
 
-size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                    int64_t* out_pts_us) {
-  if (!decoder || !decoder->p_reader || !out_pcm || max_samples == 0) return 0;
+vw_source_decoder_read_status_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                             size_t max_samples, size_t* out_sample_count,
+                                                             int64_t* out_pts_us) {
+  if (out_sample_count) *out_sample_count = 0;
+  if (!decoder || !decoder->p_reader || !out_pcm || max_samples == 0 || !out_sample_count)
+    return VW_SOURCE_DECODER_READ_ERROR;
+  if (decoder->eof_reached) return VW_SOURCE_DECODER_READ_EOF;
 
   size_t total_samples = 0;
 
@@ -227,7 +238,8 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       memmove(decoder->leftover_buffer, decoder->leftover_buffer + to_copy,
               (decoder->leftover_count - to_copy) * sizeof(int16_t));
       decoder->leftover_count -= to_copy;
-      return total_samples;
+      *out_sample_count = total_samples;
+      return VW_SOURCE_DECODER_READ_OK;
     } else {
       decoder->leftover_count = 0;
     }
@@ -242,14 +254,20 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
     HRESULT hr = decoder->p_reader->lpVtbl->ReadSample(decoder->p_reader, (DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0,
                                                        &dwStreamIndex, &dwStreamFlags, &llTimestamp, &pSample);
 
-    if (FAILED(hr) || (dwStreamFlags & MF_SOURCE_READERF_ENDOFSTREAM)) {
+    if (FAILED(hr)) {
+      if (pSample) pSample->lpVtbl->Release(pSample);
+      return VW_SOURCE_DECODER_READ_ERROR;
+    }
+
+    if (dwStreamFlags & MF_SOURCE_READERF_ENDOFSTREAM) {
       decoder->eof_reached = true;
       if (pSample) pSample->lpVtbl->Release(pSample);
       break;
     }
 
     if (!pSample) {
-      continue;
+      *out_sample_count = total_samples;
+      return total_samples > 0 ? VW_SOURCE_DECODER_READ_OK : VW_SOURCE_DECODER_READ_AGAIN;
     }
 
     IMFMediaBuffer* pBuffer = NULL;
@@ -258,64 +276,83 @@ size_t vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_p
       BYTE* pAudioData = NULL;
       DWORD cbCurrentLength = 0;
       hr = pBuffer->lpVtbl->Lock(pBuffer, &pAudioData, NULL, &cbCurrentLength);
-      if (SUCCEEDED(hr) && pAudioData && cbCurrentLength > 0) {
-        size_t samples_in_sample = cbCurrentLength / sizeof(int16_t);
-        const int16_t* in_samples = (const int16_t*)pAudioData;
+      if (SUCCEEDED(hr)) {
+        if (pAudioData && cbCurrentLength > 0) {
+          size_t samples_in_sample = cbCurrentLength / sizeof(int16_t);
+          const int16_t* in_samples = (const int16_t*)pAudioData;
 
-        if (out_pts_us && total_samples == 0) {
-          *out_pts_us = (int64_t)(llTimestamp / 10);
-          decoder->current_pts_us = *out_pts_us;
-        }
-
-        size_t needed = max_samples - total_samples;
-        if (samples_in_sample <= needed) {
-          memcpy(out_pcm + total_samples, in_samples, samples_in_sample * sizeof(int16_t));
-          total_samples += samples_in_sample;
-          decoder->current_pts_us += (int64_t)((samples_in_sample * 1000000ULL) / 16000ULL);
-        } else {
-          memcpy(out_pcm + total_samples, in_samples, needed * sizeof(int16_t));
-          total_samples += needed;
-          decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
-
-          size_t remainder = samples_in_sample - needed;
-          if (remainder > decoder->leftover_capacity) {
-            size_t new_capacity = decoder->leftover_capacity > 0 ? decoder->leftover_capacity : 4096;
-            while (new_capacity < remainder) {
-              if (new_capacity > SIZE_MAX / 2) {
-                new_capacity = remainder;
-                break;
-              }
-              new_capacity *= 2;
-            }
-            if (new_capacity > SIZE_MAX / sizeof(int16_t)) {
-              pBuffer->lpVtbl->Unlock(pBuffer);
-              pBuffer->lpVtbl->Release(pBuffer);
-              pSample->lpVtbl->Release(pSample);
-              decoder->eof_reached = true;
-              break;
-            }
-            int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
-            if (!new_buffer) {
-              pBuffer->lpVtbl->Unlock(pBuffer);
-              pBuffer->lpVtbl->Release(pBuffer);
-              pSample->lpVtbl->Release(pSample);
-              decoder->eof_reached = true;
-              break;
-            }
-            decoder->leftover_buffer = new_buffer;
-            decoder->leftover_capacity = new_capacity;
+          int64_t sample_pts_us = (int64_t)(llTimestamp / 10);
+          if (sample_pts_us < decoder->seek_target_us) {
+            uint64_t delta = (uint64_t)decoder->seek_target_us - (uint64_t)sample_pts_us;
+            uint64_t skip = delta / 125U * 2U + ((delta % 125U) * 2U + 124U) / 125U;
+            size_t trimmed = skip < samples_in_sample ? (size_t)skip : samples_in_sample;
+            in_samples += trimmed;
+            samples_in_sample -= trimmed;
+            sample_pts_us += (int64_t)(trimmed * 125U / 2U);
           }
-          memcpy(decoder->leftover_buffer, in_samples + needed, remainder * sizeof(int16_t));
-          decoder->leftover_count = remainder;
+
+          if (total_samples == 0 && samples_in_sample > 0) {
+            if (out_pts_us) *out_pts_us = sample_pts_us;
+            decoder->current_pts_us = sample_pts_us;
+          }
+
+          size_t needed = max_samples - total_samples;
+          if (samples_in_sample <= needed) {
+            memcpy(out_pcm + total_samples, in_samples, samples_in_sample * sizeof(int16_t));
+            total_samples += samples_in_sample;
+            decoder->current_pts_us += (int64_t)((samples_in_sample * 1000000ULL) / 16000ULL);
+          } else {
+            memcpy(out_pcm + total_samples, in_samples, needed * sizeof(int16_t));
+            total_samples += needed;
+            decoder->current_pts_us += (int64_t)((needed * 1000000ULL) / 16000ULL);
+
+            size_t remainder = samples_in_sample - needed;
+            if (remainder > decoder->leftover_capacity) {
+              size_t new_capacity = decoder->leftover_capacity > 0 ? decoder->leftover_capacity : 4096;
+              while (new_capacity < remainder) {
+                if (new_capacity > SIZE_MAX / 2) {
+                  new_capacity = remainder;
+                  break;
+                }
+                new_capacity *= 2;
+              }
+              if (new_capacity > SIZE_MAX / sizeof(int16_t)) {
+                pBuffer->lpVtbl->Unlock(pBuffer);
+                pBuffer->lpVtbl->Release(pBuffer);
+                pSample->lpVtbl->Release(pSample);
+                return VW_SOURCE_DECODER_READ_ERROR;
+              }
+              int16_t* new_buffer = (int16_t*)realloc(decoder->leftover_buffer, new_capacity * sizeof(int16_t));
+              if (!new_buffer) {
+                pBuffer->lpVtbl->Unlock(pBuffer);
+                pBuffer->lpVtbl->Release(pBuffer);
+                pSample->lpVtbl->Release(pSample);
+                return VW_SOURCE_DECODER_READ_ERROR;
+              }
+              decoder->leftover_buffer = new_buffer;
+              decoder->leftover_capacity = new_capacity;
+            }
+            memcpy(decoder->leftover_buffer, in_samples + needed, remainder * sizeof(int16_t));
+            decoder->leftover_count = remainder;
+          }
         }
         pBuffer->lpVtbl->Unlock(pBuffer);
+      } else {
+        pBuffer->lpVtbl->Release(pBuffer);
+        pSample->lpVtbl->Release(pSample);
+        return VW_SOURCE_DECODER_READ_ERROR;
       }
       pBuffer->lpVtbl->Release(pBuffer);
+    } else {
+      pSample->lpVtbl->Release(pSample);
+      return VW_SOURCE_DECODER_READ_ERROR;
     }
     pSample->lpVtbl->Release(pSample);
   }
 
-  return total_samples;
+  *out_sample_count = total_samples;
+  if (total_samples > 0) return VW_SOURCE_DECODER_READ_OK;
+  return decoder->eof_reached ? VW_SOURCE_DECODER_READ_EOF : VW_SOURCE_DECODER_READ_AGAIN;
 }
 
 int64_t vw_source_decoder_get_duration_us(const vw_source_decoder_t* decoder) {

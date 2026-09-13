@@ -5,6 +5,9 @@
 #include <string.h>
 #define _XOPEN_SOURCE 500
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "vw_ipc_transport.h"
 #include "vw_protocol_codec.h"
@@ -24,7 +27,8 @@ int main(void) {
   memset(&config, 0, sizeof(config));
 #ifdef _WIN32
   // Windows named pipes require the \\\\.\\pipe\\ prefix (Unix sockets take a bare path).
-  strncpy(config.pipe_name, "\\\\.\\pipe\\test_ipc_socket", sizeof(config.pipe_name) - 1);
+  snprintf(config.pipe_name, sizeof(config.pipe_name), "\\\\.\\pipe\\test_ipc_socket-%lu",
+           (unsigned long)GetCurrentProcessId());
 #else
   snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-ipc-%ld.sock", (long)getpid());
 #endif
@@ -50,7 +54,7 @@ int main(void) {
   start.sample_format = 1;
   strncpy(start.model_id, "ggml-tiny.en.bin", sizeof(start.model_id) - 1);
   strncpy(start.language, "en", sizeof(start.language) - 1);
-  start.source_kind = VW_SOURCE_LOCAL_FILE;
+  start.source_kind = VW_SOURCE_LIVE_AUDIO;
 
   uint8_t start_payload[256];
   size_t start_len = 0;

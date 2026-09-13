@@ -273,6 +273,12 @@ int main(void) {
   EXPECT(vw_worker_queue_push(q2, VW_MSG_AUDIO_PCM, g2, l5));
   vw_worker_queue_destroy(q2);  // frees g1, g2
 
+  // Default capacity constant sanity check
+  EXPECT(VW_WORKER_FRAME_QUEUE_CAPACITY == 512U);
+  vw_worker_queue_t* q_default = vw_worker_queue_create(VW_WORKER_FRAME_QUEUE_CAPACITY);
+  EXPECT(q_default != NULL);
+  vw_worker_queue_destroy(q_default);
+
   printf("test_worker_queue PASSED\n");
   return 0;
 }
