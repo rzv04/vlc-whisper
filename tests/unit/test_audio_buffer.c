@@ -91,6 +91,17 @@ int main(void) {
   EXPECT(resampled_pts == 100000);
   vw_audio_buffer_free(resampled_buf);
 
+  // Negative preroll is a valid timestamp, not an uninitialized marker.
+  EXPECT(vw_audio_buffer_append_s16le(buf, pcm, 100, -12500));
+  EXPECT(vw_audio_buffer_append_s16le(buf, pcm, 100, -6250));
+  EXPECT(vw_audio_buffer_get_samples(buf, out_samples, 100, &out_pts) == 100);
+  EXPECT(out_pts == -12500);
+  EXPECT(vw_audio_buffer_get_count(buf) == 200);
+  EXPECT(vw_audio_buffer_append_s16le(buf, pcm, 100, 1000000));
+  EXPECT(vw_audio_buffer_get_count(buf) == 100);
+  EXPECT(vw_audio_buffer_get_samples(buf, out_samples, 100, &out_pts) == 100);
+  EXPECT(out_pts == 1000000);
+
   vw_audio_buffer_free(buf);
   printf("test_audio_buffer passed\n");
   return 0;

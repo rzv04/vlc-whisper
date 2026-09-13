@@ -74,5 +74,17 @@ int main(void) {
   EXPECT(report_contains(benchmark.report_path, "translation_duration_us=1250000"));
   EXPECT(report_contains(benchmark.report_path, "translation_latency_samples=4"));
   remove(benchmark.report_path);
+
+  vw_benchmark_t epoch = {.active = true};
+  vw_benchmark_record_audio(&epoch, 10000000, 1000000, 2000000);
+  vw_benchmark_reset_live_clock(&epoch);
+  EXPECT(!epoch.live_clock_valid);
+  EXPECT(epoch.audio_chunks_sent == 1);
+  vw_benchmark_record_audio(&epoch, 100000000, 1000000, 3000000);
+  segment.end_pts_us = 101000000;
+  segment.start_pts_us = 100000000;
+  vw_benchmark_record_caption_received(&epoch, &segment, 4200000, false);
+  EXPECT(epoch.latency_samples[0] == 200000);
+  EXPECT(epoch.audio_chunks_sent == 2);
   return 0;
 }

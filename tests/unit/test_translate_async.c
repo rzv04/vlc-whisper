@@ -86,6 +86,7 @@ static void test_hard_cap_inflight_fifo_ordering(void) {
   vw_translate_set_test_http_hook(async_http_hook, NULL);
   vw_translate_async_t* async = vw_translate_async_create();
   assert(async != NULL);
+  assert(!vw_translate_async_has_pending(async));
 
   atomic_store(&g_first_request_blocked, true);
   atomic_store(&g_first_request_entered, false);
@@ -97,6 +98,7 @@ static void test_hard_cap_inflight_fifo_ordering(void) {
   snprintf(texts[0], sizeof(texts[0]), "Phrase 1");
   vw_caption_segment_t first = make_segment(1, texts[0]);
   assert(vw_translate_async_submit(async, &first, "en", "ro"));
+  assert(vw_translate_async_has_pending(async));
   for (int retry = 0; retry < 100 && !atomic_load(&g_first_request_entered); retry++) sleep_ms(5);
   assert(atomic_load(&g_first_request_entered));
 

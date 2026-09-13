@@ -2,8 +2,37 @@
 
 #include "../../plugin/src/vw_queue.c"
 #include "vw_caption_presenter.h"
+#include "vw_platform.h"
 #include "vw_test.h"
 #include "vw_test_worker_stubs.h"
+#include "vw_translate.h"
+#include "vw_whisper_engine.h"
+
+bool __real_vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm, size_t count);
+bool __wrap_vw_whisper_engine_transcribe_pcm(vw_whisper_engine_t* engine, const float* pcm, size_t count) {
+  vw_platform_sleep_ms(3500);
+  return __real_vw_whisper_engine_transcribe_pcm(engine, pcm, count);
+}
+
+static void* vw_finished_sender(void* context) { return context; }
+
+static bool vw_slow_translation = false;
+
+static bool vw_tail_http(const char* host, const char* path, const char* body, const char* content_type, char* output,
+                         size_t capacity, uint32_t timeout_ms, void* context) {
+  (void)host;
+  (void)body;
+  (void)content_type;
+  (void)timeout_ms;
+  (void)context;
+  if (vw_slow_translation) {
+    vw_platform_sleep_ms(900);
+    return false;
+  }
+  if (strstr(path, "batchexecute")) return false;
+  snprintf(output, capacity, "[[[\"Salut\",\"stub speech\",null,null,1]],null,\"en\"]");
+  return true;
+}
 
 typedef struct vlc_object_t vlc_object_t;
 
@@ -36,6 +65,9 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
   (void)media_timeline;
   if (!presenter || !presenter->p_filter_ctx || !segment || !segment->text_utf8) return false;
   g_presenter_show_calls++;
+  vw_test_check_true("media-end caption preserves translation outcome",
+                     vw_slow_translation ? segment->translated_text_bytes == 0 : segment->translated_text_bytes > 0);
+  vw_test_check_true("media-end caption records translation attempt", segment->translation_attempted);
   presenter->has_pending = true;
   presenter->pending_segment = *segment;
   return true;
@@ -54,17 +86,22 @@ bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input
 #include "vw_plugin_log_scope_override.h"
 #include "vw_test_worker_harness.h"
 
-int main(void) {
+int main(int argc, char** argv) {
+  vw_slow_translation = argc > 1 && strcmp(argv[1], "timeout") == 0;
   vw_test_worker_stubs_reset();
+  vw_translate_set_test_http_hook(vw_tail_http, NULL);
   g_presenter_clear_calls = 0;
   g_presenter_show_calls = 0;
   g_presenter_flush_calls = 0;
 
   vw_test_worker_fixture_t fixture;
+  vw_benchmark_t benchmark = {.active = true};
   bool started = vw_test_worker_fixture_start(&fixture, "live-tail");
   vw_test_check_true("stub worker starts", started);
   if (started) {
     vw_test_check_true("live session starts", vw_worker_client_start_session(fixture.client, 0, "tiny", NULL));
+    vw_test_check_true("tail translation enabled",
+                       vw_worker_client_send_translate_ctrl(fixture.client, true, "en", "ro", 0));
 
     vw_spsc_queue_t* close_queue = vw_spsc_queue_create(4);
     vw_test_check_true("close-path SPSC queue is created", close_queue != NULL);
@@ -83,8 +120,9 @@ int main(void) {
       vw_test_check_true("queued callback audio has not reached worker before close drain",
                          vw_test_whisper_transcribe_calls() == 0);
       uint64_t close_chunks_sent = 0;
-      vw_test_check_true("close path drains queued PCM through worker client",
-                         vw_plugin_drain_close_audio(fixture.client, close_queue, &close_chunks_sent, NULL, NULL));
+      vw_thread_t sender;
+      vw_test_check_true("sender fixture starts", vw_platform_thread_create(&sender, vw_finished_sender, NULL));
+      vw_close_join(sender, fixture.client, close_queue, &close_chunks_sent, &benchmark);
       vw_test_check_true("both queued close-path chunks are delivered", close_chunks_sent == 2);
       vw_audio_chunk_t leftover;
       vw_test_check_true("close-path SPSC queue is empty before MEDIA_END",
@@ -111,6 +149,13 @@ int main(void) {
     vw_worker_client_stop_session(fixture.client, 0);
     vw_test_check_true("normal close path flushes held-back residual speech", vw_test_whisper_transcribe_calls() > 0);
     vw_test_check_true("tail caption crosses worker-client-presenter seam", g_presenter_show_calls > 0);
+    vw_test_check_true("close frames included in benchmark", benchmark.worker_frames_received > 0);
+    vw_test_check_true("close caption included in benchmark", benchmark.captions_received > 0);
+    vw_test_check_true("tail inference included in benchmark", benchmark.inference_us > 0);
+    vw_test_check_true("close presentation included in benchmark", benchmark.captions_sent > 0);
+    vw_test_check_true("close translation included in benchmark", vw_slow_translation
+                                                                      ? benchmark.translation_requests_sent > 0
+                                                                      : benchmark.translation_success_count > 0);
     vw_test_check_true("tail caption is flushed for presentation before disconnect", g_presenter_flush_calls > 0);
     vw_test_check_true("presenter context is released after final tail delivery", presenter.p_filter_ctx == NULL);
 
@@ -121,5 +166,6 @@ int main(void) {
   if (fixture.thread_started) {
     vw_test_check_true("stub worker shuts down cleanly", vw_test_worker_fixture_shutdown(&fixture) == 0);
   }
+  vw_translate_set_test_http_hook(NULL, NULL);
   return vw_test_finish("test_live_media_end_flushes_tail");
 }

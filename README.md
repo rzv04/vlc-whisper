@@ -1,5 +1,13 @@
 # VLC-Whisper
 
+Milestone 5 reliability notes: POSIX `worker-path` must be an absolute executable path; bare names are not searched
+through `PATH`. Opt-in worker diagnostics use exclusive per-process temporary files (`vlc-whisper-worker-<pid>.log`;
+Windows inherited stdout/stderr also includes a tick suffix). Existing default files are never followed or appended
+to; an explicit `--log-file` retains overwrite semantics. No transcript or PCM logging is added. Normal media-end
+close waits for final inference/translation and accounts its captions; a stuck worker can delay teardown for up to
+the 120-second receive watchdog before process cleanup. See [architecture](docs/architecture.md) and
+[P2 reconciliation](docs/issues.md) for scope and platform-verification limits.
+
 <p align="center">
   <img src="./assets/vlc-whisper-logo-animation.gif" width="700" alt="VLC-Whisper">
 </p>

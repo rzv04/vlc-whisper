@@ -137,6 +137,22 @@ static void test_default_dir(void) {
   // Just ensure it doesn't overflow: if buffer too small, function may still succeed
   // or fail; we only check it doesn't crash.
   (void)vw_model_download_default_dir(tiny, sizeof(tiny));
+
+#ifndef _WIN32
+  char oversized_xdg[4096];
+  memset(oversized_xdg, 'x', sizeof(oversized_xdg) - 1U);
+  oversized_xdg[sizeof(oversized_xdg) - 1U] = '\0';
+  const char* old_xdg = getenv("XDG_DATA_HOME");
+  char* old_xdg_copy = old_xdg ? strdup(old_xdg) : NULL;
+  setenv("XDG_DATA_HOME", oversized_xdg, 1);
+  EXPECT(vw_model_download_default_dir(out, sizeof(out)) == false);
+  if (old_xdg_copy) {
+    setenv("XDG_DATA_HOME", old_xdg_copy, 1);
+    free(old_xdg_copy);
+  } else {
+    unsetenv("XDG_DATA_HOME");
+  }
+#endif
 }
 
 static void test_local_file_download(void) {

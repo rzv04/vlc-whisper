@@ -13,8 +13,10 @@ int main(void) {
     vw_worker_client_pause_session(fixture.client);
     vw_platform_sleep_ms(50);
 
+    snprintf(fixture.client->language, sizeof(fixture.client->language), "%s", "ro");
     vw_test_check_true("fresh session epoch starts without requiring RESUME",
                        vw_worker_client_start_session(fixture.client, 2000000, "tiny", NULL));
+    vw_test_check_true("START applies the requested session language", strcmp(vw_test_whisper_language(), "ro") == 0);
     vw_test_check_true("fresh session accepts enough audio to cross startup threshold",
                        vw_test_send_audio_chunks(fixture.client, 4, 2000000));
     vw_platform_sleep_ms(150);

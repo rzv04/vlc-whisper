@@ -45,6 +45,7 @@ static int g_flushed_channels[64];
 static int g_operation_sequence = 0;
 static int g_last_put_sequence = 0;
 static int g_last_flush_sequence = 0;
+static vout_thread_t* vw_last_flushed_vout = NULL;
 
 vlc_tick_t mdate(void) { return (vlc_tick_t)g_mock_mdate; }
 
@@ -77,7 +78,7 @@ void vout_PutSubpicture(vout_thread_t* vout, subpicture_t* subpic) {
 }
 
 void vout_FlushSubpictureChannel(vout_thread_t* vout, int channel) {
-  (void)vout;
+  vw_last_flushed_vout = vout;
   g_last_flush_sequence = ++g_operation_sequence;
   if (g_flush_calls < (int)(sizeof(g_flushed_channels) / sizeof(g_flushed_channels[0]))) {
     g_flushed_channels[g_flush_calls] = channel;
@@ -313,6 +314,10 @@ int main(void) {
   // Simulate vout recreation: different vout pointer
   filter_t recreated_filter = {.obj.object_type = "vout"};
   spu_presenter.p_filter_ctx = &recreated_filter;
+  g_flush_calls = 0;
+  vw_caption_presenter_blank(&spu_presenter);
+  assert(g_flush_calls == 1);
+  assert(vw_last_flushed_vout == (vout_thread_t*)&fake_filter);
   g_mock_register_channel_return = 43;
   // Test 11: Look-ahead future timestamp SPU scheduling (1.0x rate)
   vw_caption_segment_t future_seg = {.start_pts_us = 15000000LL,  // 15s
@@ -327,7 +332,10 @@ int main(void) {
   assert(vw_caption_presenter_show_segment(&spu_presenter, &future_seg, 10000000LL, true));
   assert(vw_caption_presenter_flush(&spu_presenter, 10000000LL, true));
   assert(g_put_subpicture_calls == 1);
-  assert(g_flush_calls == 0);                              // Source look-ahead cues must remain queued on the channel.
+  assert(g_flush_calls == 1);  // Retire the old vout's channel without flushing new source cues.
+  assert(vw_last_flushed_vout == (vout_thread_t*)&fake_filter);
+  assert(g_flush_channel == 42);
+  assert(g_last_flush_sequence < g_last_put_sequence);
   assert(g_last_subpic_start == 100000000LL + 5000000LL);  // mdate (100s) + 5s lead = 105s
   assert(g_last_subpic_stop == 100000000LL + 7000000LL);   // mdate (100s) + 7s lead = 107s
 

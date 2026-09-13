@@ -325,6 +325,9 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
   // Register or re-register SPU channel whenever vout instance changes (e.g. video resize/recreate) or is unregistered
   if (!presenter->spu_channel_registered || presenter->p_held_vout != (void*)vout || presenter->spu_channel_id < 0) {
     if (presenter->p_held_vout) {
+      if (presenter->spu_channel_id >= 0) {
+        vout_FlushSubpictureChannel((vout_thread_t*)presenter->p_held_vout, presenter->spu_channel_id);
+      }
       vlc_object_release(VLC_OBJECT((vout_thread_t*)presenter->p_held_vout));
       presenter->p_held_vout = NULL;
     }
@@ -481,6 +484,10 @@ void vw_caption_presenter_blank(vw_caption_presenter_t* presenter) {
     presenter->has_pending = false;
   }
   if (!presenter || !presenter->p_filter_ctx) {
+    return;
+  }
+  if (presenter->spu_channel_registered && presenter->spu_channel_id >= 0 && presenter->p_held_vout) {
+    vout_FlushSubpictureChannel((vout_thread_t*)presenter->p_held_vout, presenter->spu_channel_id);
     return;
   }
   filter_t* p_filter = (filter_t*)presenter->p_filter_ctx;

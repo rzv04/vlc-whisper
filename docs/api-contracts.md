@@ -10,6 +10,7 @@ VLC-Whisper has no public HTTP/cloud API. This document covers the local version
 - Normal read/write timeout: 3 s.
 - Receive result: `>0` bytes, `VW_IPC_RECV_TIMEOUT (-1)` = retryable/no data, `VW_IPC_RECV_FATAL (-2)` = EOF/fatal/disconnected; callers must not collapse timeout into EOF.
 - No TCP fallback.
+- Record fragmentation: one logical send can contain several transport records of at most 64 KiB, under one 3-second send deadline. Frame consumers assemble existing headers and declared payloads without changing the 1 MiB wire limit. Win32 `ERROR_MORE_DATA` preserves returned bytes; POSIX `MSG_TRUNC` is fatal, never timeout. Signal-interrupted POSIX accepts retry within the original 10-second deadline. Same-user peer credentials are checked on Linux and supported BSD/macOS platforms in addition to the secret-token handshake.
 
 ## Frame envelope
 
@@ -39,7 +40,7 @@ Most session messages carry `session_id[16]`; `HELLO` is pre-session. A fresh pl
 
 | Message | Direction | Core contract |
 | --- | --- | --- |
-| `HELLO` | plugin→worker | Protocol range + 32-byte token + client version. Token checked in constant time. |
+| `HELLO` | plugin→worker | Protocol range + 32-byte token + client version. Token checked in constant time. The supported major must lie inside the offered inclusive range; otherwise the worker sends `E_PROTOCOL_VERSION` and exits nonzero. |
 | `HELLO_ACK` | worker→plugin | Negotiated major/minor, capability flags, worker version. Optional features are capability/minor gated. |
 | `START` | plugin→worker | Session, timeline origin, exact 16 kHz mono S16LE format, model/language, source kind, optional bounded source URL. Semantic validation is mandatory. |
 | `STARTED` | worker→plugin | v1.6 correlates `session_id` and reports `source_active`; legacy smaller payload accepted only for negotiated older minor. |
@@ -48,7 +49,7 @@ Most session messages carry `session_id[16]`; `HELLO` is pre-session. A fresh pl
 | `SEGMENT` | worker→plugin | Session, segment ID, start/end PTS, final flag, bounded UTF-8 source text, optional translated text/latency/tier. Plugin renders only current-session valid final cues. |
 | `PAUSE` / `RESUME` | plugin→worker | Session-scoped lifecycle controls. Pause clears/invalidate in-flight partial work as defined by worker lifecycle. |
 | `STOP` | plugin→worker | Session-scoped stop; reasons include user stop, seek discontinuity, media end. Current-session STOP is idempotent. |
-| `SHUTDOWN` | plugin→worker | Header-only process shutdown. Worker closes transport and exits cleanly. |
+| `SHUTDOWN` | plugin→worker | Header-only process shutdown. Worker closes transport and exits cleanly with code 0. `STOP(MEDIA_END)` and active live-session `SHUTDOWN` flush held-back PCM through normal final-caption translation before clearing session. Plugin close path waits for EOF with 120s hung-worker watchdog. |
 | `STATUS` | worker→plugin | Session state plus queue/inference/drop metrics and actual resolved backend. Metrics require authoritative producers, documented units/reset scope. |
 | `ERROR` | primarily worker→plugin | Session, code, recoverable flag, bounded redacted message. Nonrecoverable failure disables caption session/transport, never VLC playback. |
 | `MODEL_CTRL` | plugin→worker | Worker-scoped explicit download/abort command; zero session ID is allowed when caption START cannot proceed. |
@@ -59,7 +60,7 @@ Most session messages carry `session_id[16]`; `HELLO` is pre-session. A fresh pl
 
 ### START / source identity
 
-`sample_rate=16000`, `channels=1`, `sample_format=S16LE`. Model/language/source fields must be complete and terminated where fixed-size storage applies; oversized identities are rejected rather than truncated. Source-kind and URL presence must agree.
+`sample_rate=16000`, `channels=1`, `sample_format=S16LE`. Model/language/source fields must be complete and terminated where fixed-size storage applies; oversized identities are rejected rather than truncated. Source-kind and URL presence must agree. `START.language` is applied to the engine for each accepted session. Duplicate `START` for the same active session receives a recoverable `E_INTERNAL` reply without mutating that session. Client model IDs that do not fit the destination field, including its terminator, are rejected locally rather than truncated.
 
 ### Source seek
 
@@ -75,7 +76,7 @@ For source mode, the plugin client treats accepted seek as a **new caption epoch
 
 ### MODEL_CTRL / storage
 
-Downloads are worker-owned, user-initiated, single-flight, catalog-limited, SHA-256 verified, written to `.part`, then atomically renamed. Per-user model storage is used by default; configured/adjacent install paths participate in model/VAD discovery. Download failure must not activate unverified bytes.
+Downloads are worker-owned, user-initiated, single-flight, catalog-limited, SHA-256 verified, written to `.part`, then atomically renamed. Per-user model storage is used by default; configured/adjacent install paths participate in model/VAD discovery. Download failure must not activate unverified bytes. The client rejects a DOWNLOAD ID longer than 31 bytes before sending; it must not silently select a truncated ID.
 
 ## Error catalog
 

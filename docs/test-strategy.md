@@ -60,6 +60,15 @@ The P1 defect resolution suite adds regression coverage across:
 - `tests/unit/test_protocol_start_failure_paths.c` & `tests/unit/test_worker_config_failure_paths.c`: Reject-on-overflow boundary checks.
 - `tests/integration/test_queue_audio_timeline.c`, `test_decoder_again_never_becomes_eof.c`, `test_source_error_never_becomes_clean_eof.c`, `test_live_media_end_flushes_tail.c`, and `test_new_session_resets_all_session_state.c`: Seam tests for queue timeline gaps, decoder three-way state transitions, and media-end tail flushing.
 
+The P2 defect resolution suite adds regression coverage across:
+- `tests/integration/vw_test_decoder_boundaries.c`: Real FFmpeg fixture with link-time failure injection for path rejection (`vw_decoder_paths`), seek pre-roll (`vw_decoder_preroll`), and transactional resampler initialization (`vw_decoder_failure`).
+- `tests/integration/vw_test_worker_p2_contracts.c`: Model-free authenticated worker protocol/session contracts and fatal-exit checks (`test_worker_p2_contracts`).
+- `tests/integration/test_live_media_end_flushes_tail.c`: Slow inference, translated and fallback tail delivery, close-path accounting, and the plugin close adapter.
+- `tests/unit/vw_test_ipc_transport.c`: Large-frame round trips (960 kB), POSIX truncated records, signal-interrupted accept, and send deadlines.
+- `tests/unit/vw_test_translate_stack.c`: Offline translation on a constrained 128 KiB pthread stack.
+- `tests/unit/vw_test_vad_trailing_silence.c`: Deterministic Silero-result seam checking the raw speech endpoint silence cap (300 ms).
+- `tests/unit/test_worker_log_pruning.c`: Bounded retention and pruning of per-process default diagnostic logs.
+
 Fixtures must be legal, small, deterministic, and versioned when committed. Never commit user/proprietary media, personal transcripts, or production model binaries. Pin model hash and exact Whisper revision for model-sensitive regressions.
 
 The EN/RO benchmark is developer-only and headless; invalid corpus evidence is rejected, not scored. See `quality-benchmark.md`.

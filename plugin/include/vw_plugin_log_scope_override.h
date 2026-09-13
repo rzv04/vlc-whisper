@@ -20,6 +20,22 @@ void vlc_object_release(vlc_object_t* obj);
 static _Thread_local vw_caption_presenter_t* vw_plugin_teardown_presenter = NULL;
 static _Thread_local void* vw_plugin_teardown_filter_ctx = NULL;
 static _Thread_local bool vw_plugin_teardown_shutdown_sent = false;
+static _Thread_local vw_benchmark_t* vw_plugin_teardown_benchmark = NULL;
+static _Thread_local uint32_t* vw_plugin_teardown_frames = NULL;
+static _Thread_local uint32_t* vw_plugin_teardown_segments = NULL;
+static _Thread_local uint32_t* vw_plugin_teardown_status = NULL;
+static _Thread_local uint32_t* vw_plugin_teardown_errors = NULL;
+
+// Binds instance-owned close counters after sender shutdown so synchronous worker draining updates the same accounting
+// as normal reception without introducing concurrent writes.
+static inline void vw_plugin_bind_close_accounting(vw_benchmark_t* benchmark, uint32_t* frames, uint32_t* segments,
+                                                   uint32_t* status, uint32_t* errors) {
+  vw_plugin_teardown_benchmark = benchmark;
+  vw_plugin_teardown_frames = frames;
+  vw_plugin_teardown_segments = segments;
+  vw_plugin_teardown_status = status;
+  vw_plugin_teardown_errors = errors;
+}
 
 // Maps legacy anonymous sink removal to the current plugin instance while preserving explicit registrations. This keeps
 // multi-instance teardown order-independent without exposing freed VLC objects to later log callbacks.
@@ -29,6 +45,7 @@ static inline void vw_plugin_log_set_sink_scoped(vw_log_sink_fn sink, void* user
     vw_plugin_teardown_presenter = NULL;
     vw_plugin_teardown_filter_ctx = NULL;
     vw_plugin_teardown_shutdown_sent = false;
+    vw_plugin_bind_close_accounting(NULL, NULL, NULL, NULL, NULL);
   } else {
     vw_log_set_sink(sink, user_data);
   }
@@ -88,6 +105,7 @@ static inline void vw_plugin_record_close_audio(const vw_audio_chunk_t* chunk, v
 static inline void vw_close_join(vw_thread_t thread, vw_worker_client_t* client, vw_spsc_queue_t* queue,
                                  uint64_t* chunks_sent, vw_benchmark_t* benchmark) {
   vw_platform_thread_join(thread);
+  vw_plugin_teardown_benchmark = benchmark;
   if (!client || !queue || !client->session_active || vw_worker_client_is_source_active(client)) return;
   if (!vw_plugin_drain_close_audio(client, queue, chunks_sent, vw_plugin_record_close_audio, benchmark)) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_CLOSE_DRAIN", "failed to deliver final queued PCM before media-end stop");
@@ -106,21 +124,24 @@ static inline void vw_plugin_stop_session_scoped(vw_worker_client_t* client, uin
   vw_caption_presenter_t* presenter = vw_plugin_teardown_presenter;
   void* filter_ctx = vw_plugin_teardown_filter_ctx;
   bool received_tail = false;
+  bool source_active = vw_worker_client_is_source_active(client);
 
   vw_worker_client_stop_session(client, VW_CTRL_REASON_MEDIA_END);
   vw_worker_client_shutdown(client);
   vw_plugin_teardown_shutdown_sent = true;
 
   int64_t started_us = vw_platform_get_monotonic_time_us();
-  int64_t deadline_us = started_us >= 0 ? started_us + 3000000LL : -1;
-  for (unsigned int frames = 0; frames < 64U; frames++) {
+  // IPC EOF after ordered SHUTDOWN is the completion barrier. The watchdog is only a hung-worker safety bound,
+  // matching the existing quality runner's 120-second completion allowance for slow CPU/model inference.
+  int64_t deadline_us = started_us >= 0 ? started_us + 120000000LL : -1;
+  for (;;) {
     uint32_t timeout_us = 250000U;
     if (deadline_us >= 0) {
       int64_t now_us = vw_platform_get_monotonic_time_us();
       if (now_us < 0 || now_us >= deadline_us) break;
       int64_t remaining_us = deadline_us - now_us;
       if (remaining_us < (int64_t)timeout_us) timeout_us = (uint32_t)remaining_us;
-    } else if (frames > 0U) {
+    } else {
       break;
     }
 
@@ -128,14 +149,32 @@ static inline void vw_plugin_stop_session_scoped(vw_worker_client_t* client, uin
     int recv_status = vw_worker_client_receive_frame(client, timeout_us, &recv);
     if (recv_status == VW_IPC_RECV_FATAL) break;
     if (recv_status != VW_IPC_RECV_OK) continue;
+    if (vw_plugin_teardown_frames) (*vw_plugin_teardown_frames)++;
+    vw_benchmark_record_frame(vw_plugin_teardown_benchmark);
+    if (recv.type == VW_MSG_STATUS) {
+      if (vw_plugin_teardown_status) (*vw_plugin_teardown_status)++;
+      vw_benchmark_update_status(vw_plugin_teardown_benchmark, &recv.status);
+    } else if (recv.type == VW_MSG_ERROR) {
+      if (vw_plugin_teardown_errors) (*vw_plugin_teardown_errors)++;
+    }
     if (recv.type != VW_MSG_CAPTION_SEGMENT ||
         memcmp(recv.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0) {
       continue;
     }
 
+    if (vw_plugin_teardown_segments) (*vw_plugin_teardown_segments)++;
+    int64_t now_us = vw_platform_get_monotonic_time_us();
+    vw_benchmark_record_caption_received(vw_plugin_teardown_benchmark, &recv.segment, now_us, source_active);
+    if (recv.segment.translation_attempted) {
+      vw_benchmark_record_translation(vw_plugin_teardown_benchmark, recv.segment.translation_tier,
+                                      recv.segment.translation_latency_us, recv.segment.translated_text_bytes > 0);
+    }
     presenter->p_filter_ctx = filter_ctx;
     if (vw_caption_presenter_show_segment(presenter, &recv.segment, -1, false)) {
       received_tail = true;
+      vw_benchmark_record_caption_sent(vw_plugin_teardown_benchmark, now_us);
+    } else {
+      vw_benchmark_record_caption_filtered(vw_plugin_teardown_benchmark, false, false, true);
     }
   }
 
@@ -147,6 +186,7 @@ static inline void vw_plugin_stop_session_scoped(vw_worker_client_t* client, uin
 
   vw_plugin_teardown_presenter = NULL;
   vw_plugin_teardown_filter_ctx = NULL;
+  vw_plugin_bind_close_accounting(NULL, NULL, NULL, NULL, NULL);
 }
 
 // Suppresses the close path's duplicate SHUTDOWN after media-end draining while preserving ordinary shutdown behavior
