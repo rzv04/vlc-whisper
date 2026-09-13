@@ -256,16 +256,10 @@ static void vw_model_download_release_lock(vw_model_download_t* dl) {
     close(dl->lock_fd);
     dl->lock_fd = -1;
   }
-  if (dl->lock_path[0]) {
-    unlink(dl->lock_path);
-  }
 #else
   if (dl->lock_handle != INVALID_HANDLE_VALUE) {
     CloseHandle(dl->lock_handle);
     dl->lock_handle = INVALID_HANDLE_VALUE;
-  }
-  if (dl->lock_path[0]) {
-    vw_unlink_wide_utf8(dl->lock_path);
   }
 #endif
 }

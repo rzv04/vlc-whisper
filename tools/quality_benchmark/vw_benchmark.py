@@ -10,6 +10,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 import wave
 from collections import defaultdict
@@ -143,12 +144,23 @@ def load_manifest(manifest_path: Path | str) -> dict[str, Any]:
 def save_report_atomically(report_path: Path, content: str) -> None:
     """Atomically write report content to destination path via temp file and rename."""
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = report_path.with_suffix(".tmp")
+    tmp_path: Path | None = None
     try:
-        tmp_path.write_text(content, encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=report_path.parent,
+            prefix=f"{report_path.name}.",
+            suffix=".tmp",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
         os.replace(tmp_path, report_path)
     except Exception as exc:
-        if tmp_path.exists():
+        if tmp_path is not None and tmp_path.exists():
             try:
                 tmp_path.unlink()
             except OSError:

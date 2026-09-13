@@ -68,10 +68,6 @@ bool vw_benchmark_begin(vw_benchmark_t* benchmark, const char* model_id, const c
 // for latency calculations outside the realtime callback.
 void vw_benchmark_record_audio(vw_benchmark_t* benchmark, int64_t start_pts_us, int64_t duration_us, int64_t now_us);
 
-// Records cumulative processed audio samples from audio capture (16kHz mono), ensuring RTF calculation
-// uses actual audio duration instead of sparse caption spans.
-void vw_benchmark_record_processed_samples(vw_benchmark_t* benchmark, uint64_t total_samples);
-
 // Invalidates only the live timestamp mapping at an epoch transition, retaining accumulated metrics until the next
 // successfully sent audio chunk establishes a fresh anchor.
 void vw_benchmark_reset_live_clock(vw_benchmark_t* benchmark);

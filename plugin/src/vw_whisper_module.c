@@ -1483,7 +1483,6 @@ static void* vw_plugin_sender_main(void* arg) {
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SENDER", "sent %llu chunks, received %u worker frames",
                    (unsigned long long)sys->chunks_sent, sys->frames_received);
     }
-    vw_benchmark_record_processed_samples(&sys->benchmark, sys->capture.total_samples_processed);
     vw_benchmark_flush_if_due(&sys->benchmark, vw_platform_get_monotonic_time_us());
   }
   return NULL;
@@ -1876,7 +1875,6 @@ static void vw_plugin_close(vlc_object_t* obj) {
       vw_spsc_queue_destroy(sys->queue);
     }
     if (sys->benchmark.active) {
-      vw_benchmark_record_processed_samples(&sys->benchmark, sys->capture.total_samples_processed);
       vw_benchmark_finalize(&sys->benchmark, vw_platform_get_monotonic_time_us());
       if (sys->benchmark.report_path[0]) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_BENCHMARK", "session report: %s", sys->benchmark.report_path);

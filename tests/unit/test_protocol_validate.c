@@ -70,14 +70,14 @@ int main(void) {
   // Validate CONTROL
   vw_msg_control_t control = {.reason = VW_CTRL_REASON_USER_PAUSE};
   EXPECT(vw_protocol_validate_payload(VW_MSG_PAUSE, &control));
-  control.reason = VW_CTRL_REASON_USER_RESUME;
+  control.reason = 2;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_PAUSE, &control));
   control.reason = 0;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_PAUSE, &control));
 
   control.reason = VW_CTRL_REASON_USER_RESUME;
   EXPECT(vw_protocol_validate_payload(VW_MSG_RESUME, &control));
-  control.reason = VW_CTRL_REASON_USER_PAUSE;
+  control.reason = 2;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_RESUME, &control));
   control.reason = 0;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_RESUME, &control));
@@ -88,7 +88,7 @@ int main(void) {
   EXPECT(vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
   control.reason = VW_CTRL_REASON_MEDIA_END;
   EXPECT(vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
-  control.reason = VW_CTRL_REASON_USER_PAUSE;
+  control.reason = 4;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
   control.reason = 0;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
@@ -100,7 +100,9 @@ int main(void) {
   EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
   err.error_code = VW_ERROR_INTERNAL;
   EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
-  err.error_code = VW_ERROR_INTERNAL + 1;
+  err.error_code = VW_ERROR_SOURCE_OPEN;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
+  err.error_code = VW_ERROR_MAX + 1;
   EXPECT(!vw_protocol_validate_payload(VW_MSG_ERROR, &err));
 
   // Validate SEGMENT

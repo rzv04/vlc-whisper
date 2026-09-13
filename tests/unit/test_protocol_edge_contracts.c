@@ -96,16 +96,14 @@ static void test_protocol_validate_control_reasons(void) {
   vw_msg_pause_t pause_msg = {.reason = VW_CTRL_REASON_USER_PAUSE};
   vw_test_check_true("valid pause reason accepted", vw_protocol_validate_payload(VW_MSG_PAUSE, &pause_msg));
 
-  pause_msg.reason = VW_CTRL_REASON_USER_RESUME;
-  vw_test_check_false("invalid pause reason (USER_RESUME) rejected",
-                      vw_protocol_validate_payload(VW_MSG_PAUSE, &pause_msg));
+  pause_msg.reason = 2;
+  vw_test_check_false("invalid pause reason (2) rejected", vw_protocol_validate_payload(VW_MSG_PAUSE, &pause_msg));
 
   vw_msg_resume_t resume_msg = {.reason = VW_CTRL_REASON_USER_RESUME};
   vw_test_check_true("valid resume reason accepted", vw_protocol_validate_payload(VW_MSG_RESUME, &resume_msg));
 
-  resume_msg.reason = VW_CTRL_REASON_USER_PAUSE;
-  vw_test_check_false("invalid resume reason (USER_PAUSE) rejected",
-                      vw_protocol_validate_payload(VW_MSG_RESUME, &resume_msg));
+  resume_msg.reason = 2;
+  vw_test_check_false("invalid resume reason (2) rejected", vw_protocol_validate_payload(VW_MSG_RESUME, &resume_msg));
 
   vw_msg_stop_t stop_msg = {.reason = VW_CTRL_REASON_USER_STOP};
   vw_test_check_true("valid stop reason USER_STOP accepted",
@@ -119,7 +117,7 @@ static void test_protocol_validate_control_reasons(void) {
   vw_test_check_true("valid stop reason MEDIA_END accepted",
                      vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &stop_msg));
 
-  stop_msg.reason = 999;
+  stop_msg.reason = 4;
   vw_test_check_false("arbitrary stop reason rejected", vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &stop_msg));
 
   vw_msg_error_t err_msg = {.error_code = VW_ERROR_NONE};
@@ -128,7 +126,10 @@ static void test_protocol_validate_control_reasons(void) {
   err_msg.error_code = VW_ERROR_INTERNAL;
   vw_test_check_true("valid internal error code accepted", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
 
-  err_msg.error_code = VW_ERROR_INTERNAL + 1;
+  err_msg.error_code = VW_ERROR_SOURCE_OPEN;
+  vw_test_check_true("valid source open error code accepted", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
+
+  err_msg.error_code = VW_ERROR_MAX + 1;
   vw_test_check_false("out-of-range error code rejected", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
 }
 

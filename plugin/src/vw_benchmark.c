@@ -302,14 +302,6 @@ void vw_benchmark_record_audio(vw_benchmark_t* benchmark, int64_t start_pts_us, 
   }
 }
 
-void vw_benchmark_record_processed_samples(vw_benchmark_t* benchmark, uint64_t total_samples) {
-  if (!benchmark || !benchmark->active) return;
-  uint64_t duration_us = (total_samples * 1000000ULL) / 16000ULL;
-  if (duration_us > benchmark->audio_duration_us) {
-    benchmark->audio_duration_us = duration_us;
-  }
-}
-
 void vw_benchmark_record_frame(vw_benchmark_t* benchmark) {
   if (benchmark && benchmark->active) benchmark->worker_frames_received++;
 }

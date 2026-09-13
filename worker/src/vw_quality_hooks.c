@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "vw_log.h"
 #include "vw_protocol_types.h"
 #include "vw_quality_hook.h"
@@ -51,11 +55,19 @@ static void vw_quality_write_marker(const char* suffix, const char* value) {
     remove(tmp_path);
     return;
   }
+#ifdef _WIN32
+  if (!MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "atomic rename failed for marker file '%s' -> '%s': error %lu",
+                 tmp_path, path, (unsigned long)GetLastError());
+    remove(tmp_path);
+  }
+#else
   if (rename(tmp_path, path) != 0) {
     vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "atomic rename failed for marker file '%s' -> '%s': %s", tmp_path,
                  path, strerror(errno));
     remove(tmp_path);
   }
+#endif
 }
 
 static _Atomic uint64_t s_dropped_audio_us = 0;

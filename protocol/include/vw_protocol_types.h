@@ -73,6 +73,8 @@ typedef enum vw_error_code {
 
 #define VW_ERROR_NONE 0U
 #define VW_ERROR_INTERNAL 9U
+#define VW_ERROR_SOURCE_OPEN 10U
+#define VW_ERROR_MAX 10U
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
@@ -183,11 +185,12 @@ typedef vw_msg_control_t vw_msg_resume_t;
 typedef vw_msg_control_t vw_msg_stop_t;
 
 // Control-message reason codes (vw_msg_control_t.reason), per docs/api-contracts.md.
+// Per-message wire values matching v1.6 protocol encoding.
 #define VW_CTRL_REASON_USER_PAUSE 1U          // PAUSE: user paused playback
-#define VW_CTRL_REASON_USER_RESUME 2U         // RESUME: user resumed playback
-#define VW_CTRL_REASON_USER_STOP 3U           // STOP: user stopped the session
-#define VW_CTRL_REASON_SEEK_DISCONTINUITY 4U  // STOP: seek or discontinuity — new session epoch
-#define VW_CTRL_REASON_MEDIA_END 5U           // STOP: media ended
+#define VW_CTRL_REASON_USER_RESUME 1U         // RESUME: user resumed playback
+#define VW_CTRL_REASON_USER_STOP 1U           // STOP: user stopped the session
+#define VW_CTRL_REASON_SEEK_DISCONTINUITY 2U  // STOP: seek or discontinuity — new session epoch
+#define VW_CTRL_REASON_MEDIA_END 3U           // STOP: media ended
 
 typedef struct vw_msg_status {
   vw_session_id_t session_id;

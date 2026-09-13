@@ -435,29 +435,31 @@ bool vw_worker_config_default_model_dir(char* out, size_t out_size) {
   wchar_t wbase[4096] = {0};
   DWORD blen = GetEnvironmentVariableW(L"LOCALAPPDATA", wbase, 4096);
   char tmp[4096] = {0};
+  int tmp_written = -1;
   if (blen > 0 && blen < 4096) {
     char utf8_base[4096] = {0};
-    int ulen = WideCharToMultiByte(CP_UTF8, 0, wbase, -1, utf8_base, 4096, NULL, NULL);
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, wbase, -1, utf8_base, sizeof(utf8_base), NULL, NULL);
     if (ulen > 0)
-      snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", utf8_base);
+      tmp_written = snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", utf8_base);
     else
-      snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+      tmp_written = snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
   } else {
     wchar_t whome[4096] = {0};
     DWORD hlen = GetEnvironmentVariableW(L"USERPROFILE", whome, 4096);
     if (hlen > 0 && hlen < 4096) {
       char utf8_home[4096] = {0};
-      int ulen = WideCharToMultiByte(CP_UTF8, 0, whome, -1, utf8_home, 4096, NULL, NULL);
+      int ulen = WideCharToMultiByte(CP_UTF8, 0, whome, -1, utf8_home, sizeof(utf8_home), NULL, NULL);
       if (ulen > 0)
-        snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", utf8_home);
+        tmp_written = snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", utf8_home);
       else
-        snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+        tmp_written = snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
     } else {
-      snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+      tmp_written = snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
     }
   }
-  int written = snprintf(out, out_size, "%s", tmp);
-  if (written < 0 || (size_t)written >= out_size) return false;
+  if (tmp_written < 0 || (size_t)tmp_written >= sizeof(tmp)) return false;
+  if ((size_t)tmp_written >= out_size) return false;
+  snprintf(out, out_size, "%s", tmp);
   return true;
 #else
   const char* xdg = getenv("XDG_DATA_HOME");

@@ -257,10 +257,17 @@ static bool vw_quality_prepare_markers(const char* prefix) {
     remove(tmp_path);
     return false;
   }
+#ifdef _WIN32
+  if (!MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    remove(tmp_path);
+    return false;
+  }
+#else
   if (rename(tmp_path, path) != 0) {
     remove(tmp_path);
     return false;
   }
+#endif
   return vw_quality_set_marker_env(prefix);
 }
 

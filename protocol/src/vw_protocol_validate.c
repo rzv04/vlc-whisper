@@ -170,7 +170,7 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       return true;
     case VW_MSG_ERROR: {
       const vw_msg_error_t* p = (const vw_msg_error_t*)payload;
-      return p->error_code >= VW_ERROR_NONE && p->error_code <= VW_ERROR_INTERNAL;
+      return p->error_code >= VW_ERROR_NONE && p->error_code <= VW_ERROR_MAX;
     }
     case VW_MSG_STARTED: {
       const vw_msg_started_t* p = (const vw_msg_started_t*)payload;

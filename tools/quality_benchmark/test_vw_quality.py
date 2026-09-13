@@ -164,6 +164,7 @@ class QualityHelpersTest(unittest.TestCase):
             self.assertTrue(dest.is_file())
             self.assertEqual(dest.read_text(encoding="utf-8"), '{"test": true}')
             self.assertFalse(dest.with_suffix(".tmp").exists())
+            self.assertEqual(list(dest.parent.glob("*.tmp")), [])
 
     def test_runner_timeout_preserves_completion_budget(self):
         self.assertEqual(runner_timeout_seconds(15.0, "live"), 161.5)

@@ -314,16 +314,5 @@ int main(void) {
   EXPECT(epoch.latency_samples[0] == 200000);
   EXPECT(epoch.audio_chunks_sent == 2);
 
-  vw_benchmark_t samples_bench = {0};
-  EXPECT(vw_benchmark_begin(&samples_bench, "base", "cpu", 8000000));
-  vw_benchmark_record_processed_samples(&samples_bench, 32000);
-  EXPECT(samples_bench.audio_duration_us == 2000000);
-  vw_benchmark_record_processed_samples(&samples_bench, 16000);
-  EXPECT(samples_bench.audio_duration_us == 2000000);
-  vw_benchmark_record_processed_samples(&samples_bench, 48000);
-  EXPECT(samples_bench.audio_duration_us == 3000000);
-  vw_benchmark_finalize(&samples_bench, 9000000);
-  remove(samples_bench.report_path);
-
   return vw_test_finish("test_benchmark");
 }

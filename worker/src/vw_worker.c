@@ -212,6 +212,12 @@ static void* vw_worker_reader_main(void* arg) {
   vw_worker_reader_arg_t* a = (vw_worker_reader_arg_t*)arg;
   uint8_t header_buf[sizeof(vw_frame_header_t)];
   uint8_t* payload_buf = NULL;
+  uint8_t* discard_buf = (uint8_t*)malloc(VW_MAX_PAYLOAD_BYTES);
+  if (!discard_buf) {
+    atomic_store(a->fatal_exit, true);
+    atomic_store(a->running, false);
+    return NULL;
+  }
   uint64_t last_plugin_sequence = 0;
   bool plugin_seq_valid = false;
 
@@ -221,7 +227,10 @@ static void* vw_worker_reader_main(void* arg) {
       int32_t res = vw_ipc_receive(a->handle, header_buf + bytes_read, sizeof(vw_frame_header_t) - bytes_read);
       if (res < 0) {
         if (res == VW_IPC_RECV_TIMEOUT) {
-          if (!atomic_load(a->running)) return NULL;
+          if (!atomic_load(a->running)) {
+            free(discard_buf);
+            return NULL;
+          }
           continue;
         }
         goto fatal;
@@ -240,17 +249,13 @@ static void* vw_worker_reader_main(void* arg) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_SEQUENCE", "stale sequence %llu <= %llu type=%u; discarding",
                    (unsigned long long)header.sequence, (unsigned long long)last_plugin_sequence, header.type);
       if (header.payload_length > 0) {
-        uint8_t discard_buf[512];
         uint32_t drained = 0;
         while (drained < header.payload_length) {
-          uint32_t to_read = header.payload_length - drained;
-          if (to_read > sizeof(discard_buf)) {
-            to_read = (uint32_t)sizeof(discard_buf);
-          }
-          int32_t r = vw_ipc_receive(a->handle, discard_buf, to_read);
+          int32_t r = vw_ipc_receive(a->handle, discard_buf + drained, header.payload_length - drained);
           if (r < 0) {
             if (r == VW_IPC_RECV_TIMEOUT) {
               if (!atomic_load(a->running)) {
+                free(discard_buf);
                 return NULL;
               }
               continue;
@@ -292,9 +297,11 @@ static void* vw_worker_reader_main(void* arg) {
     }
     payload_buf = NULL;
   }
+  free(discard_buf);
   return NULL;
 
 fatal:
+  free(discard_buf);
   free(payload_buf);
   atomic_store(a->fatal_exit, true);
   atomic_store(a->running, false);
