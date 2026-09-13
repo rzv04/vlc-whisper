@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import json
 import math
@@ -14,8 +15,6 @@ import urllib.request
 import wave
 from pathlib import Path
 from typing import Any
-
-import numpy as np
 
 DATASET_ID = "google/fleurs"
 DATASET_SPLIT = "test"
@@ -88,12 +87,25 @@ def parse_wav_float32_to_pcm16(wav_bytes: bytes) -> tuple[bytes, float]:
     if data_bytes is None:
         raise ValueError("missing data chunk in WAV")
 
-    floats = np.frombuffer(data_bytes, dtype=np.float32)
-    floats = np.clip(floats, -1.0, 1.0)
-    pcm = np.round(floats * 32767.0).astype(np.int16)
-    pcm_bytes = pcm.tobytes()
-    duration_seconds = len(pcm) / float(SAMPLE_RATE)
-    return pcm_bytes, duration_seconds
+    try:
+        import numpy as np
+
+        floats = np.frombuffer(data_bytes, dtype=np.float32)
+        floats = np.clip(floats, -1.0, 1.0)
+        pcm = np.round(floats * 32767.0).astype(np.int16)
+        pcm_bytes = pcm.tobytes()
+        duration_seconds = len(pcm) / float(SAMPLE_RATE)
+        return pcm_bytes, duration_seconds
+    except ImportError:
+        floats_arr = array.array("f")
+        floats_arr.frombytes(data_bytes)
+        pcm_arr = array.array("h")
+        for f in floats_arr:
+            clamped = -1.0 if f < -1.0 else (1.0 if f > 1.0 else f)
+            pcm_arr.append(int(round(clamped * 32767.0)))
+        pcm_bytes = pcm_arr.tobytes()
+        duration_seconds = len(pcm_arr) / float(SAMPLE_RATE)
+        return pcm_bytes, duration_seconds
 
 
 def resolve_dataset_revision() -> str:
