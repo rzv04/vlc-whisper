@@ -65,7 +65,8 @@ static void test_translation_failure_logging(void) {
   vw_test_check_true("translation failure uses translation event id",
                      strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
   vw_test_check_true("translation failure includes segment id", strstr(capture.message, "segment=42") != NULL);
-  vw_test_check_true("translation failure includes start seconds", strstr(capture.message, "start_pts_s=12.000") != NULL);
+  vw_test_check_true("translation failure includes start seconds",
+                     strstr(capture.message, "start_pts_s=12.000") != NULL);
   vw_test_check_true("translation failure includes end seconds", strstr(capture.message, "end_pts_s=13.500") != NULL);
   vw_test_check_true("translation failure includes zero latency", strstr(capture.message, "latency_ms=0.000") != NULL);
   vw_test_check_true("translation failure uses generic reason",
@@ -78,18 +79,21 @@ static void test_translation_failure_logging(void) {
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, 100000, false);
   vw_test_check_true("timed failure includes latency", strstr(capture.message, "latency_ms=100.000") != NULL);
-  vw_test_check_true("timed failure keeps generic reason", strstr(capture.message, "reason=translation_failed") != NULL);
+  vw_test_check_true("timed failure keeps generic reason",
+                     strstr(capture.message, "reason=translation_failed") != NULL);
   vw_test_check_true("timed failure keeps explicit cause boundary",
                      strstr(capture.message, "worker_did_not_provide_explicit_failure_cause") != NULL);
 
   memset(&capture, 0, sizeof(capture));
   vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
   vw_test_check_true("budget failure includes latency", strstr(capture.message, "latency_ms=800.000") != NULL);
-  vw_test_check_true("budget failure keeps generic reason", strstr(capture.message, "reason=translation_failed") != NULL);
+  vw_test_check_true("budget failure keeps generic reason",
+                     strstr(capture.message, "reason=translation_failed") != NULL);
   vw_test_check_true("budget failure keeps explicit cause boundary",
                      strstr(capture.message, "worker_did_not_provide_explicit_failure_cause") != NULL);
   vw_test_check_false("translation failure omits source subtitle text", strstr(capture.message, "source") != NULL);
-  vw_test_check_false("translation failure omits translated subtitle text", strstr(capture.message, "translated") != NULL);
+  vw_test_check_false("translation failure omits translated subtitle text",
+                      strstr(capture.message, "translated") != NULL);
 
   vw_log_set_enabled(false);
   vw_log_set_sink(NULL, NULL);
@@ -250,7 +254,8 @@ int main(void) {
                      report_contains(benchmark.report_path, "utterance_latency_max_ms=-400.000"));
   vw_test_check_true("dropped audio is milliseconds",
                      report_contains(benchmark.report_path, "queue_audio_dropped_ms=0.123"));
-  vw_test_check_true("real time factor is preserved", report_contains(benchmark.report_path, "real_time_factor=0.250000"));
+  vw_test_check_true("real time factor is preserved",
+                     report_contains(benchmark.report_path, "real_time_factor=0.250000"));
   vw_test_check_true("translation request count is preserved",
                      report_contains(benchmark.report_path, "translation_requests_sent=4"));
   vw_test_check_true("translation success count is preserved",
