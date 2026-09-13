@@ -66,8 +66,8 @@ static void test_translation_failure_logging(void) {
                      strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
   vw_test_check_true("translation failure includes segment id", strstr(capture.message, "segment=42") != NULL);
   vw_test_check_true("translation failure includes start seconds",
-                     strstr(capture.message, "start_pts_s=12.000") != NULL);
-  vw_test_check_true("translation failure includes end seconds", strstr(capture.message, "end_pts_s=13.500") != NULL);
+                     strstr(capture.message, "start_pts_sec=12.000") != NULL);
+  vw_test_check_true("translation failure includes end seconds", strstr(capture.message, "end_pts_sec=13.500") != NULL);
   vw_test_check_true("translation failure includes zero latency", strstr(capture.message, "latency_ms=0.000") != NULL);
   vw_test_check_true("translation failure uses generic reason",
                      strstr(capture.message, "reason=translation_failed") != NULL);
@@ -232,16 +232,17 @@ int main(void) {
   vw_test_check_true("final report records sent captions", report_contains(benchmark.report_path, "captions_sent=1"));
   vw_test_check_true("final report records filtered captions",
                      report_contains(benchmark.report_path, "captions_filtered=1"));
-  vw_test_check_true("session duration is seconds", report_contains(benchmark.report_path, "session_duration_s=4.000"));
-  vw_test_check_true("audio duration is seconds", report_contains(benchmark.report_path, "audio_duration_s=2.000"));
+  vw_test_check_true("session duration is seconds",
+                     report_contains(benchmark.report_path, "session_duration_sec=4.000"));
+  vw_test_check_true("audio duration is seconds", report_contains(benchmark.report_path, "audio_duration_sec=2.000"));
   vw_test_check_true("segment audio duration is seconds",
-                     report_contains(benchmark.report_path, "segment_audio_duration_s=0.500"));
+                     report_contains(benchmark.report_path, "segment_audio_duration_sec=0.500"));
   vw_test_check_true("transcription duration is seconds",
-                     report_contains(benchmark.report_path, "segment_transcription_duration_s=0.500"));
+                     report_contains(benchmark.report_path, "segment_transcription_duration_sec=0.500"));
   vw_test_check_true("inference duration is seconds",
-                     report_contains(benchmark.report_path, "inference_processing_duration_s=0.500"));
+                     report_contains(benchmark.report_path, "inference_processing_duration_sec=0.500"));
   vw_test_check_true("processing audio duration is seconds",
-                     report_contains(benchmark.report_path, "processing_audio_duration_s=2.000"));
+                     report_contains(benchmark.report_path, "processing_audio_duration_sec=2.000"));
   vw_test_check_true("first caption timing is milliseconds",
                      report_contains(benchmark.report_path, "first_sent_caption_elapsed_ms=1200.000"));
   vw_test_check_true("minimum latency is milliseconds",
@@ -269,7 +270,7 @@ int main(void) {
   vw_test_check_true("translation timeout count is preserved",
                      report_contains(benchmark.report_path, "translation_timeout_count=1"));
   vw_test_check_true("translation duration is seconds",
-                     report_contains(benchmark.report_path, "translation_duration_s=1.250"));
+                     report_contains(benchmark.report_path, "translation_duration_sec=1.250"));
   vw_test_check_true("translation latency sample count is preserved",
                      report_contains(benchmark.report_path, "translation_latency_samples=4"));
   vw_test_check_true("translation minimum latency is milliseconds",

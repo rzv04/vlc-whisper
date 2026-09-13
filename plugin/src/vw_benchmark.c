@@ -199,10 +199,10 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "state=%s\n", finalized ? "finalized" : "active");
   fprintf(report, "model=%s\n", benchmark->model_id[0] ? benchmark->model_id : "unknown");
   fprintf(report, "backend=%s\n", benchmark->backend[0] ? benchmark->backend : "unknown");
-  if (vw_benchmark_format_s(value, sizeof(value), duration_us)) fprintf(report, "session_duration_s=%s\n", value);
+  if (vw_benchmark_format_s(value, sizeof(value), duration_us)) fprintf(report, "session_duration_sec=%s\n", value);
   fprintf(report, "audio_chunks_sent=%llu\n", (unsigned long long)benchmark->audio_chunks_sent);
   if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->audio_duration_us))
-    fprintf(report, "audio_duration_s=%s\n", value);
+    fprintf(report, "audio_duration_sec=%s\n", value);
   fprintf(report, "worker_frames_received=%llu\n", (unsigned long long)benchmark->worker_frames_received);
   fprintf(report, "captions_received=%llu\n", (unsigned long long)benchmark->captions_received);
   fprintf(report, "captions_sent=%llu\n", (unsigned long long)benchmark->captions_sent);
@@ -212,14 +212,14 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "captions_presenter_rejected=%llu\n", (unsigned long long)benchmark->captions_presenter_rejected);
   fprintf(report, "segment_count=%llu\n", (unsigned long long)benchmark->captions_received);
   if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->segment_audio_duration_us))
-    fprintf(report, "segment_audio_duration_s=%s\n", value);
+    fprintf(report, "segment_audio_duration_sec=%s\n", value);
   fprintf(report, "segment_text_bytes=%llu\n", (unsigned long long)benchmark->segment_text_bytes);
   if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->inference_us)) {
-    fprintf(report, "segment_transcription_duration_s=%s\n", value);
-    fprintf(report, "inference_processing_duration_s=%s\n", value);
+    fprintf(report, "segment_transcription_duration_sec=%s\n", value);
+    fprintf(report, "inference_processing_duration_sec=%s\n", value);
   }
   if (vw_benchmark_format_u64_s(value, sizeof(value), processing_audio_us))
-    fprintf(report, "processing_audio_duration_s=%s\n", value);
+    fprintf(report, "processing_audio_duration_sec=%s\n", value);
   if (vw_benchmark_format_ratio(value, sizeof(value), benchmark->inference_us, processing_audio_us))
     fprintf(report, "real_time_factor=%s\n", value);
   if (vw_benchmark_format_ratio(value, sizeof(value), processing_audio_us, benchmark->inference_us))
@@ -249,7 +249,7 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "translation_failure_count=%llu\n", (unsigned long long)benchmark->translation_failure_count);
   fprintf(report, "translation_timeout_count=%llu\n", (unsigned long long)benchmark->translation_timeout_count);
   if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->translation_duration_us))
-    fprintf(report, "translation_duration_s=%s\n", value);
+    fprintf(report, "translation_duration_sec=%s\n", value);
   fprintf(report, "translation_latency_samples=%zu\n", benchmark->translation_latency_sample_count);
   if (vw_benchmark_format_ms(value, sizeof(value), translation_latency_min_us))
     fprintf(report, "translation_latency_min_ms=%s\n", value);
@@ -343,16 +343,16 @@ void vw_benchmark_record_caption_filtered(vw_benchmark_t* benchmark, bool paused
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success) {
   if (!benchmark) return;
   if (!success) {
-    char start_pts_s[64];
-    char end_pts_s[64];
+    char start_pts_sec[64];
+    char end_pts_sec[64];
     char latency_ms[64];
-    if (!vw_benchmark_format_s(start_pts_s, sizeof(start_pts_s), benchmark->last_segment_start_pts_us)) return;
-    if (!vw_benchmark_format_s(end_pts_s, sizeof(end_pts_s), benchmark->last_segment_end_pts_us)) return;
+    if (!vw_benchmark_format_s(start_pts_sec, sizeof(start_pts_sec), benchmark->last_segment_start_pts_us)) return;
+    if (!vw_benchmark_format_s(end_pts_sec, sizeof(end_pts_sec), benchmark->last_segment_end_pts_us)) return;
     if (!vw_benchmark_format_ms(latency_ms, sizeof(latency_ms), (int64_t)latency_us)) return;
     vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE",
-                 "segment=%llu start_pts_s=%s end_pts_s=%s latency_ms=%s reason=translation_failed "
+                 "segment=%llu start_pts_sec=%s end_pts_sec=%s latency_ms=%s reason=translation_failed "
                  "detail=worker_did_not_provide_explicit_failure_cause",
-                 (unsigned long long)benchmark->last_segment_id, start_pts_s, end_pts_s, latency_ms);
+                 (unsigned long long)benchmark->last_segment_id, start_pts_sec, end_pts_sec, latency_ms);
   }
   if (!benchmark->active) return;
   benchmark->translation_requests_sent++;
