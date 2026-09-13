@@ -206,3 +206,13 @@ _CPack_Packages/
 # Local spikes / scratch files not for commit
 samples/snippets/*.as
 samples/snippets/*.png
+
+# Local agent/tooling workspace files (never committed)
+.agents/skills/
+.omp/
+.opencode/
+.playwright-mcp/
+__pycache__/
+
+# Local quality-benchmark corpus and results (developer-local, not for commit)
+tools/quality_benchmark/local/
