@@ -68,5 +68,8 @@ add_subdirectory(samples EXCLUDE_FROM_ALL)
 # Developer-only local ASR quality benchmark target (not packaged or built by default)
 add_subdirectory(tools/quality_benchmark EXCLUDE_FROM_ALL)
 
-# Packaging and distribution (CPack & NSIS installer)
+# Packaging and distribution
 include(cmake/vw_packaging.cmake)
+if(UNIX AND NOT APPLE)
+    include(cmake/vw_packaging_linux.cmake)
+endif()

@@ -15,14 +15,6 @@ Compact contract reference for high-risk changes. `AGENTS.md` owns workflow; thi
 | Privacy/network | Audio transcription stays local; no implicit runtime transcript/PCM persistence. Explicit user subtitle exports and git-ignored developer benchmark text artifacts are allowed. |
 | Regression permanence | Fixed ledger defects gain named behavioral regressions where practical. |
 
-## Known deviations on this PR base
-
-These requirements are not claims that every inherited `main` path already complies:
-
-- worker CLI parsing still truncates some oversized identity arguments (`--pipe`, `--vad-model`, `--log-file`); the reject-on-overflow runtime fix/regression is tracked in PR #50;
-- live/non-seekable `MEDIA_END` can still discard residual buffered speech instead of flushing it exactly once; the runtime fix/regression is tracked in PR #50.
-
-Remove a deviation only after its implementation and regression coverage have landed in the target branch.
 
 ## Cross-component changes
 
@@ -59,4 +51,4 @@ Audio callbacks must not infer, block on IPC/locks, access files, perform potent
 
 ## Test contract
 
-New failure/seam C tests use PR #50-style named accumulating checks (`vw_test_check_*` + one `vw_test_finish`). Expectations describe externally meaningful behavior, not implementation details. See `test-strategy.md`.
+New failure/seam C tests use PR #50-style named accumulating checks (`vw_test_check_*` + one `vw_test_finish` in `tests/include/vw_test.h`). Expectations describe externally meaningful behavior, not implementation details. See `AGENTS.md` § Test style.

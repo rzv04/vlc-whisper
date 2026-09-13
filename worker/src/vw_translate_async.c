@@ -305,6 +305,14 @@ bool vw_translate_async_has_result(vw_translate_async_t* async) {
   return has_result;
 }
 
+bool vw_translate_async_has_pending(vw_translate_async_t* async) {
+  if (!async) return false;
+  pthread_mutex_lock(&async->mutex);
+  bool pending = async->job_count != 0 || async->inflight_count != 0 || async->result_count != 0;
+  pthread_mutex_unlock(&async->mutex);
+  return pending;
+}
+
 bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_result_t* out) {
   if (!async || !out) return false;
   pthread_mutex_lock(&async->mutex);

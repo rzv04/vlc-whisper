@@ -23,6 +23,8 @@
 #include <winhttp.h>
 #else
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -546,30 +548,45 @@ bool vw_translate_parse_rpc_response(const char* raw, char* out, size_t out_size
 
 static bool build_rpc_body(const char* text, const char* src_lang, const char* dst_lang, char* out, size_t out_size) {
   if (!text || !src_lang || !dst_lang || !out || out_size == 0) return false;
-  char escaped_text[VW_TRANSLATE_MAX_TEXT_BYTES * 6U + 1U];
+  char* escaped_text = NULL;
+  char* inner = NULL;
+  char* escaped_inner = NULL;
+  char* rpc = NULL;
+  char* encoded = NULL;
   char escaped_src[128];
   char escaped_dst[128];
-  if (!json_escape_string(text, escaped_text, sizeof(escaped_text)) ||
+  bool ok = false;
+  escaped_text = (char*)malloc(VW_TRANSLATE_MAX_TEXT_BYTES * 6U + 1U);
+  inner = (char*)malloc(VW_TRANSLATE_RPC_JSON_BYTES);
+  escaped_inner = (char*)malloc(VW_TRANSLATE_RPC_JSON_BYTES * 2U);
+  rpc = (char*)malloc(VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U);
+  encoded = (char*)malloc(VW_TRANSLATE_RPC_BODY_BYTES - 16U);
+  if (!escaped_text || !inner || !escaped_inner || !rpc || !encoded) goto done;
+  if (!json_escape_string(text, escaped_text, VW_TRANSLATE_MAX_TEXT_BYTES * 6U + 1U) ||
       !json_escape_string(src_lang, escaped_src, sizeof(escaped_src)) ||
       !json_escape_string(dst_lang, escaped_dst, sizeof(escaped_dst))) {
-    return false;
+    goto done;
   }
 
-  char inner[VW_TRANSLATE_RPC_JSON_BYTES];
-  int inner_len =
-      snprintf(inner, sizeof(inner), "[[\"%s\",\"%s\",\"%s\",true],[null]]", escaped_text, escaped_src, escaped_dst);
-  if (inner_len < 0 || (size_t)inner_len >= sizeof(inner)) return false;
+  int inner_len = snprintf(inner, VW_TRANSLATE_RPC_JSON_BYTES, "[[\"%s\",\"%s\",\"%s\",true],[null]]", escaped_text,
+                           escaped_src, escaped_dst);
+  if (inner_len < 0 || (size_t)inner_len >= VW_TRANSLATE_RPC_JSON_BYTES) goto done;
 
-  char escaped_inner[VW_TRANSLATE_RPC_JSON_BYTES * 2U];
-  if (!json_escape_string(inner, escaped_inner, sizeof(escaped_inner))) return false;
-  char rpc[VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U];
-  int rpc_len = snprintf(rpc, sizeof(rpc), "[[[\"MkEWBc\",\"%s\",null,\"generic\"]]]", escaped_inner);
-  if (rpc_len < 0 || (size_t)rpc_len >= sizeof(rpc)) return false;
+  if (!json_escape_string(inner, escaped_inner, VW_TRANSLATE_RPC_JSON_BYTES * 2U)) goto done;
+  int rpc_len =
+      snprintf(rpc, VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U, "[[[\"MkEWBc\",\"%s\",null,\"generic\"]]]", escaped_inner);
+  if (rpc_len < 0 || (size_t)rpc_len >= VW_TRANSLATE_RPC_JSON_BYTES * 2U + 128U) goto done;
 
-  char encoded[VW_TRANSLATE_RPC_BODY_BYTES - 16U];
-  if (!vw_url_encode(rpc, encoded, sizeof(encoded))) return false;
+  if (!vw_url_encode(rpc, encoded, VW_TRANSLATE_RPC_BODY_BYTES - 16U)) goto done;
   int body_len = snprintf(out, out_size, "f.req=%s", encoded);
-  return body_len >= 0 && (size_t)body_len < out_size;
+  ok = body_len >= 0 && (size_t)body_len < out_size;
+done:
+  free(encoded);
+  free(rpc);
+  free(escaped_inner);
+  free(inner);
+  free(escaped_text);
+  return ok;
 }
 
 #ifdef VW_TRANSLATE_TESTING
@@ -629,9 +646,11 @@ static bool win32_http_request(const char* host, const char* path, const char* b
     if (written <= 0 || (size_t)written >= sizeof(wheaders) / sizeof(wheaders[0])) goto done;
   }
   if (!set_winhttp_remaining_timeouts(session, deadline_us, 3U)) goto done;
+  LPCWSTR headers = wheaders[0] ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS;
+  DWORD headers_len = wheaders[0] ? (DWORD)wcslen(wheaders) : 0;
+  LPVOID req_data = body ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA;
   DWORD body_len = body ? (DWORD)strlen(body) : 0;
-  if (!WinHttpSendRequest(request, wheaders[0] ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS, (DWORD)-1L, (LPVOID)body,
-                          body_len, body_len, 0)) {
+  if (!WinHttpSendRequest(request, headers, headers_len, req_data, body_len, body_len, 0)) {
     goto done;
   }
   if (!set_winhttp_remaining_timeouts(session, deadline_us, 2U) || !WinHttpReceiveResponse(request, NULL)) goto done;
@@ -676,17 +695,33 @@ static bool set_cloexec(int fd) {
   return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
+static bool set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
 static bool posix_http_request(const char* base_url, const char* post_body, const char* query_text,
                                const char* content_type, char* out_buf, size_t buf_size, int64_t deadline_us) {
   if (!base_url || !out_buf || buf_size < 2) return false;
   uint32_t timeout_ms = remaining_timeout_ms(deadline_us);
   if (timeout_ms == 0) return false;
 
-  int pipe_out[2];
-  if (pipe(pipe_out) != 0) return false;
+  // Ignore SIGPIPE so premature exit of curl child during pipe write never terminates the worker.
+  struct sigaction sa_ign;
+  struct sigaction sa_old;
+  memset(&sa_ign, 0, sizeof(sa_ign));
+  sa_ign.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &sa_ign, &sa_old);
+
+  int pipe_out[2] = {-1, -1};
+  if (pipe(pipe_out) != 0) {
+    sigaction(SIGPIPE, &sa_old, NULL);
+    return false;
+  }
   if (!set_cloexec(pipe_out[0]) || !set_cloexec(pipe_out[1])) {
     close(pipe_out[0]);
     close(pipe_out[1]);
+    sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
 
@@ -696,6 +731,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     if (pipe(pipe_in) != 0) {
       close(pipe_out[0]);
       close(pipe_out[1]);
+      sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
     if (!set_cloexec(pipe_in[0]) || !set_cloexec(pipe_in[1])) {
@@ -703,6 +739,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
       close(pipe_in[1]);
       close(pipe_out[0]);
       close(pipe_out[1]);
+      sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
   }
@@ -731,6 +768,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
         close(pipe_in[0]);
         close(pipe_in[1]);
       }
+      sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
     argv[argc++] = "-H";
@@ -758,6 +796,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
       close(pipe_in[0]);
       close(pipe_in[1]);
     }
+    sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
   posix_spawn_file_actions_addclose(&actions, pipe_out[0]);
@@ -768,68 +807,203 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     posix_spawn_file_actions_adddup2(&actions, pipe_in[0], STDIN_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipe_in[0]);
   }
+
+  posix_spawnattr_t attr;
+  bool attr_init = false;
+  if (posix_spawnattr_init(&attr) == 0) {
+    attr_init = true;
+    sigset_t sigdef;
+    sigemptyset(&sigdef);
+    sigaddset(&sigdef, SIGPIPE);
+    posix_spawnattr_setsigdefault(&attr, &sigdef);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGDEF);
+  }
+
   pid_t pid = 0;
-  int spawn_status = posix_spawn(&pid, VW_CURL_EXECUTABLE, &actions, NULL, (char* const*)argv, environ);
+  int spawn_status =
+      posix_spawn(&pid, VW_CURL_EXECUTABLE, &actions, attr_init ? &attr : NULL, (char* const*)argv, environ);
   posix_spawn_file_actions_destroy(&actions);
+  if (attr_init) {
+    posix_spawnattr_destroy(&attr);
+  }
+
   close(pipe_out[1]);
-  if (input_payload) close(pipe_in[0]);
+  pipe_out[1] = -1;
+  if (input_payload) {
+    close(pipe_in[0]);
+    pipe_in[0] = -1;
+  }
   if (spawn_status != 0) {
     close(pipe_out[0]);
-    if (input_payload) close(pipe_in[1]);
+    pipe_out[0] = -1;
+    if (input_payload) {
+      close(pipe_in[1]);
+      pipe_in[1] = -1;
+    }
+    sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
 
+  bool nonblocking_ok = set_nonblocking(pipe_out[0]);
   if (input_payload) {
-    size_t payload_len = strlen(input_payload);
-    size_t written = 0;
-    while (written < payload_len) {
-      ssize_t n = write(pipe_in[1], input_payload + written, payload_len - written);
-      if (n > 0) {
-        written += (size_t)n;
-      } else if (n < 0 && errno == EINTR) {
-        continue;
-      } else {
-        break;
-      }
+    nonblocking_ok = set_nonblocking(pipe_in[1]) && nonblocking_ok;
+  }
+  if (!nonblocking_ok) {
+    close(pipe_out[0]);
+    pipe_out[0] = -1;
+    if (input_payload) {
+      close(pipe_in[1]);
+      pipe_in[1] = -1;
     }
-    close(pipe_in[1]);
-    if (written != payload_len) {
-      close(pipe_out[0]);
-      waitpid(pid, NULL, 0);
-      return false;
-    }
+    kill(pid, SIGKILL);
+    int reap_status = 0;
+    pid_t reaped = 0;
+    do {
+      reaped = waitpid(pid, &reap_status, 0);
+    } while (reaped < 0 && errno == EINTR);
+    sigaction(SIGPIPE, &sa_old, NULL);
+    return false;
   }
 
+  size_t payload_len = input_payload ? strlen(input_payload) : 0;
+  size_t written = 0;
+  bool in_open = (input_payload != NULL);
+  bool out_open = true;
+  bool write_failed = false;
   bool overflow = false;
   size_t total_read = 0;
-  for (;;) {
-    char extra;
-    void* target = total_read + 1 < buf_size ? (void*)(out_buf + total_read) : (void*)&extra;
-    size_t capacity = total_read + 1 < buf_size ? buf_size - 1 - total_read : 1U;
-    ssize_t n = read(pipe_out[0], target, capacity);
-    if (n > 0) {
-      if (total_read + 1 >= buf_size) {
-        overflow = true;
-        break;
-      }
-      total_read += (size_t)n;
-      continue;
+
+  if (in_open && payload_len == 0) {
+    close(pipe_in[1]);
+    pipe_in[1] = -1;
+    in_open = false;
+  }
+
+  while (in_open || out_open) {
+    int64_t now_us = get_monotonic_us();
+    if (now_us > deadline_us) break;
+    int64_t rem_us = deadline_us - now_us;
+    int rem_ms = (int)(rem_us / 1000LL);
+    if (rem_ms <= 0) break;
+    if (rem_ms > 200) rem_ms = 200;
+
+    struct pollfd pfds[2];
+    nfds_t nfds = 0;
+    int in_idx = -1;
+    int out_idx = -1;
+
+    if (in_open) {
+      pfds[nfds].fd = pipe_in[1];
+      pfds[nfds].events = POLLOUT;
+      pfds[nfds].revents = 0;
+      in_idx = (int)nfds++;
     }
-    if (n == 0) break;
-    if (errno == EINTR) continue;
-    overflow = true;
-    break;
+    if (out_open) {
+      pfds[nfds].fd = pipe_out[0];
+      pfds[nfds].events = POLLIN;
+      pfds[nfds].revents = 0;
+      out_idx = (int)nfds++;
+    }
+
+    int prc = poll(pfds, nfds, rem_ms);
+    if (prc < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (prc == 0) continue;
+
+    if (out_idx >= 0 && (pfds[out_idx].revents & (POLLIN | POLLHUP | POLLERR))) {
+      while (out_open) {
+        char extra = '\0';
+        void* target = total_read + 1U < buf_size ? (void*)(out_buf + total_read) : (void*)&extra;
+        size_t capacity = total_read + 1U < buf_size ? buf_size - 1U - total_read : 1U;
+        ssize_t n = read(pipe_out[0], target, capacity);
+        if (n > 0) {
+          if (total_read + 1U >= buf_size) {
+            overflow = true;
+          } else {
+            total_read += (size_t)n;
+          }
+        } else if (n == 0) {
+          close(pipe_out[0]);
+          pipe_out[0] = -1;
+          out_open = false;
+          break;
+        } else {
+          if (errno == EINTR) continue;
+          if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+          close(pipe_out[0]);
+          pipe_out[0] = -1;
+          out_open = false;
+          break;
+        }
+      }
+    }
+
+    if (in_open && in_idx >= 0) {
+      if (pfds[in_idx].revents & (POLLERR | POLLHUP)) {
+        close(pipe_in[1]);
+        pipe_in[1] = -1;
+        in_open = false;
+        if (written < payload_len) write_failed = true;
+      } else if (pfds[in_idx].revents & POLLOUT) {
+        while (in_open && written < payload_len) {
+          ssize_t n = write(pipe_in[1], input_payload + written, payload_len - written);
+          if (n > 0) {
+            written += (size_t)n;
+            if (written >= payload_len) {
+              close(pipe_in[1]);
+              pipe_in[1] = -1;
+              in_open = false;
+              break;
+            }
+          } else if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            write_failed = true;
+            close(pipe_in[1]);
+            pipe_in[1] = -1;
+            in_open = false;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (pipe_in[1] >= 0) {
+    close(pipe_in[1]);
+    pipe_in[1] = -1;
+  }
+  if (pipe_out[0] >= 0) {
+    close(pipe_out[0]);
+    pipe_out[0] = -1;
   }
   out_buf[total_read] = '\0';
-  close(pipe_out[0]);
+  sigaction(SIGPIPE, &sa_old, NULL);
 
   int wait_status = 0;
-  pid_t waited;
-  do {
-    waited = waitpid(pid, &wait_status, 0);
-  } while (waited < 0 && errno == EINTR);
-  return !overflow && total_read > 0 && waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0 &&
-         get_monotonic_us() <= deadline_us;
+  pid_t waited = 0;
+  while (1) {
+    waited = waitpid(pid, &wait_status, WNOHANG);
+    if (waited == pid) break;
+    if (waited < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (get_monotonic_us() > deadline_us + 100000LL) {
+      kill(pid, SIGKILL);
+      do {
+        waited = waitpid(pid, &wait_status, 0);
+      } while (waited < 0 && errno == EINTR);
+      break;
+    }
+    struct timespec ts = {0, 5000000L};
+    nanosleep(&ts, NULL);
+  }
+
+  return !overflow && !write_failed && total_read > 0 && waited == pid && WIFEXITED(wait_status) &&
+         WEXITSTATUS(wait_status) == 0 && get_monotonic_us() <= deadline_us;
 }
 #endif
 
@@ -888,59 +1062,74 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
   const char* tl = (dst_lang && is_valid_lang_tag(dst_lang, false)) ? dst_lang : "en";
   int64_t started_us = get_monotonic_us();
   int64_t deadline_us = started_us + (int64_t)VW_TRANSLATE_TIMEOUT_MS * 1000LL;
+  char* response = NULL;
+  char* rpc_body = NULL;
+  char* route_path = NULL;
+  bool translated = false;
 
   char enc_sl[32];
   char enc_tl[32];
   if (!vw_url_encode(sl, enc_sl, sizeof(enc_sl)) || !vw_url_encode(tl, enc_tl, sizeof(enc_tl))) {
     goto failed;
   }
-  char response[VW_TRANSLATE_MAX_RESPONSE_BYTES];
-
-  char rpc_body[VW_TRANSLATE_RPC_BODY_BYTES];
-  if (build_rpc_body(text, sl, tl, rpc_body, sizeof(rpc_body))) {
+  response = (char*)malloc(VW_TRANSLATE_MAX_RESPONSE_BYTES);
+  rpc_body = (char*)malloc(VW_TRANSLATE_RPC_BODY_BYTES);
+  route_path = (char*)malloc(VW_TRANSLATE_MAX_URL_BYTES);
+  if (!response || !rpc_body || !route_path) goto failed;
+  if (build_rpc_body(text, sl, tl, rpc_body, VW_TRANSLATE_RPC_BODY_BYTES)) {
     const char* rpc_path =
         "/_/TranslateWebserverUi/data/batchexecute?rpcids=MkEWBc&bl=boq_translate-webserver_20221005.09_p0&soc-app=1&"
         "soc-platform=1&soc-device=1&rt=c";
     if (http_request("translate.google.com", rpc_path, rpc_body, NULL,
-                     "application/x-www-form-urlencoded;charset=UTF-8", response, sizeof(response), deadline_us) &&
+                     "application/x-www-form-urlencoded;charset=UTF-8", response, VW_TRANSLATE_MAX_RESPONSE_BYTES,
+                     deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_rpc_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_WEB_RPC;
       if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-      return true;
+      translated = true;
+      goto done;
     }
   }
 
   if (remaining_timeout_ms(deadline_us) > 0) {
-    char gtx_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written =
-        snprintf(gtx_path, sizeof(gtx_path), "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t", enc_sl, enc_tl);
-    if (written >= 0 && (size_t)written < sizeof(gtx_path) &&
-        http_request("translate.googleapis.com", gtx_path, NULL, text, NULL, response, sizeof(response), deadline_us) &&
+    int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t",
+                           enc_sl, enc_tl);
+    if (written >= 0 && (size_t)written < VW_TRANSLATE_MAX_URL_BYTES &&
+        http_request("translate.googleapis.com", route_path, NULL, text, NULL, response,
+                     VW_TRANSLATE_MAX_RESPONSE_BYTES, deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_gtx_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_GTX;
       if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-      return true;
+      translated = true;
+      goto done;
     }
   }
 
   if (remaining_timeout_ms(deadline_us) > 0) {
-    char mobile_path[VW_TRANSLATE_MAX_URL_BYTES];
-    int written = snprintf(mobile_path, sizeof(mobile_path), "/m?sl=%s&tl=%s", enc_sl, enc_tl);
-    if (written >= 0 && (size_t)written < sizeof(mobile_path) &&
-        http_request("translate.google.com", mobile_path, NULL, text, NULL, response, sizeof(response), deadline_us) &&
+    int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/m?sl=%s&tl=%s", enc_sl, enc_tl);
+    if (written >= 0 && (size_t)written < VW_TRANSLATE_MAX_URL_BYTES &&
+        http_request("translate.google.com", route_path, NULL, text, NULL, response, VW_TRANSLATE_MAX_RESPONSE_BYTES,
+                     deadline_us) &&
         get_monotonic_us() <= deadline_us && vw_translate_parse_mobile_response(response, out_text, out_size) &&
         get_monotonic_us() <= deadline_us) {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
       if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-      return true;
+      translated = true;
+      goto done;
     }
   }
 
 failed:
-  out_text[0] = '\0';
-  if (out_tier) *out_tier = VW_TRANSLATE_TIER_NONE;
-  if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
-  return false;
+done:
+  free(route_path);
+  free(rpc_body);
+  free(response);
+  if (!translated) {
+    out_text[0] = '\0';
+    if (out_tier) *out_tier = VW_TRANSLATE_TIER_NONE;
+    if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
+  }
+  return translated;
 }

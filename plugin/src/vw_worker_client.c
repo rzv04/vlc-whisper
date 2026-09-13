@@ -227,7 +227,6 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
   }
   if (ack_ok) {
     if (ack.selected_major != VW_PROTOCOL_VERSION_MAJOR) ack_ok = false;
-    if (ack.selected_minor > VW_PROTOCOL_VERSION_MINOR) ack_ok = false;
     if ((ack.capability_flags & VW_CAPABILITY_PCM_S16LE_16K_MONO) == 0) ack_ok = false;
   }
   if (ack_ok) {
@@ -276,6 +275,11 @@ void vw_worker_client_disconnect(vw_worker_client_t* client) {
 bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline_origin_pts_us, const char* model_id,
                                     const char* source_url) {
   if (!client || !client->pipe_handle) return false;
+  if (model_id && strlen(model_id) >= sizeof(((vw_msg_start_t*)0)->model_id)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_MODEL_ID", "model identifier too long (%zu bytes); rejecting",
+                 strlen(model_id));
+    return false;
+  }
   client->session_active = false;
   client->worker_source_active = false;
 
@@ -284,7 +288,7 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
   vw_msg_start_t start = {.timeline_origin_pts_us = timeline_origin_pts_us,
                           .sample_rate = 16000,
                           .channels = 1,
-                          .sample_format = VW_AUDIO_FORMAT_S16,
+                          .sample_format = VW_SAMPLE_FORMAT_S16LE,
                           .source_kind = source_url ? VW_SOURCE_LOCAL_FILE : VW_SOURCE_LIVE_AUDIO};
   memcpy(start.session_id.bytes, client->session_id, 16);
   if (model_id) strncpy(start.model_id, model_id, sizeof(start.model_id) - 1);
@@ -442,10 +446,14 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
 
 static bool vw_worker_client_send_position_frame(vw_worker_client_t* client, int64_t current_pts_us,
                                                  int64_t input_time_us, float playback_rate, uint32_t flags) {
-  vw_msg_position_t pos = {.current_pts_us = current_pts_us,
-                           .input_time_us = input_time_us,
-                           .playback_rate = playback_rate > 0.0f ? playback_rate : 1.0f,
-                           .flags = flags};
+  float eff_rate = playback_rate > 0.0f ? playback_rate : 1.0f;
+  if (eff_rate < 0.05f) {
+    eff_rate = 0.05f;
+  } else if (eff_rate > 16.0f) {
+    eff_rate = 16.0f;
+  }
+  vw_msg_position_t pos = {
+      .current_pts_us = current_pts_us, .input_time_us = input_time_us, .playback_rate = eff_rate, .flags = flags};
   memcpy(pos.session_id.bytes, client->session_id, 16);
 
   uint8_t payload_buf[64];
@@ -554,6 +562,11 @@ bool vw_worker_client_send_model_ctrl(vw_worker_client_t* client, uint8_t action
   // Model provisioning is worker-scoped, not caption-session-scoped: a missing selected model can reject START,
   // while the same authenticated worker must still accept DOWNLOAD/ABORT with a zero session id.
   if (!client || !client->pipe_handle) return false;
+  if (model_id && strlen(model_id) >= sizeof(((vw_msg_model_ctrl_t*)0)->model_id)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "CLIENT_MODEL_ID", "model identifier too long (%zu bytes); rejecting",
+                 strlen(model_id));
+    return false;
+  }
   vw_msg_model_ctrl_t msg;
   memset(&msg, 0, sizeof(msg));
   msg.action = action;

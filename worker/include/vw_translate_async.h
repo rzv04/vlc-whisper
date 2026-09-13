@@ -46,6 +46,10 @@ bool vw_translate_async_submit(vw_translate_async_t* async, const vw_caption_seg
 // while an earlier translation is still in flight.
 bool vw_translate_async_has_result(vw_translate_async_t* async);
 
+// Reports whether queued, in-flight, or completed translation work remains, allowing lifecycle teardown to avoid
+// unnecessary deadline sleeps when the bounded translation pipeline is already empty.
+bool vw_translate_async_has_pending(vw_translate_async_t* async);
+
 // Pops the next ordered caption completion without blocking. Rebinds internal string pointers to caller-owned result
 // buffers.
 bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_result_t* out);

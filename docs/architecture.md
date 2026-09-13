@@ -13,7 +13,7 @@ VLC-Whisper is an ensemble: a native C VLC integration and a separate local work
 | Caption presenter | validate/schedule/clear generated captions | trust stale session IDs or malformed timing/text |
 | Model/translation workers | explicit model download; optional finalized-text translation | receive PCM for network egress |
 
-See `source-layout.md` for directory ownership and `api-contracts.md` for wire details.
+See `api-contracts.md` for wire details.
 
 ## Audio and backpressure
 
@@ -52,7 +52,30 @@ IDLE -> STARTING -> PLAYING <-> PAUSED
 
 Seek/discontinuity/source-epoch reset clears stale captions and buffered state, sends `STOP(SEEK_DISCONTINUITY)`, and starts a fresh caption session. In source look-ahead mode the worker process/IPC transport can remain alive while the caption epoch changes; translation settings are reapplied after the fresh `START`.
 
-The required lifecycle contract is that EOF/media end flushes eligible residual speech exactly once before final session teardown. The current PR base does not yet guarantee that behavior for live/non-seekable `MEDIA_END`; the runtime fix and regression are tracked in PR #50. Until that lands, treat tail flush as a known lifecycle defect rather than established behavior. Worker failure/respawn must rebuild state rather than reuse stale session fields.
+The required lifecycle contract is that EOF/media end flushes eligible residual speech exactly once before final session teardown. This branch introduces tail flush handling for live/non-seekable `MEDIA_END` (`vw_worker_flush_audio_tail`). Worker failure/respawn must rebuild state rather than reuse stale session fields.
+
+## Reliability and Teardown Boundaries
+
+- Caption SPU channel IDs belong to the held video output. Blanking and output replacement flush that output's
+  private channel before releasing its reference, never an unrelated channel on a newly discovered output.
+- Media swaps and worker recovery discard the previous source-seek filter anchor. Discontinuities also invalidate
+  the live benchmark clock mapping; the next live audio chunk reanchors latency without erasing aggregate counters.
+- Decoder seek pre-roll is discarded at sample granularity before returning PCM. FFmpeg prepares replacement
+  resampling state before seeking, so resampler initialization failure leaves the previous decoder usable.
+  Failed source seeks retain the decoded anchor and do not invalidate translation; repeated implicit retries are suppressed.
+- Negative internal PCM timestamps remain valid buffer anchors. VAD trailing silence is capped at 300 ms from
+  the raw speech endpoint, including end padding. Inference failure is fatal rather than a successful silent drain.
+- Teardown joins the sender, drains queued live PCM, then orders `STOP(MEDIA_END)` before `SHUTDOWN`. The worker
+  sends final speech through the same opt-in asynchronous translation path, including source-only timeout fallback,
+  and finishes accepted translation work before closing IPC. Each translation request retains its 800 ms budget.
+  The plugin receives through EOF and accounts close-path frames, captions, translation results, and presentation
+  in the existing benchmark. EOF is the completion barrier, not a three-second inference assumption or frame-count cap.
+  A **120-second hung-worker watchdog** bounds this receive phase: filter teardown can wait that long on a stuck
+  worker, and exceeding it can still lose the tail. This is outside the realtime audio callback; it does not promise
+  cancellation of an in-flight Whisper call. Process cleanup retains its separate bounded termination policy.
+- Large translation scratch buffers are heap-owned on the worker translation thread, preserving operation on a
+  128 KiB thread stack. Default diagnostic logs use exclusive per-process files; caller-selected log paths retain
+  their explicit overwrite semantics. POSIX worker launch accepts only absolute executable paths, never `PATH` lookup.
 
 ## Source modes
 

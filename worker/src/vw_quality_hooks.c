@@ -9,8 +9,9 @@
 
 #if defined(VW_QUALITY_LINK_WRAPS)
 
-size_t __real_vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                           int64_t* out_pts_us);
+vw_source_decoder_read_status_t __real_vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                                    size_t max_samples, size_t* out_sample_count,
+                                                                    int64_t* out_pts_us);
 bool __real_vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len);
 
 static bool vw_quality_marker_path(char* out, size_t out_size, const char* suffix) {
@@ -37,19 +38,13 @@ static void vw_quality_write_drop_marker(uint64_t dropped_audio_us) {
   vw_quality_write_marker(VW_QUALITY_DROPS_MARKER_SUFFIX, value);
 }
 
-size_t __wrap_vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm, size_t max_samples,
-                                           int64_t* out_pts_us) {
-  static _Thread_local unsigned int zero_reads = 0;
-  size_t samples = __real_vw_source_decoder_read_s16le(decoder, out_pcm, max_samples, out_pts_us);
-  if (samples > 0) {
-    zero_reads = 0;
-  } else if (decoder) {
-    zero_reads++;
-    if (zero_reads >= VW_QUALITY_SOURCE_EOF_ZERO_READS) {
-      vw_quality_write_marker(VW_QUALITY_EOF_MARKER_SUFFIX, "1");
-    }
-  }
-  return samples;
+vw_source_decoder_read_status_t __wrap_vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
+                                                                    size_t max_samples, size_t* out_sample_count,
+                                                                    int64_t* out_pts_us) {
+  vw_source_decoder_read_status_t status =
+      __real_vw_source_decoder_read_s16le(decoder, out_pcm, max_samples, out_sample_count, out_pts_us);
+  if (status == VW_SOURCE_DECODER_READ_EOF) vw_quality_write_marker(VW_QUALITY_EOF_MARKER_SUFFIX, "1");
+  return status;
 }
 
 bool __wrap_vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {

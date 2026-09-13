@@ -90,9 +90,19 @@ int main(void) {
   (void)chunk_a_pcm;
   (void)chunk_b_pcm;
 
-  (void)success;
-  (void)chunk1_pcm;
-  (void)chunk2;
+  // VW-019 regression test: high playback rate (>4.0x) triggers throttling and drops audio blocks
+  _Atomic float test_playback_rate = 8.0f;
+  cap.playback_rate = &test_playback_rate;
+  uint64_t prev_input_frames = cap.total_input_frames;
+  assert(vw_audio_capture_process_block(&cap, &input_b) == true);
+  // Frames accounted for, but nothing pushed to queue
+  assert(cap.total_input_frames == prev_input_frames + input_b.frame_count);
+  assert(vw_spsc_queue_pop(q, &chunk_b) == NULL);
+
+  // Normal rate resumes normal chunking
+  test_playback_rate = 1.0f;
+  assert(vw_audio_capture_process_block(&cap, &input_b) == true);
+  assert(vw_spsc_queue_pop(q, &chunk_b) != NULL);
 
   vw_spsc_queue_destroy(q);
   free(pcm);

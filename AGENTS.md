@@ -44,7 +44,7 @@ New behavioral/failure-path tests follow the PR #50 Jasmine-like convention: use
 
 ## Documentation
 
-Update only documentation whose contract changed. Keep canonical facts in one place and link instead of copying. Architecture -> `docs/architecture.md`; invariants -> `docs/invariants.md`; protocol/API -> `docs/api-contracts.md`; tests -> `docs/test-strategy.md`; user-visible setup/config -> `README.md`; roadmap status -> `docs/roadmap.md`. Historical/reference docs are not mandatory reading unless relevant.
+Update only documentation whose contract changed. Keep canonical facts in one place and link instead of copying. Architecture -> `docs/architecture.md`; invariants -> `docs/invariants.md`; protocol/API -> `docs/api-contracts.md`; tests -> `tests/` directory and `AGENTS.md` § Test style; user-visible setup/config -> `README.md`; roadmap status -> `docs/roadmap.md`. Historical/reference docs are not mandatory reading unless relevant.
 
 Header declarations need a brief useful behavior/ownership comment.
 

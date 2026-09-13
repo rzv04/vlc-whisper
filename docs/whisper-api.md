@@ -64,6 +64,8 @@ Recurrent VAD state is reset on lifecycle boundaries that invalidate acoustic co
 
 `vw_whisper_engine.*` owns model lifetime, backend configuration, PCM transcription, segment extraction, actual-backend reporting, and inference timing. Callers should consume wrapper-level typed success/error semantics rather than reaching through it and recreating vendor assumptions.
 
+Milestone 5 session handling applies the validated `START.language` through the engine language setter before acknowledging the session. A false inference result produces fatal `E_INTERNAL` and a nonzero worker exit, rather than draining the failed audio as if transcription succeeded. The same rule applies to media-end tail inference. The VAD wrapper limits silence after the raw speech endpoint to 4,800 samples (300 ms at 16 kHz), including padding; this does not change whisper.cpp's public API or introduce a new transcription policy.
+
 ## Performance/timing
 
 `whisper_full()` is not realtime-callback safe and runs only in the worker. Inference timing used by VLC-Whisper metrics is measured by the project owner around the actual inference call; vendor diagnostic timing APIs are not a substitute for protocol metric ownership.

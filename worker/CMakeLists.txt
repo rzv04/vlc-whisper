@@ -86,8 +86,18 @@ else()
     endif()
 endif()
 
+# Preinclude the POSIX translation pipe policy so original descriptors are CLOEXEC, curl stdin/stdout stay blocking,
+# and only parent endpoints become nonblocking after spawn through the same namespaced production/test seam.
+if(NOT WIN32)
+    set_source_files_properties(src/vw_translate.c PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translate_pipe_policy.h"
+        COMPILE_DEFINITIONS "VW_TRANSLATE_PIPE_POLICY_OVERRIDE=1"
+    )
+endif()
+
 add_executable(vlc-whisper-worker
     src/main.c
+    src/vw_worker_log_policy.c
     src/vw_worker.c
     src/vw_asr_engine.c
     src/vw_whisper_engine.c
@@ -153,6 +163,11 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 )
 
 if(WIN32)
+    # Windows: reserve a bigger stack. The MinGW default of 2 MiB overflows during
+    # whisper.cpp model loading (STATUS_STACK_OVERFLOW 0xC00000FD) because GNU ld
+    # does not apply the 8 MiB Linux main-thread default. All clean worker exit
+    # paths run on the main thread, so this reserve covers them too.
+    target_link_options(vlc-whisper-worker PRIVATE -Wl,--stack,16777216)
     # Windows Media Foundation, Crypto, and ACL/SID APIs plus WinHTTP model/translation transport.
     target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp advapi32
                                                        shell32)
