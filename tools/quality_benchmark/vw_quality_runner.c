@@ -15,6 +15,7 @@
 
 #include "ggml-backend.h"
 #include "vw_platform.h"
+#include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
 #include "vw_quality_hook.h"
 #include "vw_worker_client.h"
@@ -386,7 +387,13 @@ static bool vw_quality_wait_for_source_eof(vw_worker_client_t* client, vw_qualit
                                            const char* marker_prefix) {
   int64_t deadline_us = 0;
   if (!vw_quality_make_completion_deadline(&deadline_us)) return false;
-  while (vw_platform_get_monotonic_time_us() < deadline_us) {
+  for (;;) {
+    int64_t now_us = vw_platform_get_monotonic_time_us();
+    if (now_us < 0) {
+      fprintf(stderr, "quality runner: failed reading monotonic clock\n");
+      return false;
+    }
+    if (now_us >= deadline_us) break;
     if (vw_quality_source_eof_seen(marker_prefix)) return true;
     bool received = false;
     int rc = vw_quality_receive_once(client, result, VW_QUALITY_COMPLETION_POLL_US, &received);
@@ -400,12 +407,33 @@ static bool vw_quality_wait_for_source_eof(vw_worker_client_t* client, vw_qualit
   return false;
 }
 
+static bool vw_quality_send_shutdown(vw_worker_client_t* client) {
+  if (!client || !client->pipe_handle) return false;
+  vw_frame_header_t hdr = {.magic = VW_PROTOCOL_MAGIC,
+                           .major = VW_PROTOCOL_VERSION_MAJOR,
+                           .type = VW_MSG_SHUTDOWN,
+                           .payload_length = 0,
+                           .sequence = ++client->sequence};
+  uint8_t hdr_buf[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&hdr, hdr_buf, sizeof(hdr_buf))) return false;
+  return vw_ipc_send((vw_ipc_handle_t*)client->pipe_handle, hdr_buf, sizeof(hdr_buf));
+}
+
 static bool vw_quality_shutdown_and_drain(vw_worker_client_t* client, vw_quality_result_t* result) {
   if (!client) return false;
-  vw_worker_client_shutdown(client);
+  if (!vw_quality_send_shutdown(client)) {
+    fprintf(stderr, "quality runner: failed sending SHUTDOWN frame to worker\n");
+    return false;
+  }
   int64_t deadline_us = 0;
   if (!vw_quality_make_completion_deadline(&deadline_us)) return false;
-  while (vw_platform_get_monotonic_time_us() < deadline_us) {
+  for (;;) {
+    int64_t now_us = vw_platform_get_monotonic_time_us();
+    if (now_us < 0) {
+      fprintf(stderr, "quality runner: failed reading monotonic clock\n");
+      return false;
+    }
+    if (now_us >= deadline_us) break;
     bool received = false;
     int rc = vw_quality_receive_once(client, result, VW_QUALITY_COMPLETION_POLL_US, &received);
     if (rc == VW_IPC_RECV_OK || rc == VW_IPC_RECV_TIMEOUT) continue;
@@ -642,6 +670,12 @@ static bool vw_quality_run_offline(const vw_quality_options_t* options, const vw
 
   if (rc != 0) {
     fprintf(stderr, "quality runner: whisper_full failed with code %d\n", rc);
+    whisper_free(ctx);
+    return false;
+  }
+
+  if (start_us < 0 || end_us < 0) {
+    fprintf(stderr, "quality runner: failed reading monotonic clock during offline inference\n");
     whisper_free(ctx);
     return false;
   }
