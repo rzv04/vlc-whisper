@@ -162,6 +162,11 @@ target_link_libraries(vlc-whisper-worker PRIVATE
 )
 
 if(WIN32)
+    # Windows: reserve a bigger stack. The MinGW default of 2 MiB overflows during
+    # whisper.cpp model loading (STATUS_STACK_OVERFLOW 0xC00000FD) because GNU ld
+    # does not apply the 8 MiB Linux main-thread default. All clean worker exit
+    # paths run on the main thread, so this reserve covers them too.
+    target_link_options(vlc-whisper-worker PRIVATE -Wl,--stack,16777216)
     # Windows Media Foundation, Crypto, and ACL/SID APIs plus WinHTTP model/translation transport.
     target_link_libraries(vlc-whisper-worker PRIVATE bcrypt mfplat mfreadwrite mfuuid ole32 propsys winhttp advapi32
                                                        shell32)
