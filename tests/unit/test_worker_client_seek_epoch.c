@@ -161,14 +161,14 @@ static bool vw_test_send_translation_failure_then_fallback(vw_ipc_handle_t* serv
   bool session_active = true;
   _Atomic bool running = true;
   _Atomic bool fatal_exit = false;
-  vw_test_translation_delivery_t fixture = {
-      .delivery = {.handle = server,
-                   .sequence = worker_sequence,
-                   .session_id = &active_session,
-                   .session_active = &session_active,
-                   .running = &running,
-                   .fatal_exit = &fatal_exit},
-      .caption_sent = false};
+  vw_test_translation_delivery_t fixture;
+  memset(&fixture, 0, sizeof(fixture));
+  fixture.delivery.handle = server;
+  fixture.delivery.sequence = worker_sequence;
+  fixture.delivery.session_id = &active_session;
+  fixture.delivery.session_active = &session_active;
+  fixture.delivery.running = &running;
+  fixture.delivery.fatal_exit = &fatal_exit;
   vw_worker_translation_diag_context_t context = {.deliver = vw_test_send_fallback_caption, .user_data = &fixture};
   vw_worker_translation_diag_deliver(&result, &context);
   return fixture.caption_sent && atomic_load(&running) && !atomic_load(&fatal_exit);
