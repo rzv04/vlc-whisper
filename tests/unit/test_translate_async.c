@@ -180,8 +180,10 @@ static void test_active_budget_runs_requests_concurrently(void) {
       assert(result.success);
       attempted_count++;
     } else {
-      assert(!result.attempted);
+      assert(result.attempted);
+      assert(result.segment.translation_attempted);
       assert(!result.success);
+      assert(result.failure.cause == VW_TRANSLATE_FAILURE_LOCAL);
       assert(result.segment.translated_text_utf8 == NULL);
     }
     popped_count++;
