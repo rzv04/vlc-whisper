@@ -138,9 +138,9 @@ static void* vw_translate_async_thread_main(void* opaque) {
     } else {
       uint8_t tier = VW_TRANSLATE_TIER_NONE;
       uint32_t latency_us = 0;
-      result.success = vw_translate_text_detailed(result.source_text, job.source_lang, job.target_lang,
-                                                  result.translated_text, sizeof(result.translated_text), &tier,
-                                                  &latency_us, &result.failure);
+      result.success =
+          vw_translate_text_detailed(result.source_text, job.source_lang, job.target_lang, result.translated_text,
+                                     sizeof(result.translated_text), &tier, &latency_us, &result.failure);
       result.segment.translation_latency_us = latency_us;
       result.segment.translation_tier = result.success ? tier : VW_TRANSLATE_TIER_NONE;
       vw_translate_async_bind_result_text(&result);
