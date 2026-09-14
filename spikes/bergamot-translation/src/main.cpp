@@ -1,6 +1,7 @@
 #include "vw_bergamot_engine.h"
 #include "vw_bergamot_spike_core.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
