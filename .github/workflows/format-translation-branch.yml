@@ -15,6 +15,7 @@ on:
       - 'plugin/include/vw_translation_failure_module_override.h'
       - 'plugin/src/vw_benchmark.c'
       - 'protocol/include/vw_protocol_types.h'
+      - 'tests/unit/test_benchmark.c'
       - 'tests/unit/test_translation_blame.c'
       - '.github/workflows/format-translation-branch.yml'
 
@@ -46,6 +47,7 @@ jobs:
             plugin/include/vw_translation_failure_module_override.h \
             plugin/src/vw_benchmark.c \
             protocol/include/vw_protocol_types.h \
+            tests/unit/test_benchmark.c \
             tests/unit/test_translation_blame.c
       - name: Print formatting patch
         run: |
@@ -61,4 +63,5 @@ jobs:
             plugin/include/vw_translation_failure_module_override.h \
             plugin/src/vw_benchmark.c \
             protocol/include/vw_protocol_types.h \
+            tests/unit/test_benchmark.c \
             tests/unit/test_translation_blame.c
