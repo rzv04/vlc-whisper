@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numeric>
 #include <sstream>
+#include <utility>
 
 namespace vw::spike {
 namespace {
