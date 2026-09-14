@@ -13,6 +13,9 @@
 #include "vw_log.h"
 #include "vw_test.h"
 #include "vw_translate.h"
+#include "vw_translate_async.h"
+#include "vw_translation_failure_log.h"
+#include "vw_worker_translation_diag_override.h"
 
 typedef enum blame_mode {
   BLAME_TRANSPORT,
@@ -122,6 +125,57 @@ static void test_translator_causes(void) {
   vw_test_check_true("deadline stops fallbacks", failure.attempted_tiers == 0x01U && calls == 1U);
 }
 
+static void test_worker_plugin_diagnostic_seam(void) {
+  vw_translate_async_result_t result;
+  memset(&result, 0, sizeof(result));
+  result.attempted = true;
+  result.success = false;
+  result.segment.segment_id = 42U;
+  result.segment.translation_latency_us = 734000U;
+  result.failure.cause = VW_TRANSLATE_FAILURE_PROVIDER;
+  result.failure.terminal_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
+  result.failure.attempted_tiers = 0x07U;
+  result.failure.provider_status = 429U;
+  snprintf(result.source_text, sizeof(result.source_text), "%s", "private subtitle body");
+
+  vw_error_code_t code = E_INTERNAL;
+  char detail[VW_MAX_ERROR_MSG_BYTES];
+  bool built = vw_worker_translation_diag_build(&result, &code, detail, sizeof(detail));
+  vw_test_check_true("worker builds failed translation diagnostic", built);
+  vw_test_check_true("worker maps provider cause to protocol code", code == E_TRANSLATION_PROVIDER);
+  vw_test_check_true("diagnostic includes provider blame", strstr(detail, "cause=provider") != NULL);
+  vw_test_check_true("diagnostic includes terminal fallback", strstr(detail, "tier=mobile") != NULL);
+  vw_test_check_true("diagnostic includes attempted tiers", strstr(detail, "attempts=0x07") != NULL);
+  vw_test_check_true("diagnostic preserves provider status", strstr(detail, "status=429") != NULL);
+  vw_test_check_true("diagnostic formats latency in milliseconds", strstr(detail, "latency_ms=734.000") != NULL);
+  vw_test_check_false("diagnostic excludes subtitle body", strstr(detail, "private subtitle body") != NULL);
+
+  vw_benchmark_t benchmark = {.active = true};
+  log_capture_t capture = {0};
+  vw_log_set_sink(log_sink, &capture);
+  vw_log_set_enabled(true);
+
+  vw_msg_error_t error;
+  memset(&error, 0, sizeof(error));
+  error.error_code = code;
+  error.recoverable = 1U;
+  snprintf(error.message, sizeof(error.message), "%s", detail);
+  vw_test_check_true("plugin recognizes translation diagnostic",
+                     vw_plugin_record_translation_error(&benchmark, &error));
+  vw_test_check_true("plugin increments provider aggregate", benchmark.translation_provider_failure_count == 1U);
+  vw_test_check_true("plugin emits one translation event", capture.count == 1U);
+  vw_test_check_true("plugin event id is translation-specific",
+                     strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
+
+  error.error_code = E_INTERNAL;
+  vw_test_check_false("plugin leaves non-translation errors to legacy path",
+                      vw_plugin_record_translation_error(&benchmark, &error));
+  vw_test_check_true("non-translation error adds no translation event", capture.count == 1U);
+
+  vw_log_set_enabled(false);
+  vw_log_set_sink(NULL, NULL);
+}
+
 static void test_plugin_logging_and_aggregates(void) {
   vw_benchmark_t benchmark = {.active = true};
   log_capture_t capture = {0};
@@ -158,6 +212,7 @@ static void test_plugin_logging_and_aggregates(void) {
 
 int main(void) {
   test_translator_causes();
+  test_worker_plugin_diagnostic_seam();
   test_plugin_logging_and_aggregates();
   return vw_test_finish("translation_blame_contracts");
 }
