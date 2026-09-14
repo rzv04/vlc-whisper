@@ -14,6 +14,7 @@ Provide a standalone `spikes/bergamot-translation` prototype that translates UTF
   - Benchmark mode reporting cold model-load time, p50/p95/p99/max cue latency, throughput, and the share of cues meeting a configurable realtime budget (default 800 ms).
   - Small standard-library-only helper to download a Mozilla Bergamot model from Mozilla's public model registry, verify the model hash when provided, decompress it, and generate a ready-to-use Bergamot YAML config.
   - README with Ubuntu build/run/benchmark steps, Windows packaging notes, and license/redistribution obligations.
+  - Narrow `AGENTS.md` C++ exception for this explicitly requested isolated spike; production C17 rules remain unchanged.
 - Out:
   - No root CMake integration.
   - No plugin, worker, protocol, Lua/Qt settings, installer, CI, or production translation changes.
@@ -60,7 +61,7 @@ None. The spike is not loaded by VLC and is not part of the production worker li
 
 ## Tests first
 
-- Red-before-implementation specs:
+- Specs were authored before production spike implementation for:
   - parse multiline SRT cues while preserving cue IDs and timestamps;
   - reject malformed timestamp blocks;
   - render translated cues without changing timing metadata;
@@ -68,7 +69,8 @@ None. The spike is not loaded by VLC and is not part of the production worker li
   - realtime deadline hit-rate calculation is correct;
   - benchmark summary keeps model-load time separate from cue latency.
 - Existing ledger regressions affected: none.
-- Faults to inject: malformed SRT, empty samples, and deadline misses.
+- Faults injected: malformed SRT and empty benchmark samples; the deterministic sample set also exercises deadline misses.
+- Limitation: the connector-only repository environment did not permit executing the test-only commit before implementation, so red-before-green execution evidence could not be captured even though tests were committed first.
 
 ## Implementation
 
@@ -76,22 +78,23 @@ None. The spike is not loaded by VLC and is not part of the production worker li
 2. Add a thin Bergamot engine adapter using `BlockingService`, `TranslationModel`, `parseOptionsFromFilePath`, and `ResponseOptions::HTML` so basic subtitle markup can survive translation.
 3. Add a small CLI with `translate` and `benchmark` subcommands.
 4. Pin Bergamot source in the spike CMake via `FetchContent`; keep the dependency isolated from the repository root build.
-5. Add the Mozilla model-fetch helper, defaulting to the smallest matching `Release` model when available and generating a local YAML config.
+5. Add the Mozilla model-fetch helper, defaulting to the smallest matching `Release` model when available, supporting both shared and split source/target vocabularies, and generating a local YAML config.
 6. Document Ubuntu setup, benchmark interpretation, Windows/Ubuntu installer staging, and MPL-2.0/MIT obligations.
 
 ## Verification
 
-- [ ] New spike unit tests pass.
-- [ ] Spike configures and builds on the available Ubuntu environment when network/build dependencies permit.
-- [ ] `translate --help` and `benchmark --help`/usage path are documented.
-- [ ] Model downloader syntax and generated YAML are source-reviewed against Mozilla's current registry schema.
-- [ ] `git diff --check` equivalent review for created text files.
-- [ ] Production root build files remain unchanged.
+- [x] Spike-core contract tests compile under strict C++17 (`-Wall -Wextra -Werror -pedantic`) and all 21 checks pass.
+- [ ] Full Bergamot-backed target builds in this execution environment. The sandbox cannot resolve external Git hosts, so the pinned dependency cannot be fetched here; README provides the exact VM build command.
+- [x] `translate` and `benchmark` command usage is documented, including JSON benchmark output and the 800 ms realtime-candidate interpretation.
+- [x] Model downloader and generated YAML were source-reviewed against Mozilla's current 2026 model registry and Mozilla's own Bergamot evaluation config; shared and split vocab schemas are supported.
+- [ ] `clang-format --dry-run --Werror` was not available in the execution sandbox; source was kept to repository formatting conventions and should be run on the development VM.
+- [x] Branch comparison against `main` confirms no production CMake, plugin, worker, protocol, settings, CI, or installer implementation file changed.
 
 ## Evidence
 
 - Upstream Bergamot is MPL-2.0 and explicitly exposes a native library intended for embedding.
 - Bergamot's Marian dependency is MIT licensed.
-- Mozilla's current `mozilla/translations` README states that the published model files are distributed under MPL-2.0.
+- Mozilla's current `mozilla/translations` README states that the published model files are distributed under MPL-2.0 and compatible with Bergamot.
 - MPL-2.0 permits static linking into a larger work while keeping non-MPL files under their own license, provided recipients are informed how to obtain the MPL-covered source and MPL notices/rights are preserved.
-- Known limitation/follow-up: before production installer promotion, inventory all transitive third-party notices generated by the pinned Bergamot dependency and add them to the installer/legal notice bundle.
+- Mozilla's current registry exposes EN -> RO as a released `tiny` model with a 17,141,051-byte uncompressed neural model file; the spike helper selects it automatically for `--source en --target ro`.
+- Known follow-up before production installer promotion: run a full transitive dependency/license inventory for the exact pinned Bergamot build, add required notices/source links, and independently validate the Windows toolchain path.
