@@ -50,8 +50,8 @@ void test_malformed_srt_rejected() {
 
 void test_render_preserves_identity_and_timing() {
   std::vector<vw::spike::SubtitleCue> cues = {
-      {.id = "7", .timing = "00:00:10,100 --> 00:00:11,900", .text = "Salut!"},
-      {.id = "8", .timing = "00:00:12,000 --> 00:00:13,000", .text = "La revedere."},
+      {"7", "00:00:10,100 --> 00:00:11,900", "Salut!"},
+      {"8", "00:00:12,000 --> 00:00:13,000", "La revedere."},
   };
   const std::string rendered = vw::spike::render_srt(cues);
   check(rendered.find("7\n00:00:10,100 --> 00:00:11,900\nSalut!") != std::string::npos,
