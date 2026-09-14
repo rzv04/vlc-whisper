@@ -169,7 +169,8 @@ static bool vw_test_send_translation_failure_then_fallback(vw_ipc_handle_t* serv
   fixture.delivery.session_active = &session_active;
   fixture.delivery.running = &running;
   fixture.delivery.fatal_exit = &fatal_exit;
-  vw_worker_translation_diag_context_t context = {.deliver = vw_test_send_fallback_caption, .user_data = &fixture};
+  vw_worker_translation_diag_context_t context = {
+      .deliver = vw_test_send_fallback_caption, .user_data = &fixture, .delivery = fixture.delivery};
   vw_worker_translation_diag_deliver(&result, &context);
   return fixture.caption_sent && atomic_load(&running) && !atomic_load(&fatal_exit);
 }
