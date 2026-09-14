@@ -1,0 +1,71 @@
+name: Format Translation Diagnostics Branch
+
+on:
+  push:
+    branches:
+      - feat/translation-failure-blame-logging
+    paths:
+      - 'worker/include/vw_translate.h'
+      - 'worker/include/vw_worker_translation_diag_override.h'
+      - 'worker/src/vw_translate.c'
+      - 'worker/src/vw_translate_async.c'
+      - 'plugin/include/vw_benchmark.h'
+      - 'plugin/include/vw_translation_failure_log.h'
+      - 'plugin/include/vw_translation_failure_preclose_override.h'
+      - 'plugin/include/vw_translation_failure_module_override.h'
+      - 'plugin/src/vw_benchmark.c'
+      - 'protocol/include/vw_protocol_types.h'
+      - 'tests/unit/test_translation_blame.c'
+      - '.github/workflows/format-translation-branch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/translation-failure-blame-logging
+          fetch-depth: 0
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+      - name: Format touched C sources
+        run: |
+          clang-format -i \
+            worker/include/vw_translate.h \
+            worker/include/vw_worker_translation_diag_override.h \
+            worker/src/vw_translate.c \
+            worker/src/vw_translate_async.c \
+            plugin/include/vw_benchmark.h \
+            plugin/include/vw_translation_failure_log.h \
+            plugin/include/vw_translation_failure_preclose_override.h \
+            plugin/include/vw_translation_failure_module_override.h \
+            plugin/src/vw_benchmark.c \
+            protocol/include/vw_protocol_types.h \
+            tests/unit/test_translation_blame.c
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            worker/include/vw_translate.h \
+            worker/include/vw_worker_translation_diag_override.h \
+            worker/src/vw_translate.c \
+            worker/src/vw_translate_async.c \
+            plugin/include/vw_benchmark.h \
+            plugin/include/vw_translation_failure_log.h \
+            plugin/include/vw_translation_failure_preclose_override.h \
+            plugin/include/vw_translation_failure_module_override.h \
+            plugin/src/vw_benchmark.c \
+            protocol/include/vw_protocol_types.h \
+            tests/unit/test_translation_blame.c
+          git commit -m 'style: format translation failure diagnostics'
+          git push origin HEAD:feat/translation-failure-blame-logging
