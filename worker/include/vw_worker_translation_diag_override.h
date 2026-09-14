@@ -131,9 +131,13 @@ static inline void vw_worker_translation_diag_deliver(const vw_translate_async_r
   vw_worker_translation_diag_context_t* context = (vw_worker_translation_diag_context_t*)opaque;
   if (!context || !context->deliver) return;
   vw_worker_translation_delivery_view_t* delivery = (vw_worker_translation_delivery_view_t*)context->user_data;
-  bool active_session = delivery && delivery->session_active && *delivery->session_active && delivery->session_id &&
-                        result && memcmp(result->segment.session_id.bytes, delivery->session_id->bytes,
-                                         VW_SESSION_ID_BYTES) == 0;
+  bool active_delivery = delivery && delivery->session_active && *delivery->session_active && delivery->session_id;
+  bool matching_session = false;
+  if (result) {
+    matching_session =
+        memcmp(result->segment.session_id.bytes, delivery->session_id->bytes, VW_SESSION_ID_BYTES) == 0;
+  }
+  bool active_session = active_delivery && matching_session;
 
   vw_error_code_t code = E_TRANSLATION_LOCAL;
   char detail[VW_MAX_ERROR_MSG_BYTES];
