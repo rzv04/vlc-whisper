@@ -27,33 +27,57 @@ static inline int64_t vw_saturating_sub_i64(int64_t a, int64_t b) {
 
 // Calculates the byte length of the longest valid UTF-8 prefix within max_bytes, preventing
 // multi-byte code point truncation at boundary limits.
+// Rejects overlong sequences, UTF-16 surrogates, and code points above U+10FFFF, consistent with
+// vw_protocol_validate.c:is_valid_utf8.
 static inline size_t vw_utf8_safe_len(const char* s, size_t max_bytes) {
   if (!s || max_bytes == 0) return 0;
+  const uint8_t* p = (const uint8_t*)s;
   size_t len = 0;
-  while (s[len] != '\0' && len < max_bytes) {
-    unsigned char c = (unsigned char)s[len];
-    size_t char_len = 1;
-    if ((c & 0x80) == 0x00) {
-      char_len = 1;
-    } else if ((c & 0xE0) == 0xC0) {
-      char_len = 2;
+  while (len < max_bytes && p[len] != '\0') {
+    uint8_t c = p[len];
+    if (c <= 0x7F) {
+      len++;
+      continue;
+    }
+
+    size_t extra = 0;
+    uint32_t code_point = 0;
+    uint32_t min_cp = 0;
+
+    if ((c & 0xE0) == 0xC0) {
+      extra = 1;
+      code_point = c & 0x1F;
+      min_cp = 0x80;
     } else if ((c & 0xF0) == 0xE0) {
-      char_len = 3;
+      extra = 2;
+      code_point = c & 0x0F;
+      min_cp = 0x800;
     } else if ((c & 0xF8) == 0xF0) {
-      char_len = 4;
+      extra = 3;
+      code_point = c & 0x07;
+      min_cp = 0x10000;
     } else {
       return len;
     }
-    if (len + char_len > max_bytes) break;
+
+    if (len + 1 + extra > max_bytes) break;
+
     bool valid = true;
-    for (size_t k = 1; k < char_len; k++) {
-      if ((s[len + k] & 0xC0) != 0x80) {
+    for (size_t k = 1; k <= extra; k++) {
+      uint8_t next = p[len + k];
+      if ((next & 0xC0) != 0x80) {
         valid = false;
         break;
       }
+      code_point = (code_point << 6) | (next & 0x3F);
     }
     if (!valid) return len;
-    len += char_len;
+
+    if (code_point < min_cp) return len;
+    if (code_point >= 0xD800 && code_point <= 0xDFFF) return len;
+    if (code_point > 0x10FFFF) return len;
+
+    len += 1 + extra;
   }
   return len;
 }

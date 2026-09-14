@@ -22,8 +22,8 @@ typedef enum vw_source_decoder_read_status {
 // Stream metadata populated upon successfully opening a media file container.
 typedef struct vw_source_decoder_info {
   int64_t duration_us;        // Media duration in microseconds (-1 if unknown or live)
-  uint32_t sample_rate;       // Native audio track sample rate (Hz)
-  uint32_t channels;          // Native audio channel count
+  uint32_t sample_rate;       // Resampled decoder output contract sample rate (16000 Hz)
+  uint32_t channels;          // Resampled decoder output contract channel count (1 channel, mono)
   char container_format[32];  // Container format string descriptor
 } vw_source_decoder_info_t;
 

@@ -19,6 +19,14 @@ int main(void) {
   invalid_payload.payload_length = VW_MAX_PAYLOAD_BYTES + 1;
   EXPECT(!vw_protocol_validate_header(&invalid_payload));
 
+  vw_frame_header_t invalid_type_low = valid;
+  invalid_type_low.type = 0;
+  EXPECT(!vw_protocol_validate_header(&invalid_type_low));
+
+  vw_frame_header_t invalid_type_high = valid;
+  invalid_type_high.type = VW_MSG_TRANSLATE_CTRL + 1;
+  EXPECT(!vw_protocol_validate_header(&invalid_type_high));
+
   // Validate HELLO
   vw_msg_hello_t hello = {.client_version_length = 4, .client_version = (char*)"test"};
   EXPECT(vw_protocol_validate_payload(VW_MSG_HELLO, &hello));
@@ -51,25 +59,51 @@ int main(void) {
   // sample at 16kHz S16LE). Accept ±1 byte of the expected pcm_bytes; more is a real mismatch.
   audio.duration_us = 511937;  // odd frame count: trunc(duration*32/1000) = 16381, bytes = 16382
   audio.pcm_bytes = 16382;
-  EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // +1 byte tolerated
+  EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // +1 byte tolerated (even)
   audio.pcm_bytes = 16381;
-  EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // exact
-  audio.pcm_bytes = 16380;                                         // -1 byte: within tolerance
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));  // odd pcm_bytes rejected
+  audio.pcm_bytes = 16380;                                          // -1 byte: within tolerance (even)
   EXPECT(vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
-  audio.pcm_bytes = 16379;  // -2 bytes: beyond tolerance
+  audio.pcm_bytes = 16379;  // -2 bytes: beyond tolerance and odd
   EXPECT(!vw_protocol_validate_payload(VW_MSG_AUDIO_PCM, &audio));
 
   // Validate CONTROL
-  vw_msg_control_t control = {0};
+  vw_msg_control_t control = {.reason = VW_CTRL_REASON_USER_PAUSE};
   EXPECT(vw_protocol_validate_payload(VW_MSG_PAUSE, &control));
+  control.reason = 2;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_PAUSE, &control));
+  control.reason = 0;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_PAUSE, &control));
+
+  control.reason = VW_CTRL_REASON_USER_RESUME;
   EXPECT(vw_protocol_validate_payload(VW_MSG_RESUME, &control));
+  control.reason = 2;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_RESUME, &control));
+  control.reason = 0;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_RESUME, &control));
+
+  control.reason = VW_CTRL_REASON_USER_STOP;
   EXPECT(vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
+  control.reason = VW_CTRL_REASON_SEEK_DISCONTINUITY;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
+  control.reason = VW_CTRL_REASON_MEDIA_END;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
+  control.reason = 4;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
+  control.reason = 0;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &control));
 
   // Validate STATUS / ERROR
   vw_msg_status_t status = {0};
   EXPECT(vw_protocol_validate_payload(VW_MSG_STATUS, &status));
-  vw_msg_error_t err = {0};
+  vw_msg_error_t err = {.error_code = VW_ERROR_NONE};
   EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
+  err.error_code = VW_ERROR_INTERNAL;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
+  err.error_code = VW_ERROR_SOURCE_OPEN;
+  EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
+  err.error_code = VW_ERROR_MAX + 1;
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_ERROR, &err));
 
   // Validate SEGMENT
   vw_caption_segment_t seg = {.start_pts_us = 10, .end_pts_us = 20, .text_bytes = 4, .text_utf8 = (char*)"test"};

@@ -1,7 +1,14 @@
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#include "vw_log.h"
 #include "vw_protocol_types.h"
 #include "vw_quality_hook.h"
 #include "vw_source_decoder.h"
@@ -22,20 +29,62 @@ static bool vw_quality_marker_path(char* out, size_t out_size, const char* suffi
   return written > 0 && (size_t)written < out_size;
 }
 
+#include <stdatomic.h>
+
 static void vw_quality_write_marker(const char* suffix, const char* value) {
   if (!suffix || !value) return;
   char path[VW_PATH_MAX_BYTES];
-  if (!vw_quality_marker_path(path, sizeof(path), suffix)) return;
-  FILE* file = fopen(path, "wb");
-  if (!file) return;
-  fputs(value, file);
-  fclose(file);
+  char tmp_path[VW_PATH_MAX_BYTES];
+  if (!vw_quality_marker_path(path, sizeof(path), suffix)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "marker path exceeds maximum buffer size for suffix '%s'", suffix);
+    return;
+  }
+  int written = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+  if (written <= 0 || (size_t)written >= sizeof(tmp_path)) return;
+
+  FILE* file = fopen(tmp_path, "wb");
+  if (!file) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "cannot open quality marker file '%s': %s", tmp_path,
+                 strerror(errno));
+    return;
+  }
+  int printed = fprintf(file, "%s", value);
+  bool write_ok = printed >= 0;
+  bool close_ok = fclose(file) == 0;
+  if (!write_ok || !close_ok) {
+    remove(tmp_path);
+    return;
+  }
+#ifdef _WIN32
+  if (!MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "atomic rename failed for marker file '%s' -> '%s': error %lu",
+                 tmp_path, path, (unsigned long)GetLastError());
+    remove(tmp_path);
+  }
+#else
+  if (rename(tmp_path, path) != 0) {
+    vw_log_event(VW_LOG_LEVEL_WARN, "QUALITY_HOOKS", "atomic rename failed for marker file '%s' -> '%s': %s", tmp_path,
+                 path, strerror(errno));
+    remove(tmp_path);
+  }
+#endif
 }
 
-static void vw_quality_write_drop_marker(uint64_t dropped_audio_us) {
+static _Atomic uint64_t s_dropped_audio_us = 0;
+static _Atomic bool s_atexit_registered = false;
+
+static void vw_quality_flush_drop_marker(void) {
+  uint64_t dropped = atomic_load(&s_dropped_audio_us);
   char value[32];
-  snprintf(value, sizeof(value), "%" PRIu64, dropped_audio_us);
+  snprintf(value, sizeof(value), "%" PRIu64, dropped);
   vw_quality_write_marker(VW_QUALITY_DROPS_MARKER_SUFFIX, value);
+}
+
+void vw_quality_hook_on_queue_drop(uint64_t dropped_audio_us) {
+  atomic_store(&s_dropped_audio_us, dropped_audio_us);
+  if (!atomic_exchange(&s_atexit_registered, true)) {
+    atexit(vw_quality_flush_drop_marker);
+  }
 }
 
 vw_source_decoder_read_status_t __wrap_vw_source_decoder_read_s16le(vw_source_decoder_t* decoder, int16_t* out_pcm,
@@ -43,17 +92,20 @@ vw_source_decoder_read_status_t __wrap_vw_source_decoder_read_s16le(vw_source_de
                                                                     int64_t* out_pts_us) {
   vw_source_decoder_read_status_t status =
       __real_vw_source_decoder_read_s16le(decoder, out_pcm, max_samples, out_sample_count, out_pts_us);
-  if (status == VW_SOURCE_DECODER_READ_EOF) vw_quality_write_marker(VW_QUALITY_EOF_MARKER_SUFFIX, "1");
+  if (status == VW_SOURCE_DECODER_READ_EOF) {
+    vw_quality_flush_drop_marker();
+    vw_quality_write_marker(VW_QUALITY_EOF_MARKER_SUFFIX, "1");
+  }
   return status;
 }
 
 bool __wrap_vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {
   bool accepted = __real_vw_worker_queue_push(q, type, payload, payload_len);
   uint64_t dropped_audio_us = q ? vw_worker_queue_get_dropped_audio_us(q) : 0;
-  vw_quality_write_drop_marker(dropped_audio_us);
+  vw_quality_hook_on_queue_drop(dropped_audio_us);
   return accepted;
 }
 
 #else
-typedef int vw_quality_hooks_disabled_t;
+void vw_quality_hook_on_queue_drop(uint64_t dropped_audio_us) { (void)dropped_audio_us; }
 #endif

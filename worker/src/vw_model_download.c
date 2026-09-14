@@ -615,6 +615,22 @@ static void* vw_download_thread(void* arg) {
       pthread_mutex_unlock(&dl->lock);
       return NULL;
     }
+    if (atomic_load(&dl->abort_requested)) {
+#ifndef _WIN32
+      unlink(dl->part_path);
+#else
+      vw_unlink_wide_utf8(dl->part_path);
+#endif
+      pthread_mutex_lock(&dl->lock);
+      dl->progress.stage = VW_MODEL_STAGE_ABORTING;
+      dl->progress.bytes_done = 0;
+      dl->progress.pct = 0;
+      pthread_mutex_unlock(&dl->lock);
+      pthread_mutex_lock(&dl->lock);
+      dl->progress.stage = VW_MODEL_STAGE_IDLE;
+      pthread_mutex_unlock(&dl->lock);
+      return NULL;
+    }
     if (!vw_rename_atomic(dl->part_path, dl->final_path)) {
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "atomic rename failed '%s' -> '%s' (errno=%d)", dl->part_path,
                    dl->final_path, errno);

@@ -53,6 +53,58 @@ def edit_distance(reference: list[str], hypothesis: list[str]) -> int:
     return previous[-1]
 
 
+def word_error_rate(
+    reference_or_errors: str | list[str] | int,
+    hypothesis_or_ref_words: str | list[str] | int,
+) -> float:
+    """Compute word error rate. If ref_words == 0 and insertions > 0, returns float('inf')."""
+    if isinstance(reference_or_errors, int) and isinstance(hypothesis_or_ref_words, int):
+        errors = reference_or_errors
+        ref_words = hypothesis_or_ref_words
+        if ref_words == 0:
+            return float("inf") if errors > 0 else 0.0
+        return errors / ref_words
+    ref_tokens = word_tokens(reference_or_errors) if isinstance(reference_or_errors, str) else list(reference_or_errors)
+    hyp_tokens = (
+        word_tokens(hypothesis_or_ref_words)
+        if isinstance(hypothesis_or_ref_words, str)
+        else list(hypothesis_or_ref_words)
+    )
+    ref_len = len(ref_tokens)
+    errors = edit_distance(ref_tokens, hyp_tokens)
+    if ref_len == 0:
+        return float("inf") if errors > 0 else 0.0
+    return errors / ref_len
+
+
+def char_error_rate(
+    reference_or_errors: str | list[str] | int,
+    hypothesis_or_ref_chars: str | list[str] | int,
+) -> float:
+    """Compute character error rate. If ref_chars == 0 and insertions > 0, returns float('inf')."""
+    if isinstance(reference_or_errors, int) and isinstance(hypothesis_or_ref_chars, int):
+        errors = reference_or_errors
+        ref_chars = hypothesis_or_ref_chars
+        if ref_chars == 0:
+            return float("inf") if errors > 0 else 0.0
+        return errors / ref_chars
+    ref_tokens = (
+        character_tokens(reference_or_errors)
+        if isinstance(reference_or_errors, str)
+        else list(reference_or_errors)
+    )
+    hyp_tokens = (
+        character_tokens(hypothesis_or_ref_chars)
+        if isinstance(hypothesis_or_ref_chars, str)
+        else list(hypothesis_or_ref_chars)
+    )
+    ref_len = len(ref_tokens)
+    errors = edit_distance(ref_tokens, hyp_tokens)
+    if ref_len == 0:
+        return float("inf") if errors > 0 else 0.0
+    return errors / ref_len
+
+
 @dataclass(frozen=True)
 class ErrorCounts:
     word_errors: int
@@ -62,11 +114,23 @@ class ErrorCounts:
 
     @property
     def wer(self) -> float:
-        return self.word_errors / self.reference_words if self.reference_words else 0.0
+        if not self.reference_words:
+            return float("inf") if self.word_errors > 0 else 0.0
+        return self.word_errors / self.reference_words
 
     @property
     def cer(self) -> float:
-        return self.char_errors / self.reference_chars if self.reference_chars else 0.0
+        if not self.reference_chars:
+            return float("inf") if self.char_errors > 0 else 0.0
+        return self.char_errors / self.reference_chars
+
+    @property
+    def word_error_rate(self) -> float:
+        return self.wer
+
+    @property
+    def char_error_rate(self) -> float:
+        return self.cer
 
 
 def score_pair(reference: str, hypothesis: str) -> ErrorCounts:

@@ -6,7 +6,6 @@
 #include "vw_log.h"
 #include "vw_platform.h"
 #include "vw_queue.h"
-#include "vw_session.h"
 #include "vw_worker_client.h"
 
 #endif  // VW_PLUGIN_H_
