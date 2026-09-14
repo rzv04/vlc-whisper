@@ -64,11 +64,11 @@ Most session messages carry `session_id[16]`; `HELLO` is pre-session. A fresh pl
 
 ### Source seek
 
-For source mode, the plugin client treats accepted seek as a **new caption epoch**: `STOP(SEEK_DISCONTINUITY)` old ID → fresh `START` with new random ID and new origin → require correlated `STARTED(source_active=1)` → reapply cached translation → `POSITION`. Buffered source/translated cues from the old ID are therefore stale by construction. Failure to re-enter a trustworthy source state drops/restarts the transport rather than continuing ambiguously.
+For source mode, the plugin client treats accepted seek as a **new caption epoch**: `STOP(SEEK_DISCONTINUITY)` old ID → fresh `START` with new random ID and new origin → require correlated `STARTED(source_active=1)` → reapply cached translation → `POSITION`. Buffered source/translated cues from the old ID are therefore stale by construction. Failure to re-enter a trustworthy source state drops/restarts the transport rather than continuing ambiguously. Recoverable translation diagnostics from an older session may already be buffered at the transport boundary; the client drains and ignores them while waiting for the correlated `STARTED` and never attributes them to the new epoch.
 
 ### SEGMENT / translation
 
-`end_pts_us > start_pts_us`; text is bounded valid UTF-8 and renderer-safe. `is_final=true` means immutable displayable cue. Translation runs off the main inference/control path through a bounded queue and one total cue deadline; failure emits the source cue without translated text. PCM/audio is never sent to translation endpoints.
+`end_pts_us > start_pts_us`; text is bounded valid UTF-8 and renderer-safe. `is_final=true` means immutable displayable cue. Translation runs off the main inference/control path through a bounded queue and one total cue deadline; failure emits a recoverable translation `ERROR` diagnostic immediately before the source-only fallback cue. The diagnostic and fallback cue carry the same session identity, and accepted local saturation is reported as `E_TRANSLATION_LOCAL` rather than silently appearing as an unattempted translation. PCM/audio is never sent to translation endpoints.
 
 ### STATUS metrics
 
@@ -90,7 +90,14 @@ Downloads are worker-owned, user-initiated, single-flight, catalog-limited, SHA-
 | `E_DISCONTINUITY` | timeline/source epoch changed | clear/resync caption epoch |
 | `E_WORKER_CRASH` | worker/pipe failed | bounded recovery or disable captions |
 | `E_SOURCE_OPEN` | native source decode unavailable | explicit safe fallback when allowed |
+| `E_TRANSLATION_PROVIDER` | all usable translation fallbacks ended in a provider-side rejection/error; optional bounded provider status may be included | recoverable: render the source cue, emit provider blame when logging is enabled, and increment the provider-failure benchmark aggregate |
+| `E_TRANSLATION_TRANSPORT` | translation fallbacks failed at the network/transport layer | recoverable: render the source cue, emit transport blame when logging is enabled, and increment the transport-failure benchmark aggregate |
+| `E_TRANSLATION_PARSE` | provider responses arrived but no fallback yielded valid translated text | recoverable: render the source cue, emit parse blame when logging is enabled, and increment the parse-failure benchmark aggregate |
+| `E_TRANSLATION_DEADLINE` | the single global per-cue translation deadline expired | recoverable: render the source cue, emit deadline blame when logging is enabled, and increment the translation-timeout benchmark aggregate |
+| `E_TRANSLATION_LOCAL` | an accepted translation degraded locally before remote completion, including bounded async saturation/queue pressure | recoverable: render the source cue and emit local blame when logging is enabled; do not misattribute it to a remote provider |
 | `E_INTERNAL` | unclassified worker failure | fail session/process according to context |
+
+Translation error messages are bounded operational metadata only: segment ID, classified cause, terminal fallback tier, attempted-tier mask, optional provider status, and latency. They never contain source/translated subtitle bodies, PCM, credentials, authentication tokens, request URLs, or response bodies. During a START handshake, a recoverable translation error whose `session_id` belongs to the prior epoch is drained and ignored rather than treated as a START failure.
 
 ## Worker CLI
 

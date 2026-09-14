@@ -51,46 +51,22 @@ static void test_log_sink(vw_log_level_t level, const char* event_id, const char
 }
 
 static void test_translation_failure_logging(void) {
-  vw_benchmark_t benchmark = {0};
-  benchmark.last_segment_id = 42;
-  benchmark.last_segment_start_pts_us = 12000000;
-  benchmark.last_segment_end_pts_us = 13500000;
-
+  vw_benchmark_t benchmark = {.active = true};
   vw_test_log_capture_t capture = {0};
   vw_log_set_sink(test_log_sink, &capture);
   vw_log_set_enabled(true);
 
-  vw_benchmark_record_translation(&benchmark, 0, 0, false);
+  vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
+  vw_test_check_true("caption failure metric path is silent", capture.count == 0U);
+  vw_test_check_true("latency does not infer timeout", benchmark.translation_timeout_count == 0U);
+
+  const char* detail = "segment=42 cause=deadline tier=rpc attempts=0x01 latency_ms=800.000";
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_DEADLINE, detail);
   vw_test_check_true("translation failure uses error level", capture.level == VW_LOG_LEVEL_ERROR);
   vw_test_check_true("translation failure uses translation event id",
                      strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
-  vw_test_check_true("translation failure includes segment id", strstr(capture.message, "segment=42") != NULL);
-  vw_test_check_true("translation failure includes start seconds",
-                     strstr(capture.message, "start_pts_sec=12.000") != NULL);
-  vw_test_check_true("translation failure includes end seconds", strstr(capture.message, "end_pts_sec=13.500") != NULL);
-  vw_test_check_true("translation failure includes zero latency", strstr(capture.message, "latency_ms=0.000") != NULL);
-  vw_test_check_true("translation failure uses generic reason",
-                     strstr(capture.message, "reason=translation_failed") != NULL);
-  vw_test_check_true("translation failure marks unavailable cause",
-                     strstr(capture.message, "worker_did_not_provide_explicit_failure_cause") != NULL);
-  vw_test_check_false("translation failure omits microsecond presentation fields",
-                      strstr(capture.message, "_us=") != NULL);
-
-  memset(&capture, 0, sizeof(capture));
-  vw_benchmark_record_translation(&benchmark, 0, 100000, false);
-  vw_test_check_true("timed failure includes latency", strstr(capture.message, "latency_ms=100.000") != NULL);
-  vw_test_check_true("timed failure keeps generic reason",
-                     strstr(capture.message, "reason=translation_failed") != NULL);
-  vw_test_check_true("timed failure keeps explicit cause boundary",
-                     strstr(capture.message, "worker_did_not_provide_explicit_failure_cause") != NULL);
-
-  memset(&capture, 0, sizeof(capture));
-  vw_benchmark_record_translation(&benchmark, 0, VW_BENCHMARK_TRANSLATION_TIMEOUT_US, false);
-  vw_test_check_true("budget failure includes latency", strstr(capture.message, "latency_ms=800.000") != NULL);
-  vw_test_check_true("budget failure keeps generic reason",
-                     strstr(capture.message, "reason=translation_failed") != NULL);
-  vw_test_check_true("budget failure keeps explicit cause boundary",
-                     strstr(capture.message, "worker_did_not_provide_explicit_failure_cause") != NULL);
+  vw_test_check_true("translation failure forwards worker detail", strcmp(capture.message, detail) == 0);
+  vw_test_check_true("explicit deadline increments timeout aggregate", benchmark.translation_timeout_count == 1U);
   vw_test_check_false("translation failure omits source subtitle text", strstr(capture.message, "source") != NULL);
   vw_test_check_false("translation failure omits translated subtitle text",
                       strstr(capture.message, "translated") != NULL);
@@ -208,11 +184,13 @@ int main(void) {
   vw_benchmark_record_translation(&benchmark, 2, 200000, true);
   vw_benchmark_record_translation(&benchmark, 0, 100000, false);
   vw_benchmark_record_translation(&benchmark, 0, 800000, false);
+  const char* deadline_detail = "segment=42 cause=deadline tier=rpc attempts=0x01 latency_ms=800.000";
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_DEADLINE, deadline_detail);
   EXPECT(benchmark.translation_requests_sent == 4);
   EXPECT(benchmark.translation_success_count == 2);
   EXPECT(benchmark.translation_tier1_count == 1);
   EXPECT(benchmark.translation_tier2_count == 1);
-  EXPECT(benchmark.translation_failure_count == 1);
+  EXPECT(benchmark.translation_failure_count == 2);
   EXPECT(benchmark.translation_timeout_count == 1);
   EXPECT(benchmark.translation_duration_us == 1250000);
   EXPECT(benchmark.translation_latency_sample_count == 4);
@@ -266,7 +244,7 @@ int main(void) {
   vw_test_check_true("translation tier2 count is preserved",
                      report_contains(benchmark.report_path, "translation_tier2_count=1"));
   vw_test_check_true("translation failure count is preserved",
-                     report_contains(benchmark.report_path, "translation_failure_count=1"));
+                     report_contains(benchmark.report_path, "translation_failure_count=2"));
   vw_test_check_true("translation timeout count is preserved",
                      report_contains(benchmark.report_path, "translation_timeout_count=1"));
   vw_test_check_true("translation duration is seconds",

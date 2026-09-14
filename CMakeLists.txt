@@ -37,6 +37,13 @@ add_subdirectory(protocol)
 # Isolated transcription worker executable
 add_subdirectory(worker)
 
+# Source-local worker adapter emits recoverable translation blame frames before source-caption fallback delivery without
+# exposing the private worker delivery context to the asynchronous translator threads.
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY vlc-whisper-worker APPEND PROPERTY
+             COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/worker/include/vw_worker_translation_diag_override.h")
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY vlc-whisper-worker APPEND PROPERTY
+             COMPILE_DEFINITIONS VW_WORKER_TRANSLATION_DIAG_OVERRIDE=1)
+
 # Native VLC plugin module
 add_subdirectory(plugin)
 

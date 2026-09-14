@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "vw_protocol_types.h"
+#include "vw_translate.h"
 
 #define VW_TRANSLATE_ASYNC_ACTIVE_BUDGET 4U
 #define VW_TRANSLATE_ASYNC_QUEUE_CAPACITY 32U
@@ -19,6 +20,7 @@ typedef struct vw_translate_async_result {
   vw_caption_segment_t segment;
   char source_text[VW_MAX_TEXT_BYTES + 1U];
   char translated_text[VW_MAX_TEXT_BYTES + 1U];
+  vw_translate_failure_t failure;
   bool attempted;
   bool success;
 } vw_translate_async_result_t;
@@ -51,7 +53,7 @@ bool vw_translate_async_has_result(vw_translate_async_t* async);
 bool vw_translate_async_has_pending(vw_translate_async_t* async);
 
 // Pops the next ordered caption completion without blocking. Rebinds internal string pointers to caller-owned result
-// buffers.
+// buffers and preserves explicit worker-owned failure metadata.
 bool vw_translate_async_try_pop(vw_translate_async_t* async, vw_translate_async_result_t* out);
 
 // Removes and delivers the next ordered completion without holding its mutex across delivery. The worker main loop
