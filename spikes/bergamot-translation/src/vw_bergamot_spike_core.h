@@ -28,9 +28,16 @@ struct BenchmarkSummary {
   double characters_per_second = 0.0;
 };
 
+// Parses a UTF-8 SRT document into ordered cues while preserving each cue identifier and timing line verbatim for later
+// rendering.
 bool parse_srt(const std::string& input, std::vector<SubtitleCue>& cues, std::string& error);
+
+// Renders ordered cues back to normalized UTF-8 SRT text without modifying their identifiers, timing lines, or supplied
+// translated cue text.
 std::string render_srt(const std::vector<SubtitleCue>& cues);
 
+// Computes deterministic nearest-rank latency percentiles, deadline hit rate, and throughput while keeping cold model
+// loading outside measured cue latency.
 BenchmarkSummary summarize_benchmark(const std::vector<double>& cue_latency_ms, double budget_ms, double model_load_ms,
                                      std::size_t total_characters, double benchmark_wall_ms);
 
