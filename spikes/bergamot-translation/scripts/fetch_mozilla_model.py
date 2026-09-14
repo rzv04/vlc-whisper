@@ -101,7 +101,12 @@ def gemm_precision(model_filename: str) -> str:
     raise RuntimeError(f"Unsupported Bergamot model precision naming: {model_filename}")
 
 
-def write_config(output_dir: Path, model: Path, vocab: Path, shortlist: Path) -> Path:
+def write_config(output_dir: Path, model: Path, vocabs: list[Path], shortlist: Path) -> Path:
+    if len(vocabs) not in (1, 2):
+        raise RuntimeError("Bergamot config needs one shared vocab or separate source/target vocabs")
+    source_vocab = vocabs[0]
+    target_vocab = vocabs[0] if len(vocabs) == 1 else vocabs[1]
+
     config_path = output_dir / "model.yml"
     precision = gemm_precision(model.name)
     config_path.write_text(
@@ -110,8 +115,8 @@ def write_config(output_dir: Path, model: Path, vocab: Path, shortlist: Path) ->
                 "models:",
                 f"- {model.name}",
                 "vocabs:",
-                f"- {vocab.name}",
-                f"- {vocab.name}",
+                f"- {source_vocab.name}",
+                f"- {target_vocab.name}",
                 "shortlist:",
                 f"- {shortlist.name}",
                 "- false",
@@ -160,9 +165,18 @@ def main() -> int:
     registry = load_json(args.registry_url)
     selected = choose_model(registry, args.source, args.target, args.architecture)
     files = selected.get("files", {})
-    for required in ("model", "vocab", "lexicalShortlist"):
+    for required in ("model", "lexicalShortlist"):
         if required not in files or not files[required].get("path"):
             raise RuntimeError(f"Registry entry is missing required file metadata: {required}")
+
+    has_joint_vocab = bool(files.get("vocab", {}).get("path"))
+    has_split_vocabs = bool(files.get("srcVocab", {}).get("path")) and bool(
+        files.get("trgVocab", {}).get("path")
+    )
+    if not has_joint_vocab and not has_split_vocabs:
+        raise RuntimeError(
+            "Registry entry has neither a shared vocab nor separate source/target vocabs"
+        )
 
     base_url = registry["baseUrl"]
     model_path, model_hash = download_gzip(base_url, files["model"]["path"], output_dir)
@@ -173,12 +187,22 @@ def main() -> int:
             f"Model SHA-256 mismatch: expected {expected_hash}, got {model_hash}"
         )
 
-    vocab_path, vocab_hash = download_gzip(base_url, files["vocab"]["path"], output_dir)
+    vocab_entries: list[tuple[Path, str]] = []
+    if has_joint_vocab:
+        vocab_entries.append(download_gzip(base_url, files["vocab"]["path"], output_dir))
+    else:
+        vocab_entries.append(download_gzip(base_url, files["srcVocab"]["path"], output_dir))
+        vocab_entries.append(download_gzip(base_url, files["trgVocab"]["path"], output_dir))
+
     shortlist_path, shortlist_hash = download_gzip(
         base_url, files["lexicalShortlist"]["path"], output_dir
     )
-    config_path = write_config(output_dir, model_path, vocab_path, shortlist_path)
+    vocab_paths = [entry[0] for entry in vocab_entries]
+    config_path = write_config(output_dir, model_path, vocab_paths, shortlist_path)
 
+    manifest_vocabs = [
+        {"name": path.name, "sha256": digest} for path, digest in vocab_entries
+    ]
     manifest = {
         "sourceLanguage": args.source,
         "targetLanguage": args.target,
@@ -191,7 +215,7 @@ def main() -> int:
         "licenseEvidence": "mozilla/translations README states model files are distributed under MPL 2.0",
         "files": {
             "model": {"name": model_path.name, "sha256": model_hash},
-            "vocab": {"name": vocab_path.name, "sha256": vocab_hash},
+            "vocabs": manifest_vocabs,
             "lexicalShortlist": {"name": shortlist_path.name, "sha256": shortlist_hash},
             "config": {"name": config_path.name},
         },
