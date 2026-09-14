@@ -83,20 +83,17 @@ static inline bool vw_worker_translation_diag_build(const vw_translate_async_res
   uint32_t fractional_us = latency_us % 1000U;
   int written = 0;
   if (result->failure.provider_status != 0) {
-    written = snprintf(out, out_size,
-                       "segment=%llu cause=%s tier=%s attempts=0x%02x status=%u latency_ms=%u.%03u",
-                       (unsigned long long)result->segment.segment_id,
-                       vw_worker_translation_cause_name(result->failure.cause),
-                       vw_worker_translation_tier_name(result->failure.terminal_tier),
-                       (unsigned int)result->failure.attempted_tiers, (unsigned int)result->failure.provider_status,
-                       (unsigned int)whole_ms, (unsigned int)fractional_us);
+    written = snprintf(
+        out, out_size, "segment=%llu cause=%s tier=%s attempts=0x%02x status=%u latency_ms=%u.%03u",
+        (unsigned long long)result->segment.segment_id, vw_worker_translation_cause_name(result->failure.cause),
+        vw_worker_translation_tier_name(result->failure.terminal_tier), (unsigned int)result->failure.attempted_tiers,
+        (unsigned int)result->failure.provider_status, (unsigned int)whole_ms, (unsigned int)fractional_us);
   } else {
-    written = snprintf(out, out_size, "segment=%llu cause=%s tier=%s attempts=0x%02x latency_ms=%u.%03u",
-                       (unsigned long long)result->segment.segment_id,
-                       vw_worker_translation_cause_name(result->failure.cause),
-                       vw_worker_translation_tier_name(result->failure.terminal_tier),
-                       (unsigned int)result->failure.attempted_tiers, (unsigned int)whole_ms,
-                       (unsigned int)fractional_us);
+    written = snprintf(
+        out, out_size, "segment=%llu cause=%s tier=%s attempts=0x%02x latency_ms=%u.%03u",
+        (unsigned long long)result->segment.segment_id, vw_worker_translation_cause_name(result->failure.cause),
+        vw_worker_translation_tier_name(result->failure.terminal_tier), (unsigned int)result->failure.attempted_tiers,
+        (unsigned int)whole_ms, (unsigned int)fractional_us);
   }
   return written >= 0 && (size_t)written < out_size;
 }
@@ -134,13 +131,16 @@ static inline void vw_worker_translation_diag_deliver(const vw_translate_async_r
   vw_worker_translation_diag_context_t* context = (vw_worker_translation_diag_context_t*)opaque;
   if (!context || !context->deliver) return;
   vw_worker_translation_delivery_view_t* delivery = (vw_worker_translation_delivery_view_t*)context->user_data;
+  bool active_session = delivery && delivery->session_active && *delivery->session_active && delivery->session_id &&
+                        result && memcmp(result->segment.session_id.bytes, delivery->session_id->bytes,
+                                         VW_SESSION_ID_BYTES) == 0;
 
   vw_error_code_t code = E_TRANSLATION_LOCAL;
   char detail[VW_MAX_ERROR_MSG_BYTES];
-  if (vw_worker_translation_diag_build(result, &code, detail, sizeof(detail)) &&
+  if (active_session && vw_worker_translation_diag_build(result, &code, detail, sizeof(detail)) &&
       !vw_worker_translation_diag_send(delivery, code, detail)) {
-    if (delivery && delivery->fatal_exit) atomic_store(delivery->fatal_exit, true);
-    if (delivery && delivery->running) atomic_store(delivery->running, false);
+    if (delivery->fatal_exit) atomic_store(delivery->fatal_exit, true);
+    if (delivery->running) atomic_store(delivery->running, false);
     return;
   }
   context->deliver(result, context->user_data);
