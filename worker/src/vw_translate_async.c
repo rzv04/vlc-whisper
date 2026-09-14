@@ -129,7 +129,9 @@ static void* vw_translate_async_thread_main(void* opaque) {
     result.segment.translated_text_bytes = 0;
     result.segment.translation_tier = VW_TRANSLATE_TIER_NONE;
     result.segment.translation_latency_us = 0;
-    result.attempted = !job.skip_translation;
+    // Every accepted cue is a translation attempt from the plugin's perspective. Saturation is a local failed
+    // translation that degrades to source text; it must remain observable to diagnostics and benchmark accounting.
+    result.attempted = true;
 
     if (job.skip_translation) {
       result.success = false;
