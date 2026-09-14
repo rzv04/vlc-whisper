@@ -125,6 +125,31 @@ static void test_translator_causes(void) {
   vw_test_check_true("deadline stops fallbacks", failure.attempted_tiers == 0x01U && calls == 1U);
 }
 
+static void test_local_rejection_diagnostic(void) {
+  char source[] = "hard-capacity fallback";
+  vw_caption_segment_t segment = {.segment_id = 91U,
+                                  .start_pts_us = 1000,
+                                  .end_pts_us = 2000,
+                                  .is_final = true,
+                                  .text_utf8 = source,
+                                  .text_bytes = (uint16_t)strlen(source)};
+  vw_translate_async_result_t result;
+  vw_worker_translation_diag_prepare_local_rejection(&segment, &result);
+
+  vw_test_check_true("hard rejection is an attempted translation", result.attempted);
+  vw_test_check_false("hard rejection does not report success", result.success);
+  vw_test_check_true("hard rejection marks segment attempted", result.segment.translation_attempted);
+  vw_test_check_true("hard rejection is classified local", result.failure.cause == VW_TRANSLATE_FAILURE_LOCAL);
+
+  vw_error_code_t code = E_INTERNAL;
+  char detail[VW_MAX_ERROR_MSG_BYTES];
+  vw_test_check_true("hard rejection builds a diagnostic",
+                     vw_worker_translation_diag_build(&result, &code, detail, sizeof(detail)));
+  vw_test_check_true("hard rejection maps to local wire code", code == E_TRANSLATION_LOCAL);
+  vw_test_check_true("hard rejection detail identifies local cause", strstr(detail, "cause=local") != NULL);
+  vw_test_check_false("hard rejection detail excludes source body", strstr(detail, source) != NULL);
+}
+
 static void test_worker_plugin_diagnostic_seam(void) {
   vw_translate_async_result_t result;
   memset(&result, 0, sizeof(result));
@@ -212,6 +237,7 @@ static void test_plugin_logging_and_aggregates(void) {
 
 int main(void) {
   test_translator_causes();
+  test_local_rejection_diagnostic();
   test_worker_plugin_diagnostic_seam();
   test_plugin_logging_and_aggregates();
   return vw_test_finish("translation_blame_contracts");
