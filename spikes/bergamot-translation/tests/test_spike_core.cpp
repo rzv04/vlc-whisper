@@ -20,7 +20,8 @@ void check(bool condition, const char* name) {
 
 void test_parse_multiline_srt() {
   const std::string input =
-      "\xEF\xBB\xBF1\r\n"
+      "\xEF\xBB\xBF"
+      "1\r\n"
       "00:00:01,000 --> 00:00:03,250\r\n"
       "<i>Hello</i> there.\r\n"
       "Second line.\r\n\r\n"
@@ -67,10 +68,12 @@ void test_percentiles_and_deadline_rate() {
   check(std::fabs(summary.p95_ms - 50.0) < 0.001, "p95 uses deterministic nearest-rank percentile");
   check(std::fabs(summary.p99_ms - 50.0) < 0.001, "p99 uses deterministic nearest-rank percentile");
   check(std::fabs(summary.max_ms - 50.0) < 0.001, "max latency reported");
-  check(std::fabs(summary.deadline_hit_rate_percent - 40.0) < 0.001, "deadline hit rate counts samples at or below budget");
+  check(std::fabs(summary.deadline_hit_rate_percent - 40.0) < 0.001,
+        "deadline hit rate counts samples at or below budget");
   check(std::fabs(summary.model_load_ms - 123.0) < 0.001, "model load time is kept separate from cue latency");
   check(std::fabs(summary.cues_per_second - 20.0) < 0.001, "throughput derives from benchmark wall time");
-  check(std::fabs(summary.characters_per_second - 400.0) < 0.001, "character throughput derives from benchmark wall time");
+  check(std::fabs(summary.characters_per_second - 400.0) < 0.001,
+        "character throughput derives from benchmark wall time");
 }
 
 void test_empty_benchmark_samples() {
