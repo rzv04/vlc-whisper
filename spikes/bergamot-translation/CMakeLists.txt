@@ -50,8 +50,9 @@ if(VW_BERGAMOT_BUILD_ENGINE)
         FetchContent_Declare(
             bergamot_source
             GIT_REPOSITORY https://github.com/browsermt/bergamot-translator.git
+            # Pin an immutable commit. Deliberately do not use GIT_SHALLOW here:
+            # a raw commit SHA may become unreachable by a future shallow clone.
             GIT_TAG 9271618ebbdc5d21ac4dc4df9e72beb7ce644774
-            GIT_SHALLOW TRUE
             GIT_PROGRESS TRUE
             GIT_SUBMODULES_RECURSE TRUE
         )
