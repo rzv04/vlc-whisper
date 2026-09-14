@@ -52,20 +52,19 @@ bool vw_translate_parse_gtx_response(const char* raw, char* out, size_t out_size
 // Parses lightweight Google mobile web HTML responses to extract and unescape text within result-container elements.
 bool vw_translate_parse_mobile_response(const char* raw, char* out, size_t out_size);
 
-// Translates through the existing three fallback tiers while returning explicit terminal failure metadata, total latency,
-// and successful tier without changing fallback ordering or deadline behavior.
+// Translates through the existing three fallback tiers while returning explicit terminal failure metadata, total
+// latency, and successful tier without changing fallback ordering or deadline behavior.
 bool vw_translate_text_detailed(const char* text, const char* src_lang, const char* dst_lang, char* out_text,
                                 size_t out_size, uint8_t* out_tier, uint32_t* out_latency_us,
                                 vw_translate_failure_t* out_failure);
 
-// Translates a UTF-8 text string using a 3-tier fallback engine (Web RPC, GTX, and Mobile scrape) under one global
-// VW_TRANSLATE_TIMEOUT_MS deadline. out_latency_us is total elapsed time for both success and failure.
+// Preserves the legacy translation API for callers that do not need failure diagnostics.
 bool vw_translate_text(const char* text, const char* src_lang, const char* dst_lang, char* out_text, size_t out_size,
                        uint8_t* out_tier, uint32_t* out_latency_us);
 
 #ifdef VW_TRANSLATE_TESTING
-// Deterministic transport injection used only by test_translate. The timeout argument is the remaining portion of the
-// single global cue budget; production builds never expose or call this hook.
+// Deterministic transport injection used by legacy translation tests. The timeout argument is the remaining portion of
+// the single global cue budget; production builds never expose or call this hook.
 typedef bool (*vw_translate_test_http_hook_t)(const char* host, const char* path, const char* body,
                                               const char* content_type, char* out_buf, size_t buf_size,
                                               uint32_t timeout_ms, void* user_data);
@@ -78,14 +77,11 @@ typedef enum vw_translate_test_http_outcome {
   VW_TRANSLATE_TEST_HTTP_DEADLINE = 3
 } vw_translate_test_http_outcome_t;
 
-// Injects deterministic provider, transport, and deadline outcomes for detailed failure tests while preserving the
-// production transport implementation and global cue deadline semantics unchanged.
+// Diagnostic transport injection additionally carries provider status and an explicit cause so failure ownership can be
+// tested without network access.
 typedef vw_translate_test_http_outcome_t (*vw_translate_test_http_diagnostic_hook_t)(
     const char* host, const char* path, const char* body, const char* content_type, char* out_buf, size_t buf_size,
     uint32_t timeout_ms, uint16_t* out_status, void* user_data);
-
-// Installs the detailed translation transport test hook and its caller-owned context, replacing any previous detailed
-// hook until another hook or NULL is supplied.
 void vw_translate_set_test_http_diagnostic_hook(vw_translate_test_http_diagnostic_hook_t hook, void* user_data);
 
 // Builds the exact form body used by the Tier-1 MkEWBc request so request escaping can be contract-tested without
