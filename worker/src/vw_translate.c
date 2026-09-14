@@ -1073,9 +1073,8 @@ static bool http_request(const char* host, const char* path, const char* body, c
 #ifdef VW_TRANSLATE_TESTING
   if (g_test_http_diagnostic_hook) {
     uint16_t status = 0;
-    vw_translate_test_http_outcome_t outcome =
-        g_test_http_diagnostic_hook(host, path, body, content_type, out_buf, buf_size, timeout_ms, &status,
-                                    g_test_http_diagnostic_user_data);
+    vw_translate_test_http_outcome_t outcome = g_test_http_diagnostic_hook(
+        host, path, body, content_type, out_buf, buf_size, timeout_ms, &status, g_test_http_diagnostic_user_data);
     g_http_provider_status = status;
     if (outcome == VW_TRANSLATE_TEST_HTTP_OK) return true;
     if (outcome == VW_TRANSLATE_TEST_HTTP_PROVIDER) g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
