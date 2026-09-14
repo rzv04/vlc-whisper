@@ -51,7 +51,7 @@ static void test_log_sink(vw_log_level_t level, const char* event_id, const char
 }
 
 static void test_translation_failure_logging(void) {
-  vw_benchmark_t benchmark = {0};
+  vw_benchmark_t benchmark = {.active = true};
   vw_test_log_capture_t capture = {0};
   vw_log_set_sink(test_log_sink, &capture);
   vw_log_set_enabled(true);
@@ -66,7 +66,7 @@ static void test_translation_failure_logging(void) {
   vw_test_check_true("translation failure uses translation event id",
                      strcmp(capture.event_id, "PLUGIN_TRANSLATION_FAILURE") == 0);
   vw_test_check_true("translation failure forwards worker detail", strcmp(capture.message, detail) == 0);
-  vw_test_check_true("explicit deadline increments timeout aggregate", benchmark.translation_timeout_count == 0U);
+  vw_test_check_true("explicit deadline increments timeout aggregate", benchmark.translation_timeout_count == 1U);
   vw_test_check_false("translation failure omits source subtitle text", strstr(capture.message, "source") != NULL);
   vw_test_check_false("translation failure omits translated subtitle text",
                       strstr(capture.message, "translated") != NULL);
@@ -184,8 +184,8 @@ int main(void) {
   vw_benchmark_record_translation(&benchmark, 2, 200000, true);
   vw_benchmark_record_translation(&benchmark, 0, 100000, false);
   vw_benchmark_record_translation(&benchmark, 0, 800000, false);
-  vw_benchmark_record_translation_failure(
-      &benchmark, E_TRANSLATION_DEADLINE, "segment=42 cause=deadline tier=rpc attempts=0x01 latency_ms=800.000");
+  const char* deadline_detail = "segment=42 cause=deadline tier=rpc attempts=0x01 latency_ms=800.000";
+  vw_benchmark_record_translation_failure(&benchmark, E_TRANSLATION_DEADLINE, deadline_detail);
   EXPECT(benchmark.translation_requests_sent == 4);
   EXPECT(benchmark.translation_success_count == 2);
   EXPECT(benchmark.translation_tier1_count == 1);
