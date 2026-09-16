@@ -41,5 +41,10 @@ int main(void) {
   vw_test_check_true("oversized --log-file is rejected instead of truncated",
                      vw_worker_config_parse_args(&config, 3, log_long_argv) == 2);
 
+  vw_test_check_true("config reset before unknown --language", vw_worker_config_init_defaults(&config));
+  char* unknown_language_argv[] = {"vlc-whisper-worker", "--language", "zz", NULL};
+  vw_test_check_true("unknown Whisper language is rejected before engine initialization",
+                     vw_worker_config_parse_args(&config, 3, unknown_language_argv) == 2);
+
   return vw_test_finish("test_worker_config_failure_paths");
 }

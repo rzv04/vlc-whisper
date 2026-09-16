@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "whisper.h"
+
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
@@ -405,6 +407,10 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
       }
       if (strcmp(lang, "auto") == 0) {
         fprintf(stderr, "bad --language: 'auto' is not a concrete transcription language\n");
+        return 2;
+      }
+      if (whisper_lang_id(lang) < 0) {
+        fprintf(stderr, "bad --language: unknown Whisper language '%s' (use whisper_lang_id list)\n", lang);
         return 2;
       }
       snprintf(config->language, sizeof(config->language), "%s", lang);
