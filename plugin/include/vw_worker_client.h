@@ -51,8 +51,8 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
                                                            const char* language, int n_threads, int gpu_device,
                                                            const char* model_dir, bool logging_enabled);
 
-// Launches an explicitly selected ASR engine; only recognized IDs reach the process boundary. The legacy
-// launch variants continue to select Whisper for existing callers and benchmark tools.
+// Launches a recognized ASR engine. Default Whisper omits the new CLI flag for older-worker compatibility;
+// nondefault engines are forwarded explicitly, while legacy launch variants continue to select Whisper.
 vw_worker_client_t* vw_worker_client_launch_and_connect_engine(const char* executable_path, const char* endpoint_name,
                                                                const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
                                                                const char* model_path, const char* asr_engine,

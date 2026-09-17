@@ -112,8 +112,12 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_engine(const char* execu
     const char* eff_backend = (backend && backend[0]) ? backend : "auto";
     argv[argc++] = "--backend";
     argv[argc++] = eff_backend;
-    argv[argc++] = "--asr-engine";
-    argv[argc++] = asr_engine;
+    // Whisper is the legacy/default engine. Omitting its flag keeps plugin-only upgrades compatible with older
+    // workers whose argument parser predates engine selection; nondefault engines must remain explicit.
+    if (strcmp(asr_engine, "whisper") != 0) {
+      argv[argc++] = "--asr-engine";
+      argv[argc++] = asr_engine;
+    }
     if (gpu_device >= 0) {
       snprintf(gpu_buf, sizeof(gpu_buf), "%d", gpu_device);
       argv[argc++] = "--gpu-device";
