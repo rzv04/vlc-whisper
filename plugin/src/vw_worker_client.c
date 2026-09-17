@@ -79,12 +79,14 @@ static void vw_worker_client_drop_transport(vw_worker_client_t* client) {
 
 static bool send_control_frame(vw_worker_client_t* client, vw_message_type_t type, uint16_t reason);
 
-vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
-                                                           const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
-                                                           const char* model_path, const char* backend,
-                                                           const char* language, int n_threads, int gpu_device,
-                                                           const char* model_dir, bool logging_enabled) {
-  if (!endpoint_name || !auth_token) {
+vw_worker_client_t* vw_worker_client_launch_and_connect_engine(const char* executable_path, const char* endpoint_name,
+                                                               const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                               const char* model_path, const char* asr_engine,
+                                                               const char* backend, const char* language, int n_threads,
+                                                               int gpu_device, const char* model_dir,
+                                                               bool logging_enabled) {
+  if (!endpoint_name || !auth_token || !asr_engine ||
+      (strcmp(asr_engine, "whisper") != 0 && strcmp(asr_engine, "nemotron") != 0)) {
     return NULL;
   }
 
@@ -95,7 +97,7 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     char gpu_buf[16];
     token_to_hex(auth_token, token_hex);
     // 19b: argv grows from 8 to 16 to carry --backend/--gpu-device/--language/--n-threads
-    const char* argv[20];
+    const char* argv[22];
     size_t argc = 0;
     argv[argc++] = executable_path;
     argv[argc++] = "--pipe";
@@ -110,6 +112,12 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
     const char* eff_backend = (backend && backend[0]) ? backend : "auto";
     argv[argc++] = "--backend";
     argv[argc++] = eff_backend;
+    // Whisper is the legacy/default engine. Omitting its flag keeps plugin-only upgrades compatible with older
+    // workers whose argument parser predates engine selection; nondefault engines must remain explicit.
+    if (strcmp(asr_engine, "whisper") != 0) {
+      argv[argc++] = "--asr-engine";
+      argv[argc++] = asr_engine;
+    }
     if (gpu_device >= 0) {
       snprintf(gpu_buf, sizeof(gpu_buf), "%d", gpu_device);
       argv[argc++] = "--gpu-device";
@@ -246,6 +254,16 @@ vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executabl
 fail:
   vw_worker_client_disconnect(client);
   return NULL;
+}
+
+vw_worker_client_t* vw_worker_client_launch_and_connect_ex(const char* executable_path, const char* endpoint_name,
+                                                           const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
+                                                           const char* model_path, const char* backend,
+                                                           const char* language, int n_threads, int gpu_device,
+                                                           const char* model_dir, bool logging_enabled) {
+  return vw_worker_client_launch_and_connect_engine(executable_path, endpoint_name, auth_token, model_path, "whisper",
+                                                    backend, language, n_threads, gpu_device, model_dir,
+                                                    logging_enabled);
 }
 
 vw_worker_client_t* vw_worker_client_launch_and_connect(const char* executable_path, const char* endpoint_name,

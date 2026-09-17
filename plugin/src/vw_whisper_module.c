@@ -372,13 +372,13 @@ static bool vw_plugin_resolve_cpu_worker_path(char* out, size_t out_size) {
 // Configured explicit backend (gpu/cpu) remains fail-closed; only auto backend retries CPU.
 static vw_worker_client_t* vw_plugin_launch_with_auto_retry(const char* worker_path, const char* pipe_name,
                                                             const uint8_t auth_token[VW_AUTH_TOKEN_BYTES],
-                                                            const char* model_path, const char* backend,
-                                                            const char* language, int n_threads, int gpu_device,
-                                                            const char* model_dir, bool logging_enabled,
+                                                            const char* model_path, const char* asr_engine,
+                                                            const char* backend, const char* language, int n_threads,
+                                                            int gpu_device, const char* model_dir, bool logging_enabled,
                                                             bool worker_path_was_configured) {
-  vw_worker_client_t* client =
-      vw_worker_client_launch_and_connect_ex(worker_path[0] ? worker_path : NULL, pipe_name, auth_token, model_path,
-                                             backend, language, n_threads, gpu_device, model_dir, logging_enabled);
+  vw_worker_client_t* client = vw_worker_client_launch_and_connect_engine(
+      worker_path[0] ? worker_path : NULL, pipe_name, auth_token, model_path, asr_engine, backend, language, n_threads,
+      gpu_device, model_dir, logging_enabled);
   if (client) return client;
   const char* eff_backend = (backend && backend[0]) ? backend : "auto";
   bool is_auto = (strcmp(eff_backend, "auto") == 0);
@@ -397,8 +397,8 @@ static vw_worker_client_t* vw_plugin_launch_with_auto_retry(const char* worker_p
   if (cpu_path[0] == '\0' || strcmp(cpu_path, worker_path) == 0) return NULL;
   vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_GPU_FALLBACK",
                "GPU worker handshake/spawn failed for '%s'; retrying trusted CPU worker '%s'", worker_path, cpu_path);
-  client = vw_worker_client_launch_and_connect_ex(cpu_path, pipe_name, auth_token, model_path, backend, language,
-                                                  n_threads, gpu_device, model_dir, logging_enabled);
+  client = vw_worker_client_launch_and_connect_engine(cpu_path, pipe_name, auth_token, model_path, asr_engine, backend,
+                                                      language, n_threads, gpu_device, model_dir, logging_enabled);
   return client;
 }
 
@@ -480,6 +480,14 @@ static bool vw_plugin_resolve_model_path(char* out, size_t out_size) {
 #endif
 }
 
+// Engine IDs are identity-bearing configuration, so snapshots use a bounded canonical value and never truncate
+// arbitrary config text. The raw value is still passed to the launch boundary, which rejects invalid IDs.
+static const char* vw_plugin_snapshot_asr_engine(const char* value) {
+  if (!value || !value[0] || strcmp(value, "whisper") == 0) return "whisper";
+  if (strcmp(value, "nemotron") == 0) return "nemotron";
+  return "__invalid__";
+}
+
 // Plugin instance state
 typedef struct vw_plugin_sys {
   vw_spsc_queue_t* queue;
@@ -519,6 +527,7 @@ typedef struct vw_plugin_sys {
   char cfg_worker_path[VW_PATH_MAX_BYTES];
   char cfg_model_path[VW_PATH_MAX_BYTES];
   char cfg_backend[16];
+  char cfg_asr_engine[16];
   char cfg_language[16];
   char cfg_model_download[40];
   char model_download_id[40];
@@ -609,6 +618,7 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
                (unsigned)VW_MAX_WORKER_RESPAWNS);
   vw_platform_sleep_ms(VW_WORKER_RESPAWN_DELAY_MS);  // let the old worker exit and free the pipe name
   char* respawn_be = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
+  char* respawn_asr = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-asr-engine");
   char* respawn_lg = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
   int64_t respawn_thr = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
   bool respawn_logging = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-logging") != 0;
@@ -629,6 +639,7 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
       vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_UNAVAILABLE",
                    "worker discovery failed on Windows; captions disabled, passthrough only (no bare fallback)");
       if (respawn_be) free(respawn_be);
+      if (respawn_asr) free(respawn_asr);
       if (respawn_lg) free(respawn_lg);
       return false;
     }
@@ -642,10 +653,11 @@ static bool vw_plugin_respawn_worker(vw_plugin_sys_t* sys, bool paused, bool tra
   bool respawn_worker_path_configured = (sys->cfg_worker_path[0] != '\0');
   // Also consider current worker_path: if it was empty fallback via PATH on Linux, treat as not configured.
   sys->client = vw_plugin_launch_with_auto_retry(
-      sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL, respawn_be,
-      respawn_lg, (int)respawn_thr, respawn_gpu, respawn_model_dir[0] ? respawn_model_dir : NULL, respawn_logging,
-      respawn_worker_path_configured);
+      sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL,
+      (respawn_asr && respawn_asr[0]) ? respawn_asr : "whisper", respawn_be, respawn_lg, (int)respawn_thr, respawn_gpu,
+      respawn_model_dir[0] ? respawn_model_dir : NULL, respawn_logging, respawn_worker_path_configured);
   if (respawn_be) free(respawn_be);
+  if (respawn_asr) free(respawn_asr);
   if (respawn_lg) free(respawn_lg);
   if (!sys->client) {
     vw_log_event(VW_LOG_LEVEL_WARN, "PLUGIN_WORKER_UNAVAILABLE",
@@ -808,6 +820,7 @@ static void* vw_plugin_sender_main(void* arg) {
       char* wp = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "worker-path");
       char* mp = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "model-path");
       char* be = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
+      char* asr = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-asr-engine");
       char* lg = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
       char* dl = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-download");
       int64_t thr = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
@@ -831,6 +844,8 @@ static void* vw_plugin_sender_main(void* arg) {
         if (be) free(be);
         snprintf(sys->cfg_backend, sizeof(sys->cfg_backend), "auto");
       }
+      snprintf(sys->cfg_asr_engine, sizeof(sys->cfg_asr_engine), "%s", vw_plugin_snapshot_asr_engine(asr));
+      if (asr) free(asr);
       if (lg && lg[0]) {
         snprintf(sys->cfg_language, sizeof(sys->cfg_language), "%s", lg);
         free(lg);
@@ -898,6 +913,7 @@ static void* vw_plugin_sender_main(void* arg) {
         char* wp_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "worker-path");
         char* mp_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "model-path");
         char* be_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-backend");
+        char* asr_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-asr-engine");
         char* lg_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-language");
         char* dl_new = config_GetPsz(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-model-download");
         int64_t thr_new = config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-threads");
@@ -912,6 +928,7 @@ static void* vw_plugin_sender_main(void* arg) {
         const char* wp_cmp = wp_new ? wp_new : "";
         const char* mp_cmp = mp_new ? mp_new : "";
         const char* be_cmp = (be_new && be_new[0]) ? be_new : "auto";
+        const char* asr_cmp = vw_plugin_snapshot_asr_engine(asr_new);
         const char* lg_cmp_raw = (lg_new && lg_new[0]) ? lg_new : "en";
         const char* lg_cmp = lg_cmp_raw;
         // Concrete transcription language validation: reject 'auto' visibly and keep prior valid language.
@@ -958,6 +975,7 @@ static void* vw_plugin_sender_main(void* arg) {
         if (strcmp(wp_cmp, sys->cfg_worker_path) != 0) diff = true;
         if (strcmp(mp_cmp, sys->cfg_model_path) != 0) diff = true;
         if (strcmp(be_cmp, sys->cfg_backend) != 0) diff = true;
+        if (strcmp(asr_cmp, sys->cfg_asr_engine) != 0) diff = true;
         if (strcmp(lg_cmp, sys->cfg_language) != 0) diff = true;
         if ((int)thr_new != sys->cfg_threads) diff = true;
         if (logging_new != sys->cfg_logging) diff = true;
@@ -986,6 +1004,7 @@ static void* vw_plugin_sender_main(void* arg) {
             snprintf(sys->cfg_worker_path, sizeof(sys->cfg_worker_path), "%s", wp_cmp);
             snprintf(sys->cfg_model_path, sizeof(sys->cfg_model_path), "%s", mp_cmp);
             snprintf(sys->cfg_backend, sizeof(sys->cfg_backend), "%s", be_cmp);
+            snprintf(sys->cfg_asr_engine, sizeof(sys->cfg_asr_engine), "%s", asr_cmp);
             snprintf(sys->cfg_language, sizeof(sys->cfg_language), "%s", lg_cmp);
             sys->cfg_threads = (int)thr_new;
             sys->cfg_logging = logging_new;
@@ -1035,6 +1054,7 @@ static void* vw_plugin_sender_main(void* arg) {
         if (wp_new) free(wp_new);
         if (mp_new) free(mp_new);
         if (be_new) free(be_new);
+        if (asr_new) free(asr_new);
         if (lg_new) free(lg_new);
         if (dl_new) free(dl_new);
       }
@@ -1790,6 +1810,7 @@ static int vw_plugin_open(vlc_object_t* obj) {
 
   vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_WORKER_LAUNCH", "spawning worker: %s", sys->worker_path);
   char* open_be = config_GetPsz(obj, "whisper-backend");
+  char* open_asr = config_GetPsz(obj, "whisper-asr-engine");
   char* open_lg = config_GetPsz(obj, "whisper-language");
   int64_t open_thr = config_GetInt(obj, "whisper-threads");
   int open_gpu = -1;
@@ -1803,8 +1824,9 @@ static int vw_plugin_open(vlc_object_t* obj) {
                sys->model_path[0] ? sys->model_path : "(bundled/default)",
                open_model_dir[0] ? open_model_dir : "(unavailable)");
   sys->client = vw_plugin_launch_with_auto_retry(
-      sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL, open_be, open_lg,
-      (int)open_thr, open_gpu, open_model_dir[0] ? open_model_dir : NULL, open_logging, open_worker_path_configured);
+      sys->worker_path, sys->pipe_name, sys->auth_token, sys->model_path[0] ? sys->model_path : NULL,
+      (open_asr && open_asr[0]) ? open_asr : "whisper", open_be, open_lg, (int)open_thr, open_gpu,
+      open_model_dir[0] ? open_model_dir : NULL, open_logging, open_worker_path_configured);
   if (sys->client && open_worker_path_configured == false) {
     // If retry succeeded, update stored worker_path to reflect actual launched CPU binary for future respawns.
     // The wrapper does not mutate worker_path; detect CPU fallback via capability or path.
@@ -1812,6 +1834,7 @@ static int vw_plugin_open(vlc_object_t* obj) {
     // we could keep original path — respawn will retry again. That's acceptable (bounded retry each time).
   }
   if (open_be) free(open_be);
+  if (open_asr) free(open_asr);
   atomic_store(&sys->sender_running, true);
   atomic_store(&sys->worker_dead, false);
   atomic_store(&sys->discontinuity_pending, false);
@@ -1825,6 +1848,7 @@ static int vw_plugin_open(vlc_object_t* obj) {
   sys->cfg_worker_path[0] = '\0';
   sys->cfg_model_path[0] = '\0';
   sys->cfg_backend[0] = '\0';
+  sys->cfg_asr_engine[0] = '\0';
   sys->cfg_language[0] = '\0';
   sys->cfg_model_download[0] = '\0';
   sys->cfg_threads = 4;
@@ -1897,13 +1921,15 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
                                                false)
         add_loadfile("model-path", NULL, "Path to bundled ggml-tiny.bin or another model (optional)",
                      "Explicit location of the whisper model; absent user selection discovers bundled tiny first",
-                     false) add_string("whisper-backend", "auto", "Inference backend",
-                                       "auto|gpu|cpu (auto probes Vulkan)",
-                                       false) add_string("whisper-language", "en", "Caption language",
-                                                         "Whisper language code (en|ro|tr|de|fr|es...)", false)
-            add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)", false)
-                change_integer_range(1, 16) add_bool("whisper-logging", false, "Enable diagnostic logging",
-                                                     "Enable VLC-Whisper and worker diagnostic logging", false)
+                     false) add_string("whisper-asr-engine", "whisper", "ASR engine",
+                                       "whisper available; nemotron recognized but unavailable in this build",
+                                       false) add_string("whisper-backend", "auto", "Inference backend",
+                                                         "auto|gpu|cpu (auto probes Vulkan)", false)
+            add_string("whisper-language", "en", "Caption language", "Whisper language code (en|ro|tr|de|fr|es...)",
+                       false) add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)",
+                                          false) change_integer_range(1, 16)
+                add_bool("whisper-logging", false, "Enable diagnostic logging",
+                         "Enable VLC-Whisper and worker diagnostic logging", false)
                     add_string("whisper-backend-active", "", "Active backend (read-only)",
                                "Mirrors resolved backend from worker STATUS (gpu|cpu); informational",
                                false) add_string("whisper-model-download", "", "Model download control",

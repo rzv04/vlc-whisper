@@ -68,7 +68,8 @@ typedef enum vw_error_code {
   E_DISCONTINUITY = 7,
   E_WORKER_CRASH = 8,
   E_INTERNAL = 9,
-  E_SOURCE_OPEN = 10
+  E_SOURCE_OPEN = 10,
+  E_ENGINE_UNAVAILABLE = 11
 } vw_error_code_t;
 
 // Binary frame header (20 bytes packed on wire)
