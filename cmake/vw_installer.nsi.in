@@ -377,6 +377,7 @@ Section "VLC Plugin & AI Engine" SecCore
   ; marker so the plugin uses defaults even if it starts before the GUI recreates JSON.
   Delete "$INSTALL_USER_APPDATA\settings.json"
   Delete "$INSTALL_USER_APPDATA\model-command"
+  ClearErrors
   FileOpen $0 "$INSTALL_USER_APPDATA\reset-settings" w
   ${IfNot} ${Errors}
     FileWrite $0 "reset$\r$\n"
@@ -492,7 +493,12 @@ Section "Uninstall"
   Delete "$INSTDIR\lua\extensions\vlc_whisper_settings.lua"
   RMDir "$INSTDIR\lua\extensions"
   RMDir "$INSTDIR\lua"
+  ClearErrors
   RMDir /r "$INSTDIR\vlc-whisper-settings"
+  ${If} ${FileExists} "$INSTDIR\vlc-whisper-settings\*.*"
+    RMDir /r /REBOOTOK "$INSTDIR\vlc-whisper-settings"
+    SetRebootFlag true
+  ${EndIf}
   Delete "$INSTDIR\vlc-whisper\LICENSE-vlc-whisper.txt"
   Delete "$INSTDIR\vlc-whisper\THIRD_PARTY_NOTICES-vlc-whisper.md"
   RMDir "$INSTDIR\vlc-whisper"
