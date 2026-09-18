@@ -48,7 +48,9 @@ def main() -> None:
     assert "--smoke-test" in settings_cpp and "QT_QPA_PLATFORM=offscreen" in settings_cmake
     assert "QProcess::startDetached" in settings_cpp
     assert "--launch-detached" in settings_cpp
-    assert "vlc_whisper_settings_launcher" in plugin_cmake
+    assert "src/vw_settings_launcher_module.c" in plugin_cmake
+    assert "vw_settings_launcher_module_override.h" in plugin_cmake
+    assert "add_library(vlc_whisper_settings_launcher" not in plugin_cmake
     assert "--launch-detached" in launcher_bridge
     assert "CreateProcessW" in launcher_bridge
     for forbidden in ("system(", "ShellExecute", "cmd.exe", "powershell", "start \"\""):
@@ -65,10 +67,8 @@ def main() -> None:
     assert "try reinstalling vlc-whisper" in lowered
 
     assert "vlc-whisper-settings" in win_installer
-    assert "libvlc_whisper_settings_launcher.dll" in win_installer
     assert "settings.json" in win_installer and "reset-settings" in win_installer
     assert "vlc-whisper-settings" in linux_packaging
-    assert "vlc_whisper_settings_launcher" in linux_packaging
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
     assert "settings.json" in linux_installer and "reset-settings" in linux_installer
 
