@@ -8,14 +8,12 @@
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QGuiApplication>
-#include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocalServer>
 #include <QLocalSocket>
-#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScreen>
@@ -110,11 +108,18 @@ QString vw_read_small_file(const QString& path) {
 }
 
 bool vw_write_small_file(const QString& path, const QByteArray& value) {
-  QDir().mkpath(QFileInfo(path).absolutePath());
+  const QString dir = QFileInfo(path).absolutePath();
+  if (!QDir().mkpath(dir)) return false;
+#ifndef Q_OS_WIN
+  QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+#endif
   QSaveFile file(path);
   if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
-  if (file.write(value) != value.size()) return false;
-  return file.commit();
+  if (file.write(value) != value.size() || !file.commit()) return false;
+#ifndef Q_OS_WIN
+  QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+  return true;
 }
 
 class vw_settings_window_t final : public QWidget {
@@ -179,15 +184,9 @@ class vw_settings_window_t final : public QWidget {
     layout->addWidget(vw_translation_test_result_, 11, 0, 1, 2);
 
     auto* apply = new QPushButton(QStringLiteral("Apply"), this);
-    auto* model_actions = new QWidget(this);
-    auto* model_actions_layout = new QHBoxLayout(model_actions);
-    model_actions_layout->setContentsMargins(0, 0, 0, 0);
-    vw_download_ = new QPushButton(QStringLiteral("Download Selected Model"), model_actions);
-    auto* abort_download = new QPushButton(QStringLiteral("Abort"), model_actions);
-    model_actions_layout->addWidget(vw_download_);
-    model_actions_layout->addWidget(abort_download);
+    vw_download_ = new QPushButton(QStringLiteral("Download Selected Model"), this);
     layout->addWidget(apply, 12, 0);
-    layout->addWidget(model_actions, 12, 1);
+    layout->addWidget(vw_download_, 12, 1);
 
     vw_backend_status_ = new QLabel(this);
     layout->addWidget(vw_backend_status_, 13, 0, 1, 2);
@@ -201,8 +200,8 @@ class vw_settings_window_t final : public QWidget {
 
     connect(how_to_test, &QPushButton::clicked, this, [this]() { vw_show_translation_test_guidance(); });
     connect(apply, &QPushButton::clicked, this, [this]() { vw_save_settings(); });
-    connect(vw_download_, &QPushButton::clicked, this, [this]() { vw_request_download(); });
-    connect(abort_download, &QPushButton::clicked, this, [this]() { vw_request_abort(); });
+    connect(vw_download_, &QPushButton::clicked, this,
+            [this]() { vw_download_pending_ ? vw_request_abort() : vw_request_download(); });
     connect(vw_model_, &QComboBox::currentIndexChanged, this, [this]() {
       vw_force_english_for_english_only_model();
       vw_refresh_model_status();
@@ -235,7 +234,7 @@ class vw_settings_window_t final : public QWidget {
     QScreen* current_screen = screen() ? screen() : QGuiApplication::primaryScreen();
     if (current_screen) target = target.boundedTo(current_screen->availableGeometry().size() * 9 / 10);
     if (target.width() > 0 && target.height() > 0) resize(target);
-    setMinimumSize(QSize(400, 300));
+    setMinimumSize(QSize(320, 240));
   }
 
   static QJsonObject vw_defaults() {
@@ -308,6 +307,7 @@ class vw_settings_window_t final : public QWidget {
     const auto& model = vw_selected_model();
     const bool bundled = vw_bundled_model_exists(model);
     const bool user = QFileInfo::exists(vw_user_model_path(model));
+    if (user) vw_download_pending_ = false;
     if (bundled && user)
       vw_model_status_->setText(QStringLiteral("Model: available (bundled + downloaded)"));
     else if (bundled)
@@ -316,8 +316,13 @@ class vw_settings_window_t final : public QWidget {
       vw_model_status_->setText(QStringLiteral("Model: available (downloaded)"));
     else
       vw_model_status_->setText(QStringLiteral("Model: not installed (download required)"));
-    vw_download_->setText((bundled || user) ? QStringLiteral("Re-download Selected Model")
-                                            : QStringLiteral("Download Selected Model"));
+
+    if (vw_download_pending_) {
+      vw_download_->setText(QStringLiteral("Abort Model Download"));
+    } else {
+      vw_download_->setText((bundled || user) ? QStringLiteral("Re-download Selected Model")
+                                              : QStringLiteral("Download Selected Model"));
+    }
   }
 
   void vw_refresh_backend_status() {
@@ -328,6 +333,9 @@ class vw_settings_window_t final : public QWidget {
 
   bool vw_write_object(const QJsonObject& settings) {
     if (!QDir().mkpath(vw_settings_dir_)) return false;
+#ifndef Q_OS_WIN
+    QFile::setPermissions(vw_settings_dir_, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+#endif
     QSaveFile file(vw_settings_path_);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
     const QByteArray payload = QJsonDocument(settings).toJson(QJsonDocument::Indented);
@@ -343,7 +351,6 @@ class vw_settings_window_t final : public QWidget {
     bool invalid = false;
     const QString reset_path = QDir(vw_settings_dir_).filePath(QStringLiteral("reset-settings"));
     const bool reset = QFileInfo::exists(reset_path);
-    if (reset) QFile::remove(reset_path);
 
     if (!reset) {
       QFile file(vw_settings_path_);
@@ -352,7 +359,8 @@ class vw_settings_window_t final : public QWidget {
           QJsonParseError error;
           const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
           if (error.error == QJsonParseError::NoError && document.isObject()) {
-            for (auto it = document.object().begin(); it != document.object().end(); ++it) settings.insert(it.key(), it.value());
+            const QJsonObject persisted = document.object();
+            for (auto it = persisted.begin(); it != persisted.end(); ++it) settings.insert(it.key(), it.value());
           } else {
             invalid = true;
           }
@@ -360,8 +368,10 @@ class vw_settings_window_t final : public QWidget {
           invalid = true;
         }
       }
+    } else if (vw_write_object(settings)) {
+      QFile::remove(reset_path);
     } else {
-      vw_write_object(settings);
+      invalid = true;
     }
     vw_persisted_ = settings;
 
@@ -378,6 +388,10 @@ class vw_settings_window_t final : public QWidget {
     vw_select(vw_translation_to_,
               settings.value(QStringLiteral("whisper-translate-to")).toString(QStringLiteral("en")));
     vw_select(vw_translation_mode_, settings.value(QStringLiteral("whisper-translate-mode")).toInt(1));
+
+    const QString command = vw_read_small_file(vw_command_path_);
+    const QString status = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-status")));
+    vw_download_pending_ = (!command.isEmpty() && command != QStringLiteral("abort")) || status == QStringLiteral("downloading");
 
     if (invalid)
       vw_backend_status_->setText(QStringLiteral("Detected backend: (settings.json invalid -- using defaults)"));
@@ -428,7 +442,10 @@ class vw_settings_window_t final : public QWidget {
       vw_backend_status_->setText(QStringLiteral("Model request could not be queued"));
       return;
     }
-    vw_backend_status_->setText(QStringLiteral("Model %1: queued (play media to start worker)").arg(model.id));
+    vw_download_pending_ = true;
+    vw_download_->setText(QStringLiteral("Abort Model Download"));
+    vw_backend_status_->setText(
+        QStringLiteral("Model %1: queued (play media to start worker)").arg(QString::fromUtf8(model.id)));
   }
 
   void vw_request_abort() {
@@ -436,6 +453,8 @@ class vw_settings_window_t final : public QWidget {
       vw_backend_status_->setText(QStringLiteral("Model abort could not be queued"));
       return;
     }
+    vw_download_pending_ = false;
+    vw_refresh_model_status();
     vw_backend_status_->setText(QStringLiteral("Model download: abort requested"));
   }
 
@@ -443,6 +462,7 @@ class vw_settings_window_t final : public QWidget {
   const QString vw_settings_path_;
   const QString vw_command_path_;
   QJsonObject vw_persisted_;
+  bool vw_download_pending_ = false;
   QWidget* vw_content_ = nullptr;
   QComboBox* vw_engine_ = nullptr;
   QComboBox* vw_model_ = nullptr;
@@ -481,10 +501,16 @@ int main(int argc, char* argv[]) {
   QApplication::setApplicationName(QStringLiteral("VLC-Whisper Settings"));
   QApplication::setOrganizationName(QStringLiteral("vlc-whisper"));
 
+  if (app.arguments().contains(QStringLiteral("--smoke-test"))) {
+    vw_settings_window_t window;
+    return window.sizeHint().isValid() ? 0 : 1;
+  }
+
   const QString server_name = vw_server_name();
   if (vw_raise_existing(server_name)) return 0;
 
   QLocalServer server;
+  server.setSocketOptions(QLocalServer::UserAccessOption);
   if (!server.listen(server_name)) {
     if (vw_raise_existing(server_name)) return 0;
     QLocalServer::removeServer(server_name);
