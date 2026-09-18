@@ -19,6 +19,10 @@ end
 
 local function show_launch_error()
   log_error("[VLC-Whisper] standalone settings process could not be started")
+  if error_dlg ~= nil then
+    pcall(function() error_dlg:hide() end)
+    error_dlg = nil
+  end
   error_dlg = vlc.dialog("VLC-Whisper Settings Error")
   error_dlg:add_label(
     "The VLC-Whisper settings application could not be summoned. Try reinstalling VLC-Whisper.", 1, 1, 3, 1)
