@@ -13,6 +13,8 @@ def text(path: str) -> str:
 def main() -> None:
     settings_cmake = text("settings/CMakeLists.txt")
     settings_cpp = text("settings/src/vw_qt_settings_main.cpp")
+    plugin_cmake = text("plugin/CMakeLists.txt")
+    launcher_bridge = text("plugin/src/vw_settings_launcher_module.c")
     settings_bridge = text("plugin/src/vw_settings_file.c")
     launcher = text("lua/extensions/vlc_whisper_settings.lua")
     win_installer = text("cmake/vw_installer.nsi.in")
@@ -46,24 +48,27 @@ def main() -> None:
     assert "--smoke-test" in settings_cpp and "QT_QPA_PLATFORM=offscreen" in settings_cmake
     assert "QProcess::startDetached" in settings_cpp
     assert "--launch-detached" in settings_cpp
+    assert "vlc_whisper_settings_launcher" in plugin_cmake
+    assert "--launch-detached" in launcher_bridge
+    assert "CreateProcessW" in launcher_bridge
+    for forbidden in ("system(", "ShellExecute", "cmd.exe", "powershell", "start \"\""):
+        assert forbidden.lower() not in launcher_bridge.lower(), f"native bridge uses shell launcher: {forbidden}"
     assert "spike" not in settings_cmake.lower()
     assert not (ROOT / "spikes/qt-settings").exists(), "production branch must remove the Qt spike"
 
     lowered = launcher.lower()
-    for forbidden in ("while ", "os.clock", "dlg:update", "sleep(", "wait(", "poll("):
-        assert forbidden not in lowered, f"blocking launcher primitive remains: {forbidden}"
-    for shell_artifact in ('start ""', "cmd.exe", "powershell", "conhost"):
-        assert shell_artifact not in lowered, f"launcher must not explicitly spawn shell artifact: {shell_artifact}"
-    assert "--launch-detached" in launcher
+    for forbidden in ("while ", "os.clock", "dlg:update", "sleep(", "wait(", "poll(", "os.execute", "io.popen"):
+        assert forbidden not in lowered, f"blocking/shell launcher primitive remains: {forbidden}"
+    assert 'vlc.stream("vlc-whisper-settings://launch")' in launcher
     assert launcher.count("vlc.dialog(") == 1, "Lua may only use a one-shot launch-error dialog"
     assert "Engine:" not in launcher and "Translation (to):" not in launcher
-    assert "vlc-whisper-settings.exe" in launcher
-    assert "/usr/bin/vlc-whisper-settings" in launcher
     assert "try reinstalling vlc-whisper" in lowered
 
     assert "vlc-whisper-settings" in win_installer
+    assert "libvlc_whisper_settings_launcher.dll" in win_installer
     assert "settings.json" in win_installer and "reset-settings" in win_installer
     assert "vlc-whisper-settings" in linux_packaging
+    assert "vlc_whisper_settings_launcher" in linux_packaging
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
     assert "settings.json" in linux_installer and "reset-settings" in linux_installer
 
