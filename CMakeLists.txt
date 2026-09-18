@@ -59,6 +59,12 @@ if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
 
+    # Tests that compile vw_worker.c directly must use the exact source-local translation diagnostic adapter that the
+    # production worker uses, so cross-component tests exercise the macro-expanded submit/delivery path.
+    set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c DIRECTORY ${CMAKE_SOURCE_DIR}/tests APPEND PROPERTY
+                 COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/worker/include/vw_worker_translation_diag_override.h")
+    set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c DIRECTORY ${CMAKE_SOURCE_DIR}/tests APPEND PROPERTY
+                 COMPILE_DEFINITIONS VW_WORKER_TRANSLATION_DIAG_OVERRIDE=1)
 
     if(VALGRIND_PROGRAM)
         add_custom_target(vw_memcheck_gate

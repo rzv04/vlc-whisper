@@ -22,6 +22,54 @@ typedef struct vw_worker_translation_delivery_view {
   _Atomic bool* fatal_exit;
 } vw_worker_translation_delivery_view_t;
 
+// Keep the worker's transport-fatal state source-local instead of exposing its private delivery context through the
+// public async translation API. The worker main loop is the only IPC writer, and the delivery adapter registers these
+// pointers before captions can reach the translation submit path.
+typedef struct vw_worker_translation_transport_state {
+  vw_ipc_handle_t* handle;
+  _Atomic bool* running;
+  _Atomic bool* fatal_exit;
+  _Atomic bool failed;
+} vw_worker_translation_transport_state_t;
+
+static vw_worker_translation_transport_state_t vw_worker_translation_transport_state = {0};
+
+static inline void vw_worker_translation_diag_register_transport_state(
+    const vw_worker_translation_delivery_view_t* delivery) {
+  if (!delivery || !delivery->handle) return;
+  bool same_state = vw_worker_translation_transport_state.handle == delivery->handle &&
+                    vw_worker_translation_transport_state.running == delivery->running &&
+                    vw_worker_translation_transport_state.fatal_exit == delivery->fatal_exit;
+  if (!same_state) {
+    vw_worker_translation_transport_state.handle = delivery->handle;
+    vw_worker_translation_transport_state.running = delivery->running;
+    vw_worker_translation_transport_state.fatal_exit = delivery->fatal_exit;
+    atomic_store(&vw_worker_translation_transport_state.failed, false);
+  }
+}
+
+static inline void vw_worker_translation_diag_mark_transport_failed(vw_ipc_handle_t* handle) {
+  if (!handle) return;
+  atomic_store(&vw_worker_translation_transport_state.failed, true);
+  if (vw_worker_translation_transport_state.handle != handle) return;
+  if (vw_worker_translation_transport_state.fatal_exit) {
+    atomic_store(vw_worker_translation_transport_state.fatal_exit, true);
+  }
+  if (vw_worker_translation_transport_state.running) {
+    atomic_store(vw_worker_translation_transport_state.running, false);
+  }
+}
+
+// Once a diagnostic write has failed, never append another worker frame to a possibly partial ERROR frame.
+static inline bool vw_worker_translation_diag_guarded_ipc_send(vw_ipc_handle_t* handle, const void* data,
+                                                               size_t size) {
+  if (handle && vw_worker_translation_transport_state.handle == handle &&
+      atomic_load(&vw_worker_translation_transport_state.failed)) {
+    return false;
+  }
+  return vw_ipc_send(handle, data, size);
+}
+
 static inline const char* vw_worker_translation_cause_name(uint8_t cause) {
   switch (cause) {
     case VW_TRANSLATE_FAILURE_PROVIDER:
@@ -172,6 +220,7 @@ static inline void vw_worker_translation_diag_deliver(const vw_translate_async_r
   char detail[VW_MAX_ERROR_MSG_BYTES];
   if (active_session && vw_worker_translation_diag_build(result, &code, detail, sizeof(detail)) &&
       !vw_worker_translation_diag_send(delivery, code, detail)) {
+    vw_worker_translation_diag_mark_transport_failed(delivery->handle);
     if (delivery->fatal_exit) atomic_store(delivery->fatal_exit, true);
     if (delivery->running) atomic_store(delivery->running, false);
     return;
@@ -182,6 +231,13 @@ static inline void vw_worker_translation_diag_deliver(const vw_translate_async_r
 static inline bool vw_worker_translate_async_try_deliver_scoped(
     vw_translate_async_t* async, vw_translate_async_delivery_fn deliver, void* user_data,
     vw_worker_translation_delivery_view_t delivery) {
+  vw_worker_translation_diag_register_transport_state(&delivery);
+  if (delivery.handle == vw_worker_translation_transport_state.handle &&
+      atomic_load(&vw_worker_translation_transport_state.failed)) {
+    if (delivery.fatal_exit) atomic_store(delivery.fatal_exit, true);
+    if (delivery.running) atomic_store(delivery.running, false);
+    return false;
+  }
   vw_worker_translation_diag_context_t context = {.deliver = deliver, .user_data = user_data, .delivery = delivery};
   return vw_translate_async_try_deliver(async, vw_worker_translation_diag_deliver, &context);
 }
@@ -191,10 +247,22 @@ static inline bool vw_worker_translate_async_submit_scoped(vw_translate_async_t*
                                                            const char* source_lang, const char* target_lang,
                                                            vw_ipc_handle_t* handle, uint64_t* sequence,
                                                            const vw_session_id_t* session_id) {
+  if (handle == vw_worker_translation_transport_state.handle &&
+      atomic_load(&vw_worker_translation_transport_state.failed)) {
+    // A prior partial diagnostic write already made this transport unusable. Treat this cue as handled so callers
+    // never append a source-caption fallback while the fatal worker exit is in flight.
+    return true;
+  }
   if (vw_translate_async_submit(async, segment, source_lang, target_lang)) return true;
+
   // A cue that reached the worker translation call site but cannot enter the bounded async pipeline is a local
-  // translation failure. Emit blame before the existing source-only fallback path sends the caption.
-  (void)vw_worker_translation_diag_report_local_rejection(segment, handle, sequence, session_id);
+  // translation failure. Emit blame before the existing source-only fallback path sends the caption. If the
+  // diagnostic itself cannot be sent, suppress that fallback and force the worker through its transport-fatal path;
+  // writing anything after a partial ERROR frame would desynchronize the IPC stream.
+  if (!vw_worker_translation_diag_report_local_rejection(segment, handle, sequence, session_id)) {
+    vw_worker_translation_diag_mark_transport_failed(handle);
+    return true;
+  }
   return false;
 }
 
@@ -217,6 +285,7 @@ static inline bool vw_worker_translate_async_submit_scoped(vw_translate_async_t*
   vw_worker_translate_async_submit_scoped((async), (segment), (source_lang), (target_lang), (handle),   \
                                           VW_WORKER_TRANSLATION_SEQUENCE_PTR(sequence),                  \
                                           VW_WORKER_TRANSLATION_SESSION_PTR(session_id))
+#define vw_ipc_send(handle, data, size) vw_worker_translation_diag_guarded_ipc_send((handle), (data), (size))
 #endif
 
 #endif  // VW_WORKER_TRANSLATION_DIAG_OVERRIDE_H_
