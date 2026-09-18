@@ -14,9 +14,9 @@ def main() -> None:
     settings_cmake = text("settings/CMakeLists.txt")
     settings_cpp = text("settings/src/vw_qt_settings_main.cpp")
     plugin_cmake = text("plugin/CMakeLists.txt")
-    plugin_module = text("plugin/src/vw_whisper_module.c")
     launcher_bridge = text("plugin/src/vw_settings_launcher_module.c")
     settings_bridge = text("plugin/src/vw_settings_file.c")
+    config_bridge = text("plugin/include/vw_settings_config_override.h")
     launcher = text("lua/extensions/vlc_whisper_settings.lua")
     win_installer = text("cmake/vw_installer.nsi.in")
     linux_packaging = text("cmake/vw_packaging_linux.cmake")
@@ -74,8 +74,9 @@ def main() -> None:
     assert "try reinstalling vlc-whisper" in lowered
 
     assert "vw_settings_ack_model_command" in settings_bridge
-    assert "vw_settings_ack_model_command" in plugin_module
-    assert "translate-enabled-effective" in settings_bridge
+    assert "vw_settings_ack_model_command" in config_bridge
+    assert "vw_settings_last_model_command" in config_bridge
+    assert "translate-enabled-effective" in settings_bridge and "translate-enabled-effective" in settings_cpp
 
     assert "vlc-whisper-settings" in win_installer
     assert "settings.json" in win_installer and "reset-settings" in win_installer
@@ -83,7 +84,7 @@ def main() -> None:
     assert 'RMDir /r /REBOOTOK "$INSTDIR\\vlc-whisper-settings"' in win_installer
     assert "vlc-whisper-settings" in linux_packaging
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
-    assert "VW_LINUX_RELEASE_PACKAGE" in linux_packaging
+    assert "vw_require_settings_for_package" in linux_packaging
     assert "runuser" in linux_postinst and "runuser" in linux_installer
     assert "settings.json" in linux_installer and "reset-settings" in linux_installer
     assert 'subgraph SETTINGS["Standalone Settings Process"]' in readme
