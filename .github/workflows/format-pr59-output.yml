@@ -1,0 +1,31 @@
+name: PR 59 formatter output
+
+on:
+  push:
+    branches:
+      - fix/p3-p4-ledger-issues
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/p3-p4-ledger-issues
+          fetch-depth: 0
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+      - name: Format and stage output branch
+        run: |
+          clang-format -i worker/src/vw_worker.c tests/unit/test_protocol_edge_contracts.c
+          rm -f .github/workflows/format-pr59.yml .github/workflows/format-pr59-output.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker/src/vw_worker.c tests/unit/test_protocol_edge_contracts.c .github/workflows/format-pr59.yml .github/workflows/format-pr59-output.yml
+          git commit -m "style(worker): apply clang format"
+          git push origin HEAD:refs/heads/automation/pr59-format-output --force
