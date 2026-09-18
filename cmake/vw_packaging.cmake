@@ -103,6 +103,10 @@ if(WIN32)
       set(VW_CPU_FALLBACK_TARGET vw_cpu_worker_fallback)
     endif()
 
+    if(NOT TARGET vw_settings_deploy)
+      message(FATAL_ERROR "VW: Windows installer requires the production Qt settings deployment target")
+    endif()
+
     add_custom_target(installer
       COMMAND ${CMAKE_COMMAND}
               -DMODEL_PATH=${VW_MODEL_TINY}
@@ -124,13 +128,14 @@ if(WIN32)
               -DWHISPER_MODEL_SHA256=${VW_MODEL_TINY_SHA256}
               -DVAD_MODEL_PATH=${VW_MODEL_VAD}
               -DVAD_MODEL_SHA256=${VW_MODEL_VAD_SHA256}
+              -DSETTINGS_DIR=${VW_SETTINGS_DEPLOY_DIR}
               -DSTAGE_DIR=${VW_STAGE_DIR}
               -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_check_workers.cmake
       COMMAND ${MAKENSIS_EXECUTABLE} ${NSIS_SCRIPT_OUT}
-      DEPENDS vlc_whisper_plugin vlc-whisper-worker ${VW_CPU_FALLBACK_TARGET}
+      DEPENDS vlc_whisper_plugin vlc-whisper-worker vw_settings_deploy ${VW_CPU_FALLBACK_TARGET}
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMENT "Compiling standalone Windows setup installer with verified workers and models..."
+      COMMENT "Compiling standalone Windows setup installer with verified workers, models, and settings app..."
       VERBATIM
     )
   else()
@@ -160,6 +165,9 @@ if(WIN32)
   if(GGML_VULKAN)
     install(FILES "${CMAKE_BINARY_DIR}/worker/vlc-whisper-worker-cpu.exe" DESTINATION .)
   endif()
+  if(TARGET vw_settings_deploy)
+    install(DIRECTORY "${VW_SETTINGS_DEPLOY_DIR}/" DESTINATION vlc-whisper-settings)
+  endif()
 
   # Explicit allowlist: never package arbitrary gitignored models from the maintainer checkout.
   install(FILES
@@ -179,9 +187,11 @@ if(WIN32)
   )
 
   include(CPack)
-  # CPack's `package` target is otherwise independent of the generated CPU
-  # fallback, so a direct `cmake --build . --target package` could omit it.
+  # CPack's `package` target is otherwise independent of generated release helpers.
   if(TARGET package AND TARGET vw_cpu_worker_fallback)
     add_dependencies(package vw_cpu_worker_fallback)
+  endif()
+  if(TARGET package AND TARGET vw_settings_deploy)
+    add_dependencies(package vw_settings_deploy)
   endif()
 endif()
