@@ -571,11 +571,32 @@ int main(void) {
   assert(g_put_subpicture_calls == 1);
   assert(strcmp(g_last_subpic_text, "Hello world\nSalut lume") == 0);
 
+  // Test 23: A paused local-media cue persists and is replaced exactly once by the post-seek cue.
+  g_mock_mdate = 700000000LL;
+  g_mock_rate = 1.0f;
+  g_put_subpicture_calls = 0;
+  g_flush_calls = 0;
+  assert(vw_caption_presenter_show_paused(&spu_presenter, &trans_cue));
+  assert(g_last_subpic_b_ephemer == true);
+  assert(strcmp(g_last_subpic_text, "Hello world\nSalut lume") == 0);
+
+  vw_caption_segment_t paused_seek_cue = {.start_pts_us = 900000000LL,
+                                         .end_pts_us = 902000000LL,
+                                         .text_utf8 = (char*)"Caption after paused seek",
+                                         .text_bytes = 25,
+                                         .is_final = true};
+  int puts_before_seek_preview = g_put_subpicture_calls;
+  assert(vw_caption_presenter_show_paused(&spu_presenter, &paused_seek_cue));
+  assert(g_put_subpicture_calls == puts_before_seek_preview + 1);
+  assert(g_last_flush_sequence < g_last_put_sequence);
+  assert(g_last_subpic_b_ephemer == true);
+  assert(strcmp(g_last_subpic_text, "Caption after paused seek") == 0);
+
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (22/22 tests)\n");
+  printf("test_caption_presenter PASSED (23/23 tests)\n");
   return 0;
 }

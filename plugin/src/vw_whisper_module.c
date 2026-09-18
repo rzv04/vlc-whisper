@@ -800,6 +800,7 @@ static void* vw_plugin_sender_main(void* arg) {
   int64_t current_position_us = -1;  // latest sampled media position for SPU timing
   float last_playback_rate = 1.0f;   // VW-011: rate change detection
   int64_t last_source_seek_us = -1;  // VW-014: source-mode stale segment filter
+  bool paused_caption_pending = false;
   while (atomic_load(&sys->sender_running)) {
     // 19b: 2s-cadence snapshot compare of worker-path/model-path/backend/language/threads.
     // single respawn via vw_plugin_respawn_worker, guarded against re-entry.
@@ -1073,6 +1074,10 @@ static void* vw_plugin_sender_main(void* arg) {
     // Throttle the object-tree walk to ~100ms: vlc_list_children allocates per level, and pause
     // state only changes at human timescale (8s windows make 100ms detection lag irrelevant).
     bool now_paused = paused;
+    bool show_paused_subtitles =
+        config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-show-paused") != 0;
+    bool source_pause_preview =
+        now_paused && show_paused_subtitles && atomic_load(&sys->source_mode_active);
     int64_t now_us = vw_platform_get_monotonic_time_us();
     if (now_us - last_pause_poll_us >= 100000) {
       last_pause_poll_us = now_us;
@@ -1136,6 +1141,8 @@ static void* vw_plugin_sender_main(void* arg) {
         }
       }
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
+      source_pause_preview =
+          now_paused && show_paused_subtitles && atomic_load(&sys->source_mode_active);
       {
         float rate_diff = playback_rate - last_playback_rate;
         if (rate_diff < 0) rate_diff = -rate_diff;
@@ -1149,7 +1156,7 @@ static void* vw_plugin_sender_main(void* arg) {
           if (position_us >= 0 && atomic_load(&sys->session_active)) {
             current_position_us = position_us;
             if (!vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
-                                                now_paused ? VW_POSITION_FLAG_PAUSED : 0)) {
+                                                now_paused && !source_pause_preview ? VW_POSITION_FLAG_PAUSED : 0)) {
               atomic_store(&sys->worker_dead, true);
               if (input) vlc_object_release((vlc_object_t*)input);
               last_playback_rate = playback_rate;
@@ -1160,7 +1167,7 @@ static void* vw_plugin_sender_main(void* arg) {
         } else if (position_us >= 0 && atomic_load(&sys->session_active)) {
           current_position_us = position_us;
           if (!vw_worker_client_send_position(sys->client, current_position_us, current_position_us, playback_rate,
-                                              now_paused ? VW_POSITION_FLAG_PAUSED : 0)) {
+                                              now_paused && !source_pause_preview ? VW_POSITION_FLAG_PAUSED : 0)) {
             atomic_store(&sys->worker_dead, true);
             if (input) vlc_object_release((vlc_object_t*)input);
             continue;  // top of loop: respawn the worker
@@ -1201,21 +1208,35 @@ static void* vw_plugin_sender_main(void* arg) {
           (position_us >= 0 && last_position_us >= 0 && (position_us - last_position_us >= seek_threshold_us));
       bool is_pos_backward_seek =
           (position_us >= 0 && last_position_us >= 0 && (last_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US));
-      if (is_pos_forward_seek || is_pos_backward_seek) {
+      bool is_paused_seek =
+          (now_paused && paused_position_us >= 0 && position_us >= 0 &&
+           (position_us - paused_position_us > VW_PTS_JUMP_THRESHOLD_US ||
+            paused_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US));
+      if (is_pos_forward_seek || is_pos_backward_seek || is_paused_seek) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; seek signaled",
                      (long long)(position_us - last_position_us));
         atomic_store(&sys->discontinuity_pending, true);
         atomic_store(&sys->resume_pts_us, position_us);
+        if (is_paused_seek) paused_position_us = position_us;
       }
       if (position_us >= 0) last_position_us = position_us;
       if (input) vlc_object_release((vlc_object_t*)input);
     }
     if (now_paused != paused) {
       if (now_paused) {
-        vw_caption_presenter_blank(&sys->presenter);
-        vw_worker_client_pause_session(sys->client);
-        vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PAUSE", "playback paused; PCM forwarding suspended");
+        if (source_pause_preview) {
+          if (current_position_us >= 0) {
+            atomic_store(&sys->discontinuity_pending, true);
+            atomic_store(&sys->resume_pts_us, current_position_us);
+          }
+          vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PAUSE", "local caption held; source look-ahead remains active");
+        } else {
+          vw_caption_presenter_blank(&sys->presenter);
+          vw_worker_client_pause_session(sys->client);
+          vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_PAUSE", "playback paused; PCM forwarding suspended");
+        }
       } else {
+        paused_caption_pending = false;
         vw_caption_presenter_blank(&sys->presenter);
         vw_worker_client_resume_session(sys->client);
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_RESUME", "playback resumed; PCM forwarding active");
@@ -1232,10 +1253,16 @@ static void* vw_plugin_sender_main(void* arg) {
       int64_t seek_target_us = (current_position_us >= 0) ? current_position_us : resume_pts_us;
       atomic_store(&sys->discontinuity_pending, false);
       bool is_source_mode = atomic_load(&sys->source_mode_active);
+      bool preview_after_paused_seek = paused && is_source_mode && show_paused_subtitles;
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY",
-                   "seek/discontinuity at %lldus mode=%s; blanking presenter", (long long)seek_target_us,
-                   is_source_mode ? "source" : "live");
-      vw_caption_presenter_blank(&sys->presenter);
+                   "seek/discontinuity at %lldus mode=%s paused_preview=%d", (long long)seek_target_us,
+                   is_source_mode ? "source" : "live", preview_after_paused_seek ? 1 : 0);
+      if (preview_after_paused_seek) {
+        paused_caption_pending = true;
+      } else {
+        vw_caption_presenter_blank(&sys->presenter);
+        paused_caption_pending = false;
+      }
       vw_audio_chunk_t stale;
       vw_benchmark_reset_live_clock(&sys->benchmark);
       while (vw_spsc_queue_pop(sys->queue, &stale)) {
@@ -1374,6 +1401,13 @@ static void* vw_plugin_sender_main(void* arg) {
             // in the OSD clock domain (mdate), which this VLC build displays reliably.
             if (vw_caption_presenter_show_segment(&sys->presenter, &recv.segment, current_position_us,
                                                   is_source_mode)) {
+              vw_benchmark_record_caption_sent(&sys->benchmark, vw_platform_get_monotonic_time_us());
+            } else {
+              vw_benchmark_record_caption_filtered(&sys->benchmark, false, false, true);
+            }
+          } else if (is_source_mode && show_paused_subtitles && paused_caption_pending) {
+            paused_caption_pending = false;
+            if (vw_caption_presenter_show_paused(&sys->presenter, &recv.segment)) {
               vw_benchmark_record_caption_sent(&sys->benchmark, vw_platform_get_monotonic_time_us());
             } else {
               vw_benchmark_record_caption_filtered(&sys->benchmark, false, false, true);
@@ -1904,7 +1938,10 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
             add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)", false)
                 change_integer_range(1, 16) add_bool("whisper-logging", false, "Enable diagnostic logging",
                                                      "Enable VLC-Whisper and worker diagnostic logging", false)
-                    add_string("whisper-backend-active", "", "Active backend (read-only)",
+                    add_bool("whisper-show-paused", true, "Show subtitles while paused",
+                             "Local files only: hold the current cue and preview the first cue after a paused seek",
+                             false)
+                        add_string("whisper-backend-active", "", "Active backend (read-only)",
                                "Mirrors resolved backend from worker STATUS (gpu|cpu); informational",
                                false) add_string("whisper-model-download", "", "Model download control",
                                                  "Catalog id to download or abort; plugin relays as MODEL_CTRL", false)
