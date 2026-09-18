@@ -14,6 +14,7 @@
 #include <QLineEdit>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScreen>
@@ -497,6 +498,14 @@ bool vw_raise_existing(const QString& server_name) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--launch-detached")) {
+    QCoreApplication launcher(argc, argv);
+    qint64 pid = 0;
+    const bool started = QProcess::startDetached(QCoreApplication::applicationFilePath(), QStringList{},
+                                                 QCoreApplication::applicationDirPath(), &pid);
+    return started ? 0 : 3;
+  }
+
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("VLC-Whisper Settings"));
   QApplication::setOrganizationName(QStringLiteral("vlc-whisper"));
