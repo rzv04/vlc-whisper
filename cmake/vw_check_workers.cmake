@@ -9,6 +9,9 @@ endif()
 if(NOT DEFINED SOURCE_ROOT)
   message(FATAL_ERROR "SOURCE_ROOT not defined")
 endif()
+if(NOT DEFINED SETTINGS_DIR OR NOT EXISTS "${SETTINGS_DIR}/vlc-whisper-settings.exe")
+  message(FATAL_ERROR "Missing deployed Qt settings application in '${SETTINGS_DIR}'")
+endif()
 set(_gpu "${WORKER_DIR}/vlc-whisper-worker.exe")
 set(_cpu "${WORKER_DIR}/vlc-whisper-worker-cpu.exe")
 
@@ -53,7 +56,7 @@ endfunction()
 # model snapshots consumed by NSIS. Validation never authorizes a later copy of
 # a mutable source path.
 file(REMOVE_RECURSE "${STAGE_DIR}")
-file(MAKE_DIRECTORY "${STAGE_DIR}/models")
+file(MAKE_DIRECTORY "${STAGE_DIR}/models" "${STAGE_DIR}/settings")
 if(EXISTS "${_gpu}")
   file(COPY "${_gpu}" DESTINATION "${STAGE_DIR}")
 endif()
@@ -67,6 +70,7 @@ file(COPY "${SOURCE_ROOT}/models/manifest.json" DESTINATION "${STAGE_DIR}/models
 file(COPY "${SOURCE_ROOT}/lua" DESTINATION "${STAGE_DIR}")
 file(COPY "${SOURCE_ROOT}/LICENSE" DESTINATION "${STAGE_DIR}")
 file(COPY "${SOURCE_ROOT}/THIRD_PARTY_NOTICES.md" DESTINATION "${STAGE_DIR}")
+file(COPY "${SETTINGS_DIR}/" DESTINATION "${STAGE_DIR}/settings")
 
 get_filename_component(_whisper_model_name "${WHISPER_MODEL_PATH}" NAME)
 get_filename_component(_vad_model_name "${VAD_MODEL_PATH}" NAME)
@@ -74,4 +78,12 @@ vw_verify_release_model("${STAGE_DIR}/models/${_whisper_model_name}" "${WHISPER_
                         "staged Whisper tiny")
 vw_verify_release_model("${STAGE_DIR}/models/${_vad_model_name}" "${VAD_MODEL_SHA256}" "staged Silero VAD")
 
-message(STATUS "Release inputs validated: gpu=${_gpu} cpu=${_cpu} plugin=${PLUGIN_PATH}")
+file(GLOB_RECURSE _vw_stage_files RELATIVE "${STAGE_DIR}" "${STAGE_DIR}/*")
+foreach(_vw_stage_file IN LISTS _vw_stage_files)
+  string(TOLOWER "${_vw_stage_file}" _vw_stage_lower)
+  if(_vw_stage_lower MATCHES "spike")
+    message(FATAL_ERROR "Refusing to package stale spike artifact '${_vw_stage_file}'")
+  endif()
+endforeach()
+
+message(STATUS "Release inputs validated: gpu=${_gpu} cpu=${_cpu} plugin=${PLUGIN_PATH} settings=${SETTINGS_DIR}")
