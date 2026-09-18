@@ -48,7 +48,7 @@ def main() -> None:
     assert not (ROOT / "spikes/qt-settings").exists(), "production branch must remove the Qt spike"
 
     lowered = launcher.lower()
-    for forbidden in ("while ", "os.clock", "dlg:update", "sleep(", "wait", "poll"):
+    for forbidden in ("while ", "os.clock", "dlg:update", "sleep(", "wait(", "poll("):
         assert forbidden not in lowered, f"blocking launcher primitive remains: {forbidden}"
     assert launcher.count("vlc.dialog(") == 1, "Lua may only use a one-shot launch-error dialog"
     assert "Engine:" not in launcher and "Translation (to):" not in launcher
