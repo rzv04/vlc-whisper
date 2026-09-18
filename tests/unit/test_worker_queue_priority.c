@@ -206,6 +206,30 @@ int main(void) {
   free(frame.payload);
   vw_worker_queue_destroy(wrong_position);
 
+  // A stale POSITION cannot replace an already established audio epoch and promote its matching control.
+  vw_worker_queue_t* stale_position_epoch = vw_worker_queue_create(4);
+  EXPECT(stale_position_epoch != NULL);
+  uint32_t epoch_audio_len = 0, epoch_position_len = 0, epoch_pause_len = 0;
+  uint8_t* epoch_audio = make_audio_payload(130000, 12, &epoch_audio_len);
+  uint8_t* epoch_position = make_position_payload(13, 0, &epoch_position_len);
+  uint8_t* epoch_pause = make_control_payload(VW_MSG_PAUSE, 13, &epoch_pause_len);
+  EXPECT(vw_worker_queue_push(stale_position_epoch, VW_MSG_AUDIO_PCM, epoch_audio, epoch_audio_len));
+  EXPECT(vw_worker_queue_push(stale_position_epoch, VW_MSG_POSITION, epoch_position, epoch_position_len));
+  EXPECT(vw_worker_queue_push(stale_position_epoch, VW_MSG_PAUSE, epoch_pause, epoch_pause_len));
+  EXPECT(vw_worker_queue_pop_prioritized(stale_position_epoch, &frame));
+  EXPECT(frame.type == VW_MSG_AUDIO_PCM);
+  EXPECT(frame.payload == epoch_audio);
+  free(frame.payload);
+  EXPECT(vw_worker_queue_get_dropped_audio_us(stale_position_epoch) == 0);
+  EXPECT(vw_worker_queue_pop_prioritized(stale_position_epoch, &frame));
+  EXPECT(frame.type == VW_MSG_POSITION);
+  EXPECT(frame.payload == epoch_position);
+  free(frame.payload);
+  EXPECT(vw_worker_queue_pop_prioritized(stale_position_epoch, &frame));
+  EXPECT(frame.type == VW_MSG_PAUSE);
+  free(frame.payload);
+  vw_worker_queue_destroy(stale_position_epoch);
+
   // Authentication ordering is never bypassed even when START is already queued behind HELLO.
   vw_worker_queue_t* auth = vw_worker_queue_create(4);
   EXPECT(auth != NULL);

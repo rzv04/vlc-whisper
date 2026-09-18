@@ -94,15 +94,27 @@ static bool vw_worker_queue_control_applies_to_preceding_epoch(const vw_worker_q
   if (control->type == VW_MSG_SHUTDOWN) return true;
 
   size_t preceding_epoch = q->head;
+  bool audio_epoch_established = false;
+  vw_session_id_t preceding_session;
   for (size_t i = q->tail; i < lifecycle; i++) {
-    uint16_t type = q->slots[i % q->capacity].type;
-    if (type == VW_MSG_AUDIO_PCM || type == VW_MSG_POSITION) preceding_epoch = i;
+    const vw_worker_frame_t* frame = &q->slots[i % q->capacity];
+    if (frame->type != VW_MSG_AUDIO_PCM && frame->type != VW_MSG_POSITION) continue;
+
+    vw_session_id_t frame_session;
+    if (!vw_worker_queue_frame_session_id(frame, &frame_session)) return false;
+    if (frame->type == VW_MSG_AUDIO_PCM) {
+      preceding_epoch = i;
+      preceding_session = frame_session;
+      audio_epoch_established = true;
+    } else if (!audio_epoch_established ||
+               memcmp(frame_session.bytes, preceding_session.bytes, VW_SESSION_ID_BYTES) == 0) {
+      // POSITION refines an established audio epoch only when its session matches. Without queued audio, the newest
+      // POSITION is the only available epoch evidence and remains authoritative for PAUSE/RESUME promotion.
+      preceding_epoch = i;
+      preceding_session = frame_session;
+    }
   }
   if (preceding_epoch == q->head) return true;
-
-  vw_session_id_t preceding_session;
-  const vw_worker_frame_t* preceding_frame = &q->slots[preceding_epoch % q->capacity];
-  if (!vw_worker_queue_frame_session_id(preceding_frame, &preceding_session)) return false;
 
   if (control->type == VW_MSG_START_SESSION) {
     vw_msg_start_t start;
