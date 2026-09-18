@@ -130,7 +130,8 @@ static void test_protocol_validate_control_reasons(void) {
   vw_test_check_true("valid source open error code accepted", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
 
   err_msg.error_code = VW_ERROR_MAX + 1;
-  vw_test_check_false("out-of-range error code rejected", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
+  vw_test_check_false("out-of-range error code rejected",
+                      vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
 }
 
 static void test_protocol_validate_pcm_alignment(void) {
