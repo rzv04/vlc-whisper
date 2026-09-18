@@ -11,9 +11,9 @@ The former `spikes/qt-settings/` implementation was a feasibility reference only
 ## Non-negotiable invariants
 
 - The Lua extension remains discoverable as `VLC-Whisper Settings`, but no longer owns the settings form.
-- Lua performs no polling loops, timers, sleeps, window-ready probes, child-lifetime monitoring, worker IPC loops, HTTP, model hashing, or long-running callbacks.
-- Launch acknowledgement is bounded to process creation: Lua invokes `vlc-whisper-settings --launch-detached`; that short Qt bootstrap calls `QProcess::startDetached()` and returns success only when the OS creates the real settings process.
-- No `start`, `cmd.exe`, PowerShell, or console-helper command is part of the launcher path. The Windows settings target is a GUI executable.
+- Lua performs no shell process launch, polling loops, timers, sleeps, window-ready probes, child-lifetime monitoring, worker IPC loops, HTTP, model hashing, or long-running callbacks.
+- Launch acknowledgement is bounded to process creation: Lua opens `vlc-whisper-settings://launch`; the existing VLC-Whisper plugin handles that local access URI without a command shell and invokes the GUI's short `--launch-detached` bootstrap. The bootstrap calls `QProcess::startDetached()` and returns success only when the OS creates the real settings process.
+- No `os.execute`, `io.popen`, `start`, `cmd.exe`, PowerShell, or console-helper command is part of the launcher path. The Windows settings target is a GUI executable.
 - A later crash of the detached settings process is outside the Lua extension's responsibility.
 - The standalone settings process owns UI and durable user-setting edits, not inference and not network/model download execution.
 - HTTP model downloading remains owned by the worker (ADR-023). The settings app may request/cancel downloads and display local status, but it must not perform HTTP or SHA-256 download verification itself.
@@ -68,20 +68,20 @@ HTTP, manifest allowlisting, `.part` handling, SHA-256 verification, and final i
 
 ### 4. Lua launcher
 
-`lua/extensions/vlc_whisper_settings.lua` contains only descriptor/menu metadata, executable discovery, the short acknowledged bootstrap invocation, logging, and a one-shot error dialog. A successful bootstrap means process creation succeeded; it does not promise that the window painted or that the child stayed alive.
+`lua/extensions/vlc_whisper_settings.lua` contains only descriptor/menu metadata, a local `vlc.stream()` call to the plugin's launcher access submodule, logging, and a one-shot error dialog. The native bridge uses `CreateProcessW(..., CREATE_NO_WINDOW, ...)` on Windows or `posix_spawn()` on Linux to invoke the Qt bootstrap. A successful bootstrap means `QProcess::startDetached()` created the real process; it does not promise that the window painted or that the child stayed alive.
 
 ### 5. Packaging
 
-Windows installs the GUI executable and deployed Qt runtime in the VLC-Whisper install area. Ubuntu/Debian installs `/usr/bin/vlc-whisper-settings` and declares the Qt runtime dependencies. No shipped artifact contains `spike` naming.
+Windows installs the GUI executable and deployed Qt runtime in the VLC-Whisper install area. The shell-free launcher bridge is embedded in the existing VLC-Whisper plugin, so no extra launcher executable or DLL is shipped. Ubuntu/Debian installs `/usr/bin/vlc-whisper-settings` and declares the Qt runtime dependencies. No shipped artifact contains `spike` naming.
 
 ## Test-first implementation sequence
 
 1. Freeze settings defaults/validation/path semantics in network-free tests.
 2. Add persistence and plugin-pickup checks, then implement shared per-user settings.
-3. Add launcher contract checks, then reduce Lua and add Qt `startDetached()` acknowledgement.
+3. Add launcher contract checks, then reduce Lua, add the native shell-free access bridge, and add Qt `startDetached()` acknowledgement.
 4. Add model-command checks, then wire request/abort while retaining worker HTTP ownership.
 5. Add packaging assertions and headless Qt smoke coverage, then remove the spike directory and stale docs.
 
 ## Acceptance criteria
 
-The VLC menu entry opens the standalone Qt settings app through acknowledged `QProcess::startDetached()` process creation without polling or blank shell-window helpers; current settings persist and apply live; settings storage requires no elevation; reinstall resets the JSON settings file; model download remains worker-owned; settings performs no translation HTTP test; Windows and Ubuntu packages include the production GUI; the spike directory is gone; network-free/headless checks pass; and the completed branch is submitted as a PR.
+The VLC menu entry opens the standalone Qt settings app through a shell-free VLC access bridge and acknowledged `QProcess::startDetached()` process creation without polling or blank shell-window helpers; current settings persist and apply live; settings storage requires no elevation; reinstall resets the JSON settings file; model download remains worker-owned; settings performs no translation HTTP test; Windows and Ubuntu packages include the production GUI; the spike directory is gone; network-free/headless checks pass; and the completed branch is submitted as a PR.
