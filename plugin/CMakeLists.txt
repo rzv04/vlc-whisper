@@ -2,7 +2,7 @@
 # removal to the current VLC object, bridge standalone settings, append the shell-free launcher access submodule, and
 # route translation diagnostics before the legacy generic-error switch sees them.
 set_source_files_properties(src/vw_whisper_module.c PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_config_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_launcher_module_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_preclose_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_plugin_log_scope_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_module_override.h"
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_plugin_log_scope_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_config_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_launcher_module_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_preclose_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_module_override.h"
     COMPILE_DEFINITIONS "VW_PLUGIN_LOG_SCOPE_OVERRIDE=1"
 )
 
