@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%20(Official)%20%7C%20Linux%20(Preview)-informational" alt="Platforms">
   <img src="https://img.shields.io/badge/VLC-3.0.23%2B%20(64--bit)-orange" alt="VLC 3.0.23+">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
+  <img src="https://img.shields.io/badge/core-C17-blue" alt="C17 core">
 </p>
 
 > **Private, local real-time AI captions for VLC, with optional live text translation.**
@@ -67,7 +67,7 @@ Download the matching `vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubunt
 sudo apt install ./vlc-whisper-ubuntu-<version>-amd64.deb
 ```
 
-The package installs the native audio filter, isolated worker, bundled models, and `VLC-Whisper Settings` Lua extension and refreshes VLC's plugin cache.
+The package installs the native audio filter, isolated worker, bundled models, the minimal `VLC-Whisper Settings` Lua launcher, and `/usr/bin/vlc-whisper-settings`, then refreshes VLC's plugin cache.
 
 Uninstall either installation with:
 
@@ -79,15 +79,15 @@ sudo apt remove vlc-whisper
 
 - Local Whisper transcription with Vulkan GPU acceleration or CPU fallback.
 - Local files, network VoD, IPTV, and live/non-seekable media.
-- In-VLC settings for backend, model, language, threads, and translation.
-- Explicit model downloads with SHA-256 integrity verification.
+- Standalone Qt settings for backend, model, language, threads, paused subtitles, and translation.
+- Explicit model downloads with SHA-256 integrity verification in the worker process.
 - Optional translation of finalized subtitle text.
 - Worker-process isolation so caption failures do not block VLC playback.
 - Seek, pause/resume, media-swap, and discontinuity handling through caption-session epochs.
 
 ## Settings
 
-Open `View > VLC-Whisper Settings`.
+Open `View > VLC-Whisper Settings`. The Lua extension immediately launches the standalone Qt settings process and deactivates; it does not poll, wait for the child, or perform network work.
 
 ![settings](./assets/vlc-whisper-settings.png)
 
@@ -97,10 +97,11 @@ Open `View > VLC-Whisper Settings`.
 - **CPU threads:** `4` is a reasonable default for many systems.
 - **Paused subtitles:** enabled by default for local files; holds the visible cue and previews the first cue after seeking while paused.
 - **Translation:** disabled by default; choose translation-only or dual-line display when enabled.
-- **Model download:** choose a model and press **Download Selected Model**.
+- **Model download:** choose a model and press **Download Selected Model**. The button becomes **Abort Model Download** while that request is pending.
 
-> [!WARNING]
-> The settings UI is currently a VLC Lua extension. VLC extension limitations can leave displayed model/configuration state stale until **Apply** is pressed; treat the applied configuration as authoritative.
+Settings are written atomically without elevation to `%LOCALAPPDATA%\vlc-whisper\settings.json` on Windows or `$XDG_CONFIG_HOME/vlc-whisper/settings.json` (default `~/.config/vlc-whisper/settings.json`) on Linux. Installing the project again intentionally resets that JSON to the current defaults; downloaded models remain separate user data.
+
+If the launcher cannot resolve or start the settings executable immediately, VLC shows a small reinstall error. It intentionally does not wait approximately one second to verify window creation because VLC 3 Lua has no nonblocking child-liveness primitive; sleeping, joining, or polling there would violate the UI-thread invariant.
 
 ## Privacy and Network Behavior
 
@@ -108,7 +109,8 @@ Open `View > VLC-Whisper Settings`.
 > **Transcription audio stays local.** Network access is limited to explicit model downloads and opt-in translation. VLC-Whisper does not use cloud transcription or telemetry.
 
 - **Transcription/audio:** local only.
-- **Model downloads:** explicit user action; downloaded model bytes are integrity-checked before activation.
+- **Settings UI:** local filesystem and local single-instance signalling only; it performs no HTTP requests.
+- **Model downloads:** explicit user action; the worker downloads and integrity-checks model bytes before activation.
 - **Translation:** opt-in; finalized subtitle text is sent over HTTPS. Audio is never sent for translation.
 - **Logs:** diagnostics are opt-in and must not contain PCM, subtitle bodies, tokens, or credentials.
 
@@ -160,14 +162,15 @@ See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and
 
 ## Architecture
 
-VLC-Whisper separates realtime VLC integration from inference and network-capable worker tasks:
+VLC-Whisper separates realtime VLC integration from settings, inference, and network-capable worker tasks:
 
 ```mermaid
 flowchart TB
     subgraph VLC["VLC Media Player Process"]
         AOUT["Audio Output Pipeline"] -->|"PCM callback"| PLUGIN["vlc_whisper audio filter"]
-        GUI["Lua settings"] -->|"config / download trigger"| PLUGIN
-        PLUGIN -->|"bounded SPSC queue"| SENDER["Plugin sender thread"]
+        LUA["VLC-Whisper Settings Lua launcher"] -->|"detached launch"| QT["Standalone Qt settings process"]
+        QT -->|"atomic per-user settings.json / one-shot model command"| SENDER["Plugin sender thread"]
+        PLUGIN -->|"bounded SPSC queue"| SENDER
         SENDER -->|"SPU subpictures"| SPU["VLC video output"]
     end
 
@@ -201,14 +204,14 @@ Cross-component contracts are summarized in [`docs/invariants.md`](docs/invarian
 sudo apt-get update
 sudo apt-get install -y cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr nsis curl pkg-config dpkg-dev \
   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
-  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libvulkan-dev glslc
+  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libvulkan-dev glslc qt6-base-dev
 ```
 
 ### Fedora / RHEL
 
 ```bash
 sudo dnf install -y cmake ninja-build gcc gcc-c++ clang-tools-extra valgrind \
-  mingw64-gcc mingw64-gcc-c++ vulkan-loader-devel glslc nsis
+  mingw64-gcc mingw64-gcc-c++ vulkan-loader-devel glslc nsis qt6-qtbase-devel
 ```
 
 ## Clone and Build
@@ -241,14 +244,22 @@ ctest --preset linux-x64-debug --output-on-failure
 
 ## Windows Packaging
 
-Release packages require the pinned Whisper and Silero VAD model files. Explicit provisioning and packaging:
+The existing Windows preset cross-compiles the plugin/worker with MinGW, but Ubuntu does not provide the Windows Qt SDK used by the settings GUI. Build and deploy `settings/` once on Windows with a Qt 6 desktop kit, then give that deployment directory to the existing cross-package build:
+
+```bat
+cmake -S settings -B build\settings-win -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:\Qt\6.11.2\mingw_64
+cmake --build build\settings-win --target vw_settings_deploy
+```
+
+Then, on the packaging machine, configure the release with the resulting `settings-deploy` directory available as `VW_SETTINGS_DEPLOY_DIR`:
 
 ```bash
-cmake --preset windows-x64-release -DVW_PROVISION_MODELS=ON
+cmake --preset windows-x64-release -DVW_PROVISION_MODELS=ON -DVW_SETTINGS_DEPLOY_DIR=/path/to/settings-deploy
 cmake --build --preset windows-x64-release --target provision_models
 cmake --build --preset windows-x64-release --target installer
-cpack --config build/windows-x64-release/CPackConfig.cmake
 ```
+
+The installer build fails closed if `vlc-whisper-settings.exe` or its deployed Qt runtime is missing. End users do not install a Qt SDK or request elevation to save settings.
 
 For offline packaging, provide the pinned model files manually and omit `VW_PROVISION_MODELS=ON`; the same SHA-256 checks still run.
 
@@ -271,7 +282,7 @@ cmake --build --preset linux-x64-release -j2 --target package
 ## Verification
 
 ```bash
-clang-format --dry-run --Werror <modified-c-files>
+clang-format --dry-run --Werror <modified-c/cpp-files>
 cmake --preset linux-x64-debug
 cmake --build --preset linux-x64-debug
 ctest --preset linux-x64-debug --output-on-failure
@@ -279,7 +290,7 @@ ctest --test-dir build/linux-x64-debug -T memcheck
 ```
 
 > [!INFO]
-> Model-gated tests may skip when their documented local model is absent. A Windows cross-build proves artifact creation, not runtime compatibility with VLC; release validation still requires the supported Windows/VLC environment.
+> The settings smoke test runs with Qt's offscreen platform and isolated XDG directories, so it does not need a desktop or network. Model-gated tests may skip when their documented local model is absent. A Windows cross-build proves artifact creation, not runtime compatibility with VLC; release validation still requires the supported Windows/VLC environment.
 
 ## Local EN/RO Quality Benchmark
 
