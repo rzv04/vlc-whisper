@@ -17,6 +17,7 @@
 #include <vlc_vout_osd.h>
 
 #include "vw_caption_presenter.h"
+#include "vw_test.h"
 
 #undef vlc_object_find_name
 #undef vlc_object_release
@@ -576,9 +577,9 @@ int main(void) {
   g_mock_rate = 1.0f;
   g_put_subpicture_calls = 0;
   g_flush_calls = 0;
-  assert(vw_caption_presenter_show_paused(&spu_presenter, &trans_cue));
-  assert(g_last_subpic_b_ephemer == true);
-  assert(strcmp(g_last_subpic_text, "Hello world\nSalut lume") == 0);
+  vw_test_check_true("paused cue renders persistently", vw_caption_presenter_show_paused(&spu_presenter, &trans_cue));
+  vw_test_check_true("paused cue uses persistent SPU semantics", g_last_subpic_b_ephemer);
+  vw_test_check_true("paused cue keeps translated text", strcmp(g_last_subpic_text, "Hello world\nSalut lume") == 0);
 
   vw_caption_segment_t paused_seek_cue = {.start_pts_us = 900000000LL,
                                           .end_pts_us = 902000000LL,
@@ -586,17 +587,17 @@ int main(void) {
                                           .text_bytes = 25,
                                           .is_final = true};
   int puts_before_seek_preview = g_put_subpicture_calls;
-  assert(vw_caption_presenter_show_paused(&spu_presenter, &paused_seek_cue));
-  assert(g_put_subpicture_calls == puts_before_seek_preview + 1);
-  assert(g_last_flush_sequence < g_last_put_sequence);
-  assert(g_last_subpic_b_ephemer == true);
-  assert(strcmp(g_last_subpic_text, "Caption after paused seek") == 0);
+  vw_test_check_true("post-seek paused cue renders", vw_caption_presenter_show_paused(&spu_presenter, &paused_seek_cue));
+  vw_test_check_true("post-seek paused cue replaces exactly once",
+                     g_put_subpicture_calls == puts_before_seek_preview + 1);
+  vw_test_check_true("post-seek replacement flushes before put", g_last_flush_sequence < g_last_put_sequence);
+  vw_test_check_true("post-seek paused cue remains persistent", g_last_subpic_b_ephemer);
+  vw_test_check_true("post-seek paused cue replaces text", strcmp(g_last_subpic_text, "Caption after paused seek") == 0);
 
   (void)segment;
   (void)sys_segment;
   (void)future_seg;
   (void)spu_presenter;
 
-  printf("test_caption_presenter PASSED (23/23 tests)\n");
-  return 0;
+  return vw_test_finish("test_caption_presenter");
 }
