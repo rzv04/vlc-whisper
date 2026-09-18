@@ -283,10 +283,8 @@ static float vw_caption_presenter_get_rate(vw_caption_presenter_t* presenter) {
   return 1.0f;
 }
 
-static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* presenter,
-                                                  const vw_caption_segment_t* segment,
-                                                  int64_t duration_us, int64_t input_time_us, bool media_timeline,
-                                                  bool persistent) {
+static bool vw_render(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment, int64_t duration_us,
+                      int64_t input_time_us, bool media_timeline, bool persistent) {
   if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }
@@ -422,8 +420,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
     }
     if (duration_us < min_media_floor_us) duration_us = min_media_floor_us;
 
-    vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us,
-                                         media_timeline, false);
+    vw_render(presenter, &presenter->pending_segment, duration_us, input_time_us, media_timeline, false);
     presenter->has_pending = false;
   }
 
@@ -467,8 +464,8 @@ bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input
                         : (raw_duration_us < min_media_floor_us) ? min_media_floor_us
                                                                  : raw_duration_us;
 
-  bool rendered = vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us,
-                                                       input_time_us, media_timeline, false);
+  bool rendered =
+      vw_render(presenter, &presenter->pending_segment, duration_us, input_time_us, media_timeline, false);
   presenter->has_pending = false;
   return rendered;
 }
@@ -479,7 +476,7 @@ bool vw_caption_presenter_show_paused(vw_caption_presenter_t* presenter, const v
   presenter->has_pending = false;
   int64_t duration_us = segment->end_pts_us - segment->start_pts_us;
   if (duration_us < VW_CAPTION_MIN_DISPLAY_DURATION_US) duration_us = VW_CAPTION_MIN_DISPLAY_DURATION_US;
-  return vw_caption_presenter_render_internal(presenter, segment, duration_us, -1, false, true);
+  return vw_render(presenter, segment, duration_us, -1, false, true);
 }
 
 // Blanks the current caption overlays (flushes SPU and OSD channels) but KEEPS the filter context,
