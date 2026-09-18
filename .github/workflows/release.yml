@@ -54,7 +54,7 @@ jobs:
           apt-get update
           apt-get install -y git cmake ninja-build build-essential gcc g++ curl \
             pkg-config dpkg-dev file libavformat-dev libavcodec-dev libswresample-dev \
-            libavutil-dev libvulkan-dev glslc spirv-headers
+            libavutil-dev libvulkan-dev glslc spirv-headers qt6-base-dev
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Checkout repository
@@ -77,6 +77,7 @@ jobs:
           ls -lh build/linux-x64-release/${{ matrix.pkg_name }}.deb
           ls -lh build/linux-x64-release/${{ matrix.pkg_name }}.deb.sha256
           dpkg-deb --info build/linux-x64-release/${{ matrix.pkg_name }}.deb
+          dpkg-deb --contents build/linux-x64-release/${{ matrix.pkg_name }}.deb | grep -q '/usr/bin/vlc-whisper-settings$'
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
