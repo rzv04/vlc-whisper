@@ -35,11 +35,14 @@ if(WIN32)
       set(VW_PACKAGE_IS_GPU 0)
     endif()
 
+    # Configure the NSIS template.
     set(NSIS_SCRIPT_IN "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_installer.nsi.in")
     set(NSIS_SCRIPT_OUT "${CMAKE_CURRENT_BINARY_DIR}/vw_installer.nsi")
     set(VW_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/installer-stage")
     configure_file(${NSIS_SCRIPT_IN} ${NSIS_SCRIPT_OUT} @ONLY)
 
+    # Zero-network default: both release models MUST already be provisioned unless
+    # the maintainer explicitly enables one-time pinned downloads.
     option(VW_PROVISION_MODELS "Allow build-time model download (installer/provision targets)" OFF)
 
     add_custom_target(provision_models
@@ -60,10 +63,10 @@ if(WIN32)
       VERBATIM
     )
 
+    # GPU package must bundle CPU fallback for Vulkan loader-less systems.
     set(VW_WORKER_GPU "${CMAKE_BINARY_DIR}/worker/vlc-whisper-worker.exe")
     set(VW_WORKER_CPU "${CMAKE_BINARY_DIR}/worker/vlc-whisper-worker-cpu.exe")
     set(VW_PLUGIN_DLL "${CMAKE_BINARY_DIR}/plugin/libvlc_whisper_plugin.dll")
-    set(VW_SETTINGS_LAUNCHER_DLL "${CMAKE_BINARY_DIR}/plugin/libvlc_whisper_settings_launcher.dll")
     set(VW_REQUIRE_CPU_FALLBACK OFF)
     if(GGML_VULKAN)
       set(VW_REQUIRE_CPU_FALLBACK ON)
@@ -97,8 +100,7 @@ if(WIN32)
     # The existing MinGW cross preset has no Windows Qt SDK. Build `settings/`
     # natively with a Qt desktop kit and pass its windeployqt output through
     # VW_SETTINGS_DEPLOY_DIR, or use the in-tree vw_settings_deploy target when available.
-    set(_vw_installer_deps vlc_whisper_plugin vlc_whisper_settings_launcher vlc-whisper-worker
-                           ${VW_CPU_FALLBACK_TARGET})
+    set(_vw_installer_deps vlc_whisper_plugin vlc-whisper-worker ${VW_CPU_FALLBACK_TARGET})
     if(TARGET vw_settings_deploy)
       list(APPEND _vw_installer_deps vw_settings_deploy)
     endif()
@@ -119,7 +121,6 @@ if(WIN32)
       COMMAND ${CMAKE_COMMAND}
               -DWORKER_DIR=${CMAKE_BINARY_DIR}/worker
               -DPLUGIN_PATH=${VW_PLUGIN_DLL}
-              -DSETTINGS_LAUNCHER_PLUGIN_PATH=${VW_SETTINGS_LAUNCHER_DLL}
               -DVW_REQUIRE_CPU_FALLBACK=${VW_REQUIRE_CPU_FALLBACK}
               -DWHISPER_MODEL_PATH=${VW_MODEL_TINY}
               -DWHISPER_MODEL_SHA256=${VW_MODEL_TINY_SHA256}
@@ -139,6 +140,7 @@ if(WIN32)
     message(STATUS "makensis not found: NSIS installer target will not be registered.")
   endif()
 
+  # CPack generic packaging configuration
   set(CPACK_PACKAGE_NAME "vlc-whisper")
   set(CPACK_PACKAGE_VENDOR "VLC-Whisper Contributors")
   set(CPACK_PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
@@ -149,13 +151,10 @@ if(WIN32)
   set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
   set(CPACK_GENERATOR "ZIP")
 
+  # Install rules for release archive
   install(TARGETS vlc_whisper_plugin
     RUNTIME DESTINATION plugins/audio_filter
     LIBRARY DESTINATION plugins/audio_filter
-  )
-  install(TARGETS vlc_whisper_settings_launcher
-    RUNTIME DESTINATION plugins/access
-    LIBRARY DESTINATION plugins/access
   )
   install(TARGETS vlc-whisper-worker
     RUNTIME DESTINATION .
@@ -167,6 +166,7 @@ if(WIN32)
     install(DIRECTORY "${VW_SETTINGS_DEPLOY_DIR}/" DESTINATION vlc-whisper-settings)
   endif()
 
+  # Explicit allowlist: never package arbitrary gitignored models from the maintainer checkout.
   install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/models/manifest.json"
     "${VW_MODEL_TINY}"
