@@ -185,6 +185,10 @@ add_vw_stub_worker_contract_test(test_live_media_end_flushes_tail
 target_link_options(test_live_media_end_flushes_tail PRIVATE -Wl,--wrap=vw_whisper_engine_transcribe_pcm)
 target_compile_definitions(test_live_media_end_flushes_tail PRIVATE VW_TRANSLATE_TESTING)
 target_sources(test_live_media_end_flushes_tail PRIVATE ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY test_live_media_end_flushes_tail APPEND PROPERTY
+             COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/worker/include/vw_worker_translation_diag_override.h")
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY test_live_media_end_flushes_tail APPEND PROPERTY
+             COMPILE_DEFINITIONS VW_WORKER_TRANSLATION_DIAG_OVERRIDE=1)
 add_test(NAME vw_tail_translation_timeout COMMAND test_live_media_end_flushes_tail timeout)
 add_vw_stub_worker_contract_test(test_new_session_resets_all_session_state
                                  integration/test_new_session_resets_all_session_state.c)
