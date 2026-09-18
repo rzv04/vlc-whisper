@@ -587,12 +587,14 @@ int main(void) {
                                           .text_bytes = 25,
                                           .is_final = true};
   int puts_before_seek_preview = g_put_subpicture_calls;
-  vw_test_check_true("post-seek paused cue renders", vw_caption_presenter_show_paused(&spu_presenter, &paused_seek_cue));
+  vw_test_check_true("post-seek paused cue renders",
+                     vw_caption_presenter_show_paused(&spu_presenter, &paused_seek_cue));
   vw_test_check_true("post-seek paused cue replaces exactly once",
                      g_put_subpicture_calls == puts_before_seek_preview + 1);
   vw_test_check_true("post-seek replacement flushes before put", g_last_flush_sequence < g_last_put_sequence);
   vw_test_check_true("post-seek paused cue remains persistent", g_last_subpic_b_ephemer);
-  vw_test_check_true("post-seek paused cue replaces text", strcmp(g_last_subpic_text, "Caption after paused seek") == 0);
+  vw_test_check_true("post-seek paused cue replaces text",
+                     strcmp(g_last_subpic_text, "Caption after paused seek") == 0);
 
   (void)segment;
   (void)sys_segment;
