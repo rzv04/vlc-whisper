@@ -13,9 +13,11 @@ def text(path: str) -> str:
 def main() -> None:
     settings_cmake = text("settings/CMakeLists.txt")
     settings_cpp = text("settings/src/vw_qt_settings_main.cpp")
+    settings_bridge = text("plugin/src/vw_settings_file.c")
     launcher = text("lua/extensions/vlc_whisper_settings.lua")
     win_installer = text("cmake/vw_installer.nsi.in")
     linux_packaging = text("cmake/vw_packaging_linux.cmake")
+    linux_installer = text("scripts/install.sh")
 
     for key in (
         "whisper-backend",
@@ -35,16 +37,18 @@ def main() -> None:
     assert "LOCALAPPDATA" in settings_cpp
     assert "XDG_CONFIG_HOME" in settings_cpp
     assert ".config/vlc-whisper" in settings_cpp
-    assert "model-command" in settings_cpp
+    assert "model-command" in settings_cpp and "model-command" in settings_bridge
     assert "QNetwork" not in settings_cpp
     assert "WinHttp" not in settings_cpp and "winhttp" not in settings_cpp.lower()
+    assert "curl" not in settings_cpp.lower(), "settings GUI must not own HTTP/model downloads"
 
     assert "vlc-whisper-settings" in settings_cmake
+    assert "--smoke-test" in settings_cpp and "QT_QPA_PLATFORM=offscreen" in settings_cmake
     assert "spike" not in settings_cmake.lower()
     assert not (ROOT / "spikes/qt-settings").exists(), "production branch must remove the Qt spike"
 
     lowered = launcher.lower()
-    for forbidden in ("while ", "os.clock", "dlg:update", "sleep("):
+    for forbidden in ("while ", "os.clock", "dlg:update", "sleep(", "wait", "poll"):
         assert forbidden not in lowered, f"blocking launcher primitive remains: {forbidden}"
     assert launcher.count("vlc.dialog(") == 1, "Lua may only use a one-shot launch-error dialog"
     assert "Engine:" not in launcher and "Translation (to):" not in launcher
@@ -53,8 +57,10 @@ def main() -> None:
     assert "try reinstalling vlc-whisper" in lowered
 
     assert "vlc-whisper-settings" in win_installer
-    assert "vlc-whisper\\settings.json" in win_installer
+    assert "settings.json" in win_installer and "reset-settings" in win_installer
     assert "vlc-whisper-settings" in linux_packaging
+    assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
+    assert "settings.json" in linux_installer and "reset-settings" in linux_installer
 
 
 if __name__ == "__main__":
