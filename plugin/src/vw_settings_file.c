@@ -1,0 +1,414 @@
+#include "vw_settings_file.h"
+
+#include <ctype.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <wchar.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+#define VW_SETTINGS_JSON_MAX 32768
+#define VW_SETTINGS_PATH_MAX 4096
+
+static char* vw_settings_strdup(const char* value) {
+  if (!value) return NULL;
+  size_t n = strlen(value) + 1;
+  char* copy = (char*)malloc(n);
+  if (copy) memcpy(copy, value, n);
+  return copy;
+}
+
+#ifdef _WIN32
+static bool vw_settings_build_wpath(const wchar_t* suffix, wchar_t* out, size_t out_count) {
+  if (!suffix || !out || out_count == 0) return false;
+  wchar_t base[VW_SETTINGS_PATH_MAX];
+  DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, (DWORD)(sizeof(base) / sizeof(base[0])));
+  if (n == 0 || n >= sizeof(base) / sizeof(base[0])) {
+    wchar_t home[VW_SETTINGS_PATH_MAX];
+    n = GetEnvironmentVariableW(L"USERPROFILE", home, (DWORD)(sizeof(home) / sizeof(home[0])));
+    if (n == 0 || n >= sizeof(home) / sizeof(home[0])) return false;
+    if (swprintf(base, sizeof(base) / sizeof(base[0]), L"%ls\\AppData\\Local", home) < 0) return false;
+  }
+  int written = swprintf(out, out_count, L"%ls\\vlc-whisper\\%ls", base, suffix);
+  return written > 0 && (size_t)written < out_count;
+}
+
+static bool vw_settings_ensure_dir(void) {
+  wchar_t marker[VW_SETTINGS_PATH_MAX];
+  if (!vw_settings_build_wpath(L".", marker, sizeof(marker) / sizeof(marker[0]))) return false;
+  wchar_t* slash = wcsrchr(marker, L'\\');
+  if (!slash) return false;
+  *slash = L'\0';
+  if (CreateDirectoryW(marker, NULL)) return true;
+  return GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+static FILE* vw_settings_open(const wchar_t* suffix, const wchar_t* mode) {
+  wchar_t path[VW_SETTINGS_PATH_MAX];
+  if (!vw_settings_build_wpath(suffix, path, sizeof(path) / sizeof(path[0]))) return NULL;
+  return _wfopen(path, mode);
+}
+
+static bool vw_settings_suffix_exists(const wchar_t* suffix) {
+  wchar_t path[VW_SETTINGS_PATH_MAX];
+  if (!vw_settings_build_wpath(suffix, path, sizeof(path) / sizeof(path[0]))) return false;
+  DWORD attr = GetFileAttributesW(path);
+  return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static void vw_settings_delete_suffix(const wchar_t* suffix) {
+  wchar_t path[VW_SETTINGS_PATH_MAX];
+  if (vw_settings_build_wpath(suffix, path, sizeof(path) / sizeof(path[0]))) DeleteFileW(path);
+}
+
+static bool vw_settings_utf8_file_exists(const char* path) {
+  if (!path || !path[0]) return false;
+  wchar_t wide[VW_SETTINGS_PATH_MAX];
+  int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, (int)(sizeof(wide) / sizeof(wide[0])));
+  if (n <= 0) return false;
+  DWORD attr = GetFileAttributesW(wide);
+  return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+#else
+static bool vw_settings_build_path(const char* suffix, char* out, size_t out_size) {
+  if (!suffix || !out || out_size == 0) return false;
+  const char* xdg = getenv("XDG_CONFIG_HOME");
+  const char* home = getenv("HOME");
+  int written = 0;
+  if (xdg && xdg[0]) {
+    written = snprintf(out, out_size, "%s/vlc-whisper/%s", xdg, suffix);
+  } else if (home && home[0]) {
+    written = snprintf(out, out_size, "%s/.config/vlc-whisper/%s", home, suffix);
+  } else {
+    return false;
+  }
+  return written > 0 && (size_t)written < out_size;
+}
+
+static bool vw_settings_ensure_dir(void) {
+  char path[VW_SETTINGS_PATH_MAX];
+  if (!vw_settings_build_path(".", path, sizeof(path))) return false;
+  char* slash = strrchr(path, '/');
+  if (!slash) return false;
+  *slash = '\0';
+  if (mkdir(path, 0700) == 0) return true;
+  return errno == EEXIST;
+}
+
+static FILE* vw_settings_open(const char* suffix, const char* mode) {
+  char path[VW_SETTINGS_PATH_MAX];
+  if (!vw_settings_build_path(suffix, path, sizeof(path))) return NULL;
+  return fopen(path, mode);
+}
+
+static bool vw_settings_suffix_exists(const char* suffix) {
+  char path[VW_SETTINGS_PATH_MAX];
+  if (!vw_settings_build_path(suffix, path, sizeof(path))) return false;
+  return access(path, F_OK) == 0;
+}
+
+static void vw_settings_delete_suffix(const char* suffix) {
+  char path[VW_SETTINGS_PATH_MAX];
+  if (vw_settings_build_path(suffix, path, sizeof(path))) unlink(path);
+}
+
+static bool vw_settings_utf8_file_exists(const char* path) {
+  return path && path[0] && access(path, F_OK) == 0;
+}
+#endif
+
+static bool vw_settings_read_named(const char* name, char* out, size_t out_size) {
+  if (!name || !out || out_size < 2) return false;
+#ifdef _WIN32
+  wchar_t wide_name[128];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide_name,
+                          (int)(sizeof(wide_name) / sizeof(wide_name[0]))) <= 0)
+    return false;
+  FILE* f = vw_settings_open(wide_name, L"rb");
+#else
+  FILE* f = vw_settings_open(name, "rb");
+#endif
+  if (!f) return false;
+  size_t n = fread(out, 1, out_size - 1, f);
+  bool ok = !ferror(f) && !feof(f);
+  if (n < out_size - 1) ok = !ferror(f);
+  fclose(f);
+  out[n] = '\0';
+  return ok;
+}
+
+static bool vw_settings_write_named(const char* name, const char* value) {
+  if (!name || !value || !vw_settings_ensure_dir()) return false;
+#ifdef _WIN32
+  wchar_t wide_name[128];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide_name,
+                          (int)(sizeof(wide_name) / sizeof(wide_name[0]))) <= 0)
+    return false;
+  FILE* f = vw_settings_open(wide_name, L"wb");
+#else
+  FILE* f = vw_settings_open(name, "wb");
+#endif
+  if (!f) return false;
+  size_t len = strlen(value);
+  bool ok = fwrite(value, 1, len, f) == len && fclose(f) == 0;
+  if (!ok) fclose(f);
+  return ok;
+}
+
+static bool vw_settings_named_exists(const char* name) {
+#ifdef _WIN32
+  wchar_t wide_name[128];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide_name,
+                          (int)(sizeof(wide_name) / sizeof(wide_name[0]))) <= 0)
+    return false;
+  return vw_settings_suffix_exists(wide_name);
+#else
+  return vw_settings_suffix_exists(name);
+#endif
+}
+
+static void vw_settings_delete_named(const char* name) {
+#ifdef _WIN32
+  wchar_t wide_name[128];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide_name,
+                          (int)(sizeof(wide_name) / sizeof(wide_name[0]))) <= 0)
+    return;
+  vw_settings_delete_suffix(wide_name);
+#else
+  vw_settings_delete_suffix(name);
+#endif
+}
+
+static const char* vw_json_value(const char* json, const char* key) {
+  if (!json || !key) return NULL;
+  char needle[128];
+  int n = snprintf(needle, sizeof(needle), "\"%s\"", key);
+  if (n <= 0 || (size_t)n >= sizeof(needle)) return NULL;
+  const char* p = strstr(json, needle);
+  if (!p) return NULL;
+  p += strlen(needle);
+  while (*p && isspace((unsigned char)*p)) p++;
+  if (*p++ != ':') return NULL;
+  while (*p && isspace((unsigned char)*p)) p++;
+  return p;
+}
+
+static bool vw_json_string(const char* json, const char* key, char* out, size_t out_size) {
+  const char* p = vw_json_value(json, key);
+  if (!p || *p++ != '"' || out_size == 0) return false;
+  size_t used = 0;
+  while (*p && *p != '"') {
+    char c = *p++;
+    if (c == '\\') {
+      char esc = *p++;
+      if (esc == '\\' || esc == '"' || esc == '/')
+        c = esc;
+      else if (esc == 'n')
+        c = '\n';
+      else if (esc == 'r')
+        c = '\r';
+      else if (esc == 't')
+        c = '\t';
+      else
+        return false;
+    }
+    if (used + 1 >= out_size) return false;
+    out[used++] = c;
+  }
+  if (*p != '"') return false;
+  out[used] = '\0';
+  return true;
+}
+
+static bool vw_json_int(const char* json, const char* key, int64_t* out) {
+  const char* p = vw_json_value(json, key);
+  if (!p || !out) return false;
+  char* end = NULL;
+  long long value = strtoll(p, &end, 10);
+  if (end == p) return false;
+  *out = (int64_t)value;
+  return true;
+}
+
+static bool vw_json_bool(const char* json, const char* key, bool* out) {
+  const char* p = vw_json_value(json, key);
+  if (!p || !out) return false;
+  if (strncmp(p, "true", 4) == 0) {
+    *out = true;
+    return true;
+  }
+  if (strncmp(p, "false", 5) == 0) {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
+static bool vw_one_of(const char* value, const char* const* values, size_t count) {
+  if (!value) return false;
+  for (size_t i = 0; i < count; ++i) {
+    if (strcmp(value, values[i]) == 0) return true;
+  }
+  return false;
+}
+
+static const char* vw_basename(const char* path) {
+  const char* base = path ? path : "";
+  if (!path) return base;
+  for (const char* p = path; *p; ++p) {
+    if (*p == '/' || *p == '\\') base = p + 1;
+  }
+  return base;
+}
+
+static bool vw_valid_model_path(const char* path) {
+  static const char* const files[] = {"ggml-tiny.en.bin", "ggml-tiny.bin", "ggml-base.en.bin", "ggml-base.bin",
+                                      "ggml-small.bin", "ggml-medium.bin", "ggml-large-v3.bin"};
+  const char* base = vw_basename(path);
+  return vw_one_of(base, files, sizeof(files) / sizeof(files[0]));
+}
+
+static bool vw_valid_command(const char* value) {
+  static const char* const values[] = {"abort", "tiny.en", "tiny", "base.en", "base", "small", "medium", "large"};
+  return vw_one_of(value, values, sizeof(values) / sizeof(values[0]));
+}
+
+static bool vw_read_settings(char* json, size_t size) {
+  return vw_settings_read_named("settings.json", json, size);
+}
+
+static bool vw_reset_pending(void) {
+  return vw_settings_named_exists("reset-settings");
+}
+
+static const char* vw_default_string(const char* key) {
+  if (strcmp(key, "whisper-backend") == 0) return "auto";
+  if (strcmp(key, "model-path") == 0) return "models/ggml-tiny.bin";
+  if (strcmp(key, "whisper-language") == 0) return "en";
+  if (strcmp(key, "whisper-translate-from") == 0) return "auto";
+  if (strcmp(key, "whisper-translate-to") == 0) return "en";
+  return NULL;
+}
+
+static bool vw_default_int(const char* key, int64_t* value) {
+  if (strcmp(key, "whisper-threads") == 0) {
+    *value = 4;
+    return true;
+  }
+  if (strcmp(key, "whisper-logging") == 0 || strcmp(key, "whisper-translate-enabled") == 0) {
+    *value = 0;
+    return true;
+  }
+  if (strcmp(key, "whisper-show-paused") == 0 || strcmp(key, "whisper-translate-mode") == 0) {
+    *value = 1;
+    return true;
+  }
+  return false;
+}
+
+char* vw_settings_override_psz(const char* key, char* fallback) {
+  if (!key) return fallback;
+  if (strcmp(key, "whisper-model-download") == 0) {
+    char command[64];
+    if (vw_settings_read_named("model-command", command, sizeof(command))) {
+      command[strcspn(command, "\r\n")] = '\0';
+      if (vw_valid_command(command)) {
+        vw_settings_delete_named("model-command");
+        free(fallback);
+        return vw_settings_strdup(command);
+      }
+    }
+    return fallback;
+  }
+
+  const char* default_value = vw_default_string(key);
+  if (!default_value) return fallback;
+
+  char selected[VW_SETTINGS_PATH_MAX];
+  char json[VW_SETTINGS_JSON_MAX];
+  bool has_json = vw_read_settings(json, sizeof(json));
+  if (has_json) {
+    if (!vw_json_string(json, key, selected, sizeof(selected))) return fallback;
+  } else if (vw_reset_pending()) {
+    snprintf(selected, sizeof(selected), "%s", default_value);
+  } else {
+    return fallback;
+  }
+
+  static const char* const backends[] = {"auto", "gpu", "cpu"};
+  static const char* const languages[] = {"en", "ro", "tr", "de", "fr", "es"};
+  static const char* const sources[] = {"auto", "en", "ro", "es", "fr", "de", "it", "pt",
+                                        "ru",   "uk", "tr", "ja", "ko", "zh"};
+  static const char* const targets[] = {"en", "ro", "es", "fr", "de", "it", "pt",
+                                        "ru", "uk", "tr", "ja", "ko", "zh"};
+  bool valid = false;
+  if (strcmp(key, "whisper-backend") == 0)
+    valid = vw_one_of(selected, backends, sizeof(backends) / sizeof(backends[0]));
+  else if (strcmp(key, "model-path") == 0)
+    valid = vw_valid_model_path(selected);
+  else if (strcmp(key, "whisper-language") == 0)
+    valid = vw_one_of(selected, languages, sizeof(languages) / sizeof(languages[0]));
+  else if (strcmp(key, "whisper-translate-from") == 0)
+    valid = vw_one_of(selected, sources, sizeof(sources) / sizeof(sources[0]));
+  else if (strcmp(key, "whisper-translate-to") == 0)
+    valid = vw_one_of(selected, targets, sizeof(targets) / sizeof(targets[0]));
+  if (!valid) return fallback;
+
+  if (has_json && strcmp(key, "model-path") == 0) {
+    char active[VW_SETTINGS_PATH_MAX];
+    if (vw_settings_read_named("model-path-active", active, sizeof(active))) {
+      active[strcspn(active, "\r\n")] = '\0';
+      if (strcmp(vw_basename(active), vw_basename(selected)) == 0 && vw_settings_utf8_file_exists(active)) {
+        snprintf(selected, sizeof(selected), "%s", active);
+      }
+    }
+  }
+
+  free(fallback);
+  return vw_settings_strdup(selected);
+}
+
+int64_t vw_settings_override_int(const char* key, int64_t fallback) {
+  if (!key) return fallback;
+  int64_t default_value = 0;
+  if (!vw_default_int(key, &default_value)) return fallback;
+
+  char json[VW_SETTINGS_JSON_MAX];
+  if (!vw_read_settings(json, sizeof(json))) return vw_reset_pending() ? default_value : fallback;
+
+  if (strcmp(key, "whisper-threads") == 0 || strcmp(key, "whisper-translate-mode") == 0) {
+    int64_t value = 0;
+    if (!vw_json_int(json, key, &value)) return fallback;
+    if (strcmp(key, "whisper-threads") == 0) return (value >= 1 && value <= 16) ? value : 4;
+    return value == 0 ? 0 : 1;
+  }
+
+  bool value = false;
+  return vw_json_bool(json, key, &value) ? (value ? 1 : 0) : fallback;
+}
+
+void vw_settings_note_psz(const char* key, const char* value) {
+  if (!key || !value) return;
+  if (strcmp(key, "whisper-backend-active") == 0) {
+    vw_settings_write_named("backend-active", value);
+  } else if (strcmp(key, "whisper-model-status") == 0) {
+    vw_settings_write_named("model-status", value);
+  } else if (strcmp(key, "model-path") == 0 && vw_valid_model_path(value) && vw_settings_utf8_file_exists(value)) {
+    vw_settings_write_named("model-path-active", value);
+  }
+}
+
+void vw_settings_note_int(const char* key, int64_t value) {
+  if (!key || strcmp(key, "whisper-model-progress") != 0) return;
+  char text[32];
+  snprintf(text, sizeof(text), "%lld", (long long)value);
+  vw_settings_write_named("model-progress", text);
+}

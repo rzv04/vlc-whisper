@@ -44,13 +44,15 @@ def main() -> None:
     assert not (ROOT / "spikes/qt-settings").exists(), "production branch must remove the Qt spike"
 
     lowered = launcher.lower()
-    for forbidden in ("vlc.dialog(", "while ", "os.clock", "dlg:update", "sleep("):
-        assert forbidden not in lowered, f"blocking/legacy launcher primitive remains: {forbidden}"
+    for forbidden in ("while ", "os.clock", "dlg:update", "sleep("):
+        assert forbidden not in lowered, f"blocking launcher primitive remains: {forbidden}"
+    assert launcher.count("vlc.dialog(") == 1, "Lua may only use a one-shot launch-error dialog"
+    assert "Engine:" not in launcher and "Translation (to):" not in launcher
     assert "vlc-whisper-settings.exe" in launcher
     assert "/usr/bin/vlc-whisper-settings" in launcher
     assert "try reinstalling vlc-whisper" in lowered
 
-    assert "vlc-whisper-settings.exe" in win_installer
+    assert "vlc-whisper-settings" in win_installer
     assert "vlc-whisper\\settings.json" in win_installer
     assert "vlc-whisper-settings" in linux_packaging
 

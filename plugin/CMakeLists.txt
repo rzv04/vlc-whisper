@@ -1,12 +1,14 @@
 # Legacy module teardown still uses vw_log_set_sink(NULL, NULL). Preinclude source-local adapters that bind anonymous
-# removal to the current VLC object and route translation diagnostics before the legacy generic-error switch sees them.
+# removal to the current VLC object, bridge standalone settings, and route translation diagnostics before the legacy
+# generic-error switch sees them.
 set_source_files_properties(src/vw_whisper_module.c PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_preclose_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_plugin_log_scope_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_module_override.h"
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_config_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_preclose_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_plugin_log_scope_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_module_override.h"
     COMPILE_DEFINITIONS "VW_PLUGIN_LOG_SCOPE_OVERRIDE=1"
 )
 
 add_library(vlc_whisper_plugin SHARED
     src/vw_whisper_module.c
+    src/vw_settings_file.c
     src/vw_benchmark.c
     src/vw_audio_capture.c
     src/vw_caption_presenter.c
