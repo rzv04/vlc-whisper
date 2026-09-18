@@ -1251,9 +1251,9 @@ static void* vw_plugin_sender_main(void* arg) {
       atomic_store(&sys->discontinuity_pending, false);
       bool is_source_mode = atomic_load(&sys->source_mode_active);
       bool preview_after_paused_seek = paused && is_source_mode && show_paused_subtitles;
-      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY",
-                   "seek/discontinuity at %lldus mode=%s paused_preview=%d", (long long)seek_target_us,
-                   is_source_mode ? "source" : "live", preview_after_paused_seek ? 1 : 0);
+      vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek=%lld mode=%s paused_preview=%d",
+                   (long long)seek_target_us, is_source_mode ? "source" : "live",
+                   preview_after_paused_seek ? 1 : 0);
       if (preview_after_paused_seek) {
         paused_caption_pending = true;
       } else {
