@@ -128,9 +128,12 @@ This checklist provides an exhaustive, step-by-step verification plan for **VLC-
 ## Phase 4: Playback Controls & Timeline Synchronization
 
 ### 4.1 Pause & Resume
-- [ ] Click **Pause (Space)** while captions are displaying:
-  - [ ] Current on-screen caption clears or holds cleanly; audio streaming to worker halts.
-  - [ ] Worker memory and CPU drop to idle.
+- [ ] With **Show subtitles while paused (local files only)** enabled, pause a local file while a caption is visible:
+  - [ ] The current caption remains visible for the entire pause.
+  - [ ] Seek while still paused; the held cue stays visible until the first caption at the new position replaces it.
+  - [ ] Seek during playback and immediately pause; a caption remains visible while look-ahead catches up.
+- [ ] Disable the setting or use live/non-seekable media, then pause:
+  - [ ] Captions clear and transcription pauses as before.
 - [ ] Click **Play (Space)**:
   - [ ] Playback resumes instantly with smooth audio (no stuttering, popping, or crackling).
   - [ ] New captions resume for newly played audio. Stale pre-pause captions do NOT replay.

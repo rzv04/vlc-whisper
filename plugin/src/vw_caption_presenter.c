@@ -75,7 +75,8 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
 }
 
 static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id, const char* text, int alignment, int y,
-                                            int64_t start_tick, int64_t stop_tick, bool replace_existing) {
+                                            int64_t start_tick, int64_t stop_tick, bool replace_existing,
+                                            bool persistent) {
   if (!vout || !text || channel_id < 0) {
     return false;
   }
@@ -121,9 +122,9 @@ static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id,
   // i_stop must therefore be mdate-based. Media-domain scheduling (b_subtitle=true) is the
   // 17c look-ahead target, blocked on observing the subtitle clock's behavior.
   subpic->b_subtitle = false;
-  // VW-001: b_ephemer must be false so VLC automatically hides/destroys the subpicture when
-  // mdate reaches i_stop; b_ephemer=true causes subtitles to freeze permanently during silence.
-  subpic->b_ephemer = false;
+  // Normal cues expire at i_stop. A paused cue is deliberately ephemeral in VLC terms so it remains until the
+  // caption channel is explicitly replaced or blanked on seek/resume.
+  subpic->b_ephemer = persistent;
   subpic->b_absolute = false;
   subpic->b_fade = true;
 
@@ -208,7 +209,7 @@ bool vw_caption_presenter_show_model_progress(vw_caption_presenter_t* presenter,
   int64_t start_tick = (int64_t)mdate();
   bool rendered = vw_caption_presenter_render_spu(
       vout, presenter->model_progress_channel_id, progress_text, SUBPICTURE_ALIGN_TOP, 20, start_tick,
-      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US), true);
+      vw_saturating_add_i64(start_tick, VW_MODEL_PROGRESS_DISPLAY_DURATION_US), true, false);
   vlc_object_release(VLC_OBJECT(vout));
   return rendered;
 }
@@ -282,8 +283,8 @@ static float vw_caption_presenter_get_rate(vw_caption_presenter_t* presenter) {
   return 1.0f;
 }
 
-static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
-                                                 int64_t duration_us, int64_t input_time_us, bool media_timeline) {
+static bool vw_render(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment, int64_t duration_us,
+                      int64_t input_time_us, bool media_timeline, bool persistent) {
   if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }
@@ -361,7 +362,7 @@ static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* present
     start_tick = vw_saturating_add_i64(now_tick, lead_us);
     stop_tick = vw_saturating_add_i64(start_tick, dur_wallclock_us);
     rendered = vw_caption_presenter_render_spu(vout, presenter->spu_channel_id, text_to_render, SUBPICTURE_ALIGN_BOTTOM,
-                                               20, start_tick, stop_tick, !media_timeline);
+                                               20, start_tick, stop_tick, !media_timeline || persistent, persistent);
   }
 
   // Graceful fallback to OSD if SPU rendering failed or was unregistered
@@ -419,8 +420,7 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
     }
     if (duration_us < min_media_floor_us) duration_us = min_media_floor_us;
 
-    vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us, input_time_us,
-                                         media_timeline);
+    vw_render(presenter, &presenter->pending_segment, duration_us, input_time_us, media_timeline, false);
     presenter->has_pending = false;
   }
 
@@ -464,10 +464,18 @@ bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input
                         : (raw_duration_us < min_media_floor_us) ? min_media_floor_us
                                                                  : raw_duration_us;
 
-  bool rendered = vw_caption_presenter_render_internal(presenter, &presenter->pending_segment, duration_us,
-                                                       input_time_us, media_timeline);
+  bool rendered = vw_render(presenter, &presenter->pending_segment, duration_us, input_time_us, media_timeline, false);
   presenter->has_pending = false;
   return rendered;
+}
+
+bool vw_caption_presenter_show_paused(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment) {
+  if (!presenter || !segment || !segment->text_utf8) return false;
+
+  presenter->has_pending = false;
+  int64_t duration_us = segment->end_pts_us - segment->start_pts_us;
+  if (duration_us < VW_CAPTION_MIN_DISPLAY_DURATION_US) duration_us = VW_CAPTION_MIN_DISPLAY_DURATION_US;
+  return vw_render(presenter, segment, duration_us, -1, false, true);
 }
 
 // Blanks the current caption overlays (flushes SPU and OSD channels) but KEEPS the filter context,
