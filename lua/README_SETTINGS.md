@@ -1,12 +1,12 @@
 # VLC-Whisper Settings Launcher
 
-`lua/extensions/vlc_whisper_settings.lua` is intentionally tiny. VLC still exposes **VLC-Whisper Settings** in its extension menu, but the Lua code no longer owns a settings form or model controls. It resolves the installed standalone settings executable, launches it detached, and immediately deactivates.
+`lua/extensions/vlc_whisper_settings.lua` is intentionally tiny. VLC still exposes **VLC-Whisper Settings** in its extension menu, but the Lua code no longer owns a settings form or model controls. It resolves the installed standalone settings executable and invokes its short `--launch-detached` bootstrap mode.
 
 ## Launcher invariant
 
-The Lua extension does **not** poll, sleep, wait/join a child process, perform HTTP, hash model files, or synchronize settings. A missing executable or an immediate spawn failure produces one small VLC error dialog telling the user to reinstall VLC-Whisper.
+The bootstrap is process-creation acknowledgement only. `vlc-whisper-settings --launch-detached` uses Qt `QProcess::startDetached()` to create the real settings instance and immediately exits with success/failure. Lua reports a one-shot reinstall error when executable resolution or detached process creation fails.
 
-A requested approximately one-second post-launch verification is deliberately omitted. VLC 3 Lua has no reliable nonblocking child/window-ready primitive; implementing that delay with the available process/sleep/check mechanisms would block or poll the cooperative VLC UI path. See ADR-025 in `docs/decisions.md`.
+The extension does **not** poll, sleep, wait for window creation, monitor the detached child's lifetime, perform HTTP, hash model files, or synchronize settings. It does not invoke `start`, `cmd.exe`, PowerShell, or a console helper command. On Windows the settings target is a GUI executable, so no blank console window is part of the intended path. A later crash of the detached settings app is not treated as a launcher failure. See ADR-025 in `docs/decisions.md`.
 
 ## Executable locations
 
