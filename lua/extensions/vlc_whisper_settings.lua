@@ -1,6 +1,6 @@
 -- VLC-Whisper Settings launcher for VLC 3.0.x Lua 5.1.
--- The extension does bounded local discovery + detached spawn only. It never polls,
--- waits for the child, performs HTTP, hashes models, or owns the settings form.
+-- The extension does bounded local discovery + one short launch acknowledgement only.
+-- The Qt bootstrap process performs the detached spawn; Lua never polls, sleeps, or monitors it.
 
 local error_dlg = nil
 
@@ -52,19 +52,18 @@ local function log_error(message)
 end
 
 local function resolve_settings_executable()
-  local is_windows = env_get("OS") == "Windows_NT"
-  if is_windows then
+  if env_get("OS") == "Windows_NT" then
     local datadir = config_dir("datadir")
     local candidate = join_path(datadir, "vlc-whisper-settings/vlc-whisper-settings.exe")
-    if file_exists(candidate) then return candidate, true end
+    if file_exists(candidate) then return candidate end
     local program_files = env_get("ProgramFiles")
     candidate = join_path(program_files, "VideoLAN/VLC/vlc-whisper-settings/vlc-whisper-settings.exe")
-    if file_exists(candidate) then return candidate, true end
-    return nil, true
+    if file_exists(candidate) then return candidate end
+    return nil
   end
   local candidate = "/usr/bin/vlc-whisper-settings"
-  if file_exists(candidate) then return candidate, false end
-  return nil, false
+  if file_exists(candidate) then return candidate end
+  return nil
 end
 
 local function show_launch_error()
@@ -77,17 +76,13 @@ local function show_launch_error()
 end
 
 local function launch_settings()
-  local path, is_windows = resolve_settings_executable()
-  if path == nil then return false end
-  if path:find('"', 1, true) then return false end
+  local path = resolve_settings_executable()
+  if path == nil or path:find('"', 1, true) then return false end
 
-  local command = nil
-  if is_windows then
-    command = 'start "" "' .. path .. '"'
-  else
-    command = '"' .. path .. '" >/dev/null 2>&1 &'
-  end
-
+  -- The installed target is a GUI binary on Windows. Do not use start/cmd/PowerShell wrappers:
+  -- this short invocation asks Qt to QProcess::startDetached() the real settings instance and
+  -- returns success only when that OS process creation succeeded.
+  local command = '"' .. path .. '" --launch-detached'
   local ok, result = pcall(function() return os.execute(command) end)
   if not ok then return false end
   return result == true or result == 0
