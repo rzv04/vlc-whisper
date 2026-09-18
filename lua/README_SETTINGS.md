@@ -1,12 +1,12 @@
 # VLC-Whisper Settings Launcher
 
-`lua/extensions/vlc_whisper_settings.lua` is intentionally tiny. VLC still exposes **VLC-Whisper Settings** in its extension menu, but the Lua code no longer owns a settings form or model controls. It resolves the installed standalone settings executable and invokes its short `--launch-detached` bootstrap mode.
+`lua/extensions/vlc_whisper_settings.lua` is intentionally tiny. VLC still exposes **VLC-Whisper Settings** in its extension menu, but Lua no longer owns a settings form or model controls. It opens the local `vlc-whisper-settings://launch` URI and reads a one-byte launch result.
 
 ## Launcher invariant
 
-The bootstrap is process-creation acknowledgement only. `vlc-whisper-settings --launch-detached` uses Qt `QProcess::startDetached()` to create the real settings instance and immediately exits with success/failure. Lua reports a one-shot reinstall error when executable resolution or detached process creation fails.
+The URI is handled by a small access submodule embedded in the existing VLC-Whisper plugin. It invokes the production GUI in `--launch-detached` bootstrap mode without a command shell: `CreateProcessW(..., CREATE_NO_WINDOW, ...)` on Windows and `posix_spawn()` on Linux. The bootstrap then uses Qt `QProcess::startDetached()` to create the real settings instance and exits with success/failure.
 
-The extension does **not** poll, sleep, wait for window creation, monitor the detached child's lifetime, perform HTTP, hash model files, or synchronize settings. It does not invoke `start`, `cmd.exe`, PowerShell, or a console helper command. On Windows the settings target is a GUI executable, so no blank console window is part of the intended path. A later crash of the detached settings app is not treated as a launcher failure. See ADR-025 in `docs/decisions.md`.
+Lua therefore does **not** use `os.execute`, `io.popen`, `start`, `cmd.exe`, PowerShell, polling, sleeps, window-ready probes, child-lifetime monitoring, HTTP, or model hashing. A missing/failed bootstrap produces one small VLC error dialog telling the user to reinstall VLC-Whisper. A later crash of the detached settings process is outside the launcher's responsibility. On Windows the bootstrap and real settings process are GUI executables, so this path does not intentionally create a blank console window.
 
 ## Executable locations
 
