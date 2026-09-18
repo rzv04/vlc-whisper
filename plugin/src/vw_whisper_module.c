@@ -1076,8 +1076,7 @@ static void* vw_plugin_sender_main(void* arg) {
     bool now_paused = paused;
     bool show_paused_subtitles =
         config_GetInt(VLC_OBJECT((filter_t*)sys->presenter.p_filter_ctx), "whisper-show-paused") != 0;
-    bool source_pause_preview =
-        now_paused && show_paused_subtitles && atomic_load(&sys->source_mode_active);
+    bool source_pause_preview = now_paused && show_paused_subtitles && atomic_load(&sys->source_mode_active);
     int64_t now_us = vw_platform_get_monotonic_time_us();
     if (now_us - last_pause_poll_us >= 100000) {
       last_pause_poll_us = now_us;
@@ -1141,8 +1140,7 @@ static void* vw_plugin_sender_main(void* arg) {
         }
       }
       int64_t position_us = vw_plugin_input_position_us(input);  // -1 when unavailable
-      source_pause_preview =
-          now_paused && show_paused_subtitles && atomic_load(&sys->source_mode_active);
+      source_pause_preview = now_paused && show_paused_subtitles && atomic_load(&sys->source_mode_active);
       {
         float rate_diff = playback_rate - last_playback_rate;
         if (rate_diff < 0) rate_diff = -rate_diff;
@@ -1208,10 +1206,9 @@ static void* vw_plugin_sender_main(void* arg) {
           (position_us >= 0 && last_position_us >= 0 && (position_us - last_position_us >= seek_threshold_us));
       bool is_pos_backward_seek =
           (position_us >= 0 && last_position_us >= 0 && (last_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US));
-      bool is_paused_seek =
-          (now_paused && paused_position_us >= 0 && position_us >= 0 &&
-           (position_us - paused_position_us > VW_PTS_JUMP_THRESHOLD_US ||
-            paused_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US));
+      bool is_paused_seek = (now_paused && paused_position_us >= 0 && position_us >= 0 &&
+                             (position_us - paused_position_us > VW_PTS_JUMP_THRESHOLD_US ||
+                              paused_position_us - position_us > VW_PTS_JUMP_THRESHOLD_US));
       if (is_pos_forward_seek || is_pos_backward_seek || is_paused_seek) {
         vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_SEEK_POSITION", "position jumped %lldus; seek signaled",
                      (long long)(position_us - last_position_us));
@@ -1938,10 +1935,7 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
             add_integer("whisper-threads", 4, "CPU threads", "Threads for Whisper inference (1..16)", false)
                 change_integer_range(1, 16) add_bool("whisper-logging", false, "Enable diagnostic logging",
                                                      "Enable VLC-Whisper and worker diagnostic logging", false)
-                    add_bool("whisper-show-paused", true, "Show subtitles while paused",
-                             "Local files only: hold the current cue and preview the first cue after a paused seek",
-                             false)
-                        add_string("whisper-backend-active", "", "Active backend (read-only)",
+                    add_string("whisper-backend-active", "", "Active backend (read-only)",
                                "Mirrors resolved backend from worker STATUS (gpu|cpu); informational",
                                false) add_string("whisper-model-download", "", "Model download control",
                                                  "Catalog id to download or abort; plugin relays as MODEL_CTRL", false)
@@ -1959,7 +1953,10 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
                                             add_integer("whisper-translate-mode", 1, "Translation display mode",
                                                         "0=translation only, 1=dual line (source + translation)", false)
                                                 change_integer_range(0, 1)
-                                                    set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
+                                                    add_bool("whisper-show-paused", true,
+                                                             "Show subtitles while paused (local files only)",
+                                                             "Hold the current cue and preview paused seeks", false)
+                                                        set_callbacks(vw_plugin_open, vw_plugin_close) vlc_module_end()
 #pragma GCC diagnostic pop
 
 #if defined(__linux__) && defined(__GNUC__)

@@ -74,9 +74,9 @@ static vout_thread_t* vw_caption_presenter_find_vout(filter_t* p_filter) {
   return NULL;
 }
 
-static bool vw_caption_presenter_render_spu(vout_thread_t* vout, int channel_id, const char* text, int alignment, int y,
-                                             int64_t start_tick, int64_t stop_tick, bool replace_existing,
-                                             bool persistent) {
+static bool vw_caption_presenter_render_spu(
+    vout_thread_t* vout, int channel_id, const char* text, int alignment, int y, int64_t start_tick, int64_t stop_tick,
+    bool replace_existing, bool persistent) {
   if (!vout || !text || channel_id < 0) {
     return false;
   }
@@ -283,9 +283,9 @@ static float vw_caption_presenter_get_rate(vw_caption_presenter_t* presenter) {
   return 1.0f;
 }
 
-static bool vw_caption_presenter_render_internal(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment,
-                                                  int64_t duration_us, int64_t input_time_us, bool media_timeline,
-                                                  bool persistent) {
+static bool vw_caption_presenter_render_internal(
+    vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment, int64_t duration_us, int64_t input_time_us,
+    bool media_timeline, bool persistent) {
   if (!presenter || !segment || !segment->text_utf8) {
     return false;
   }

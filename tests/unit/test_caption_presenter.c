@@ -580,11 +580,12 @@ int main(void) {
   assert(g_last_subpic_b_ephemer == true);
   assert(strcmp(g_last_subpic_text, "Hello world\nSalut lume") == 0);
 
-  vw_caption_segment_t paused_seek_cue = {.start_pts_us = 900000000LL,
-                                         .end_pts_us = 902000000LL,
-                                         .text_utf8 = (char*)"Caption after paused seek",
-                                         .text_bytes = 25,
-                                         .is_final = true};
+  vw_caption_segment_t paused_seek_cue = {
+      .start_pts_us = 900000000LL,
+      .end_pts_us = 902000000LL,
+      .text_utf8 = (char*)"Caption after paused seek",
+      .text_bytes = 25,
+      .is_final = true};
   int puts_before_seek_preview = g_put_subpicture_calls;
   assert(vw_caption_presenter_show_paused(&spu_presenter, &paused_seek_cue));
   assert(g_put_subpicture_calls == puts_before_seek_preview + 1);
