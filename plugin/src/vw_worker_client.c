@@ -407,6 +407,11 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
         memset(&err, 0, sizeof(err));
         bool decoded = vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err) &&
                        vw_protocol_validate_payload(VW_MSG_ERROR, &err);
+        if (!decoded) {
+          free(resp_payload);
+          vw_worker_client_drop_transport(client);
+          return false;
+        }
         bool translation_error =
             decoded && (err.error_code == E_TRANSLATION_PROVIDER || err.error_code == E_TRANSLATION_TRANSPORT ||
                         err.error_code == E_TRANSLATION_PARSE || err.error_code == E_TRANSLATION_DEADLINE ||

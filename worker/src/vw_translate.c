@@ -796,7 +796,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
 
   char timeout_sec_str[16];
   snprintf(timeout_sec_str, sizeof(timeout_sec_str), "%.3f", (double)timeout_ms / 1000.0);
-  const char* argv[24];
+  const char* argv[26];
   int argc = 0;
   argv[argc++] = VW_CURL_EXECUTABLE;
   argv[argc++] = "--disable";
@@ -836,6 +836,8 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     argv[argc++] = "q@-";
   }
 
+  argv[argc++] = "-w";
+  argv[argc++] = "\n%{response_code}";
   argv[argc++] = base_url;
   argv[argc] = NULL;
 
@@ -1046,12 +1048,27 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     nanosleep(&ts, NULL);
   }
 
-  bool ok = !overflow && !write_failed && total_read > 0 && waited == pid && WIFEXITED(wait_status) &&
-            WEXITSTATUS(wait_status) == 0 && get_monotonic_us() <= deadline_us;
+  uint16_t response_status = 0;
+  bool response_status_valid = false;
+  if (total_read >= 4 && out_buf[total_read - 4] == '\n' && isdigit((unsigned char)out_buf[total_read - 3]) &&
+      isdigit((unsigned char)out_buf[total_read - 2]) && isdigit((unsigned char)out_buf[total_read - 1])) {
+    response_status = (uint16_t)((out_buf[total_read - 3] - '0') * 100 + (out_buf[total_read - 2] - '0') * 10 +
+                                 (out_buf[total_read - 1] - '0'));
+    total_read -= 4;
+    out_buf[total_read] = '\0';
+    response_status_valid = true;
+    g_http_provider_status = response_status;
+  }
+
+  bool ok = !overflow && !write_failed && total_read > 0 && response_status_valid && response_status >= 200 &&
+            response_status < 300 && waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0 &&
+            get_monotonic_us() <= deadline_us;
   if (!ok) {
     if (remaining_timeout_ms(deadline_us) == 0 ||
         (waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 28)) {
       g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else if (response_status_valid && (response_status < 200 || response_status >= 300)) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
     } else if (waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 22) {
       g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
     } else {
