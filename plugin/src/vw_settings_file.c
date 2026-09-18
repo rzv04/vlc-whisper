@@ -99,6 +99,14 @@ static bool vw_settings_ensure_dir(void) {
   char* slash = strrchr(path, '/');
   if (!slash) return false;
   *slash = '\0';
+
+  char parent[VW_SETTINGS_PATH_MAX];
+  if (snprintf(parent, sizeof(parent), "%s", path) >= (int)sizeof(parent)) return false;
+  slash = strrchr(parent, '/');
+  if (slash) {
+    *slash = '\0';
+    if (mkdir(parent, 0700) != 0 && errno != EEXIST) return false;
+  }
   if (mkdir(path, 0700) == 0) return true;
   return errno == EEXIST;
 }
@@ -138,8 +146,8 @@ static bool vw_settings_read_named(const char* name, char* out, size_t out_size)
 #endif
   if (!f) return false;
   size_t n = fread(out, 1, out_size - 1, f);
-  bool ok = !ferror(f) && !feof(f);
-  if (n < out_size - 1) ok = !ferror(f);
+  int extra = fgetc(f);
+  bool ok = !ferror(f) && extra == EOF;
   fclose(f);
   out[n] = '\0';
   return ok;
@@ -158,9 +166,9 @@ static bool vw_settings_write_named(const char* name, const char* value) {
 #endif
   if (!f) return false;
   size_t len = strlen(value);
-  bool ok = fwrite(value, 1, len, f) == len && fclose(f) == 0;
-  if (!ok) fclose(f);
-  return ok;
+  bool wrote = fwrite(value, 1, len, f) == len;
+  bool closed = fclose(f) == 0;
+  return wrote && closed;
 }
 
 static bool vw_settings_named_exists(const char* name) {
@@ -321,9 +329,10 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
     if (vw_settings_read_named("model-command", command, sizeof(command))) {
       command[strcspn(command, "\r\n")] = '\0';
       if (vw_valid_command(command)) {
-        vw_settings_delete_named("model-command");
+        char* copy = vw_settings_strdup(command);
+        if (!copy) return fallback;
         free(fallback);
-        return vw_settings_strdup(command);
+        return copy;
       }
     }
     return fallback;
@@ -372,8 +381,10 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
     }
   }
 
+  char* copy = vw_settings_strdup(selected);
+  if (!copy) return fallback;
   free(fallback);
-  return vw_settings_strdup(selected);
+  return copy;
 }
 
 int64_t vw_settings_override_int(const char* key, int64_t fallback) {
@@ -397,7 +408,9 @@ int64_t vw_settings_override_int(const char* key, int64_t fallback) {
 
 void vw_settings_note_psz(const char* key, const char* value) {
   if (!key || !value) return;
-  if (strcmp(key, "whisper-backend-active") == 0) {
+  if (strcmp(key, "whisper-model-download") == 0 && value[0] == '\0') {
+    vw_settings_delete_named("model-command");
+  } else if (strcmp(key, "whisper-backend-active") == 0) {
     vw_settings_write_named("backend-active", value);
   } else if (strcmp(key, "whisper-model-status") == 0) {
     vw_settings_write_named("model-status", value);
