@@ -57,7 +57,13 @@ if(TARGET vlc-whisper-settings)
     RUNTIME DESTINATION bin
   )
 else()
-  message(WARNING "VW: Qt6 is unavailable; the release package cannot include VLC-Whisper Settings")
+  # Keep ordinary developer configuration usable without Qt, but make the
+  # package target fail closed instead of shipping a Lua launcher with no GUI.
+  add_custom_target(vw_require_settings_for_package
+    COMMAND ${CMAKE_COMMAND} -E echo "VW: cannot package VLC-Whisper without the vlc-whisper-settings Qt target"
+    COMMAND ${CMAKE_COMMAND} -E false
+    VERBATIM
+  )
 endif()
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/models/manifest.json"
@@ -117,4 +123,7 @@ set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 include(CPack)
 if(TARGET package)
   add_dependencies(package provision_models)
+  if(TARGET vw_require_settings_for_package)
+    add_dependencies(package vw_require_settings_for_package)
+  endif()
 endif()
