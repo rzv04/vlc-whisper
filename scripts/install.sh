@@ -92,27 +92,30 @@ expected="$(grep -Eo '[[:xdigit:]]{64}' "$tmp/$CHECKSUM" | head -n 1)"
 actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1}')"
 [ "$actual" = "$expected" ] || die "release checksum mismatch"
 
-# Reinstall intentionally resets durable settings. Do this as the invoking user
-# before the privileged package step so subsequent Apply operations need no sudo/root.
-settings_owner=""
-settings_home="${HOME:-}"
+# Reinstall intentionally resets durable settings. Keep the entire reset at the
+# invoking user's privilege level so user-controlled symlinks cannot redirect a
+# privileged write/chmod/chown operation.
 if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
-  settings_owner="$SUDO_USER"
+  command -v runuser >/dev/null 2>&1 || die "runuser is required to reset per-user settings safely"
   settings_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-fi
-[ -n "$settings_home" ] || die "could not determine the user home for settings reset"
-if [ -n "${XDG_CONFIG_HOME:-}" ] && [ -z "$settings_owner" ]; then
-  settings_dir="$XDG_CONFIG_HOME/vlc-whisper"
+  [ -n "$settings_home" ] || die "could not determine the user home for settings reset"
+  runuser -u "$SUDO_USER" -- env HOME="$settings_home" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" sh -c '
+    settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/vlc-whisper"
+    umask 077
+    mkdir -p "$settings_dir"
+    chmod 700 "$settings_dir"
+    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
+    printf "%s\n" reset > "$settings_dir/reset-settings"
+  '
 else
-  settings_dir="$settings_home/.config/vlc-whisper"
-fi
-mkdir -p "$settings_dir"
-rm -f "$settings_dir/settings.json" "$settings_dir/model-command"
-printf '%s\n' reset > "$settings_dir/reset-settings"
-chmod 700 "$settings_dir"
-chmod 600 "$settings_dir/reset-settings"
-if [ -n "$settings_owner" ]; then
-  chown "$settings_owner" "$settings_dir" "$settings_dir/reset-settings"
+  settings_home="${HOME:-}"
+  [ -n "$settings_home" ] || die "could not determine the user home for settings reset"
+  settings_dir="${XDG_CONFIG_HOME:-$settings_home/.config}/vlc-whisper"
+  umask 077
+  mkdir -p "$settings_dir"
+  chmod 700 "$settings_dir"
+  rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
+  printf '%s\n' reset > "$settings_dir/reset-settings"
 fi
 
 if [ "$(id -u)" = "0" ]; then
