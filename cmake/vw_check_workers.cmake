@@ -12,11 +12,12 @@ endif()
 if(NOT DEFINED SETTINGS_DIR OR NOT EXISTS "${SETTINGS_DIR}/vlc-whisper-settings.exe")
   message(FATAL_ERROR "Missing deployed Qt settings application in '${SETTINGS_DIR}'")
 endif()
+if(NOT DEFINED SETTINGS_LAUNCHER_PLUGIN_PATH OR NOT EXISTS "${SETTINGS_LAUNCHER_PLUGIN_PATH}")
+  message(FATAL_ERROR "Missing native settings launcher plugin '${SETTINGS_LAUNCHER_PLUGIN_PATH}'")
+endif()
 set(_gpu "${WORKER_DIR}/vlc-whisper-worker.exe")
 set(_cpu "${WORKER_DIR}/vlc-whisper-worker-cpu.exe")
 
-# When VW_REQUIRE_CPU_FALLBACK is ON (GPU package), both workers must exist.
-# For explicit CPU-only builds, the CPU worker is required and the GPU worker may be absent.
 if(VW_REQUIRE_CPU_FALLBACK)
   if(NOT EXISTS "${_gpu}")
     message(FATAL_ERROR "Missing GPU worker '${_gpu}'. The production Windows release must not silently degrade to CPU-only.")
@@ -52,11 +53,8 @@ function(vw_verify_release_model model_path expected_sha256 label)
   message(STATUS "Verified ${label} model: ${model_path}")
 endfunction()
 
-# Copy every input into a build-owned staging directory, then verify the exact
-# model snapshots consumed by NSIS. Validation never authorizes a later copy of
-# a mutable source path.
 file(REMOVE_RECURSE "${STAGE_DIR}")
-file(MAKE_DIRECTORY "${STAGE_DIR}/models" "${STAGE_DIR}/settings")
+file(MAKE_DIRECTORY "${STAGE_DIR}/models" "${STAGE_DIR}/settings" "${STAGE_DIR}/plugins/access")
 if(EXISTS "${_gpu}")
   file(COPY "${_gpu}" DESTINATION "${STAGE_DIR}")
 endif()
@@ -64,6 +62,7 @@ if(EXISTS "${_cpu}")
   file(COPY "${_cpu}" DESTINATION "${STAGE_DIR}")
 endif()
 file(COPY "${PLUGIN_PATH}" DESTINATION "${STAGE_DIR}")
+file(COPY "${SETTINGS_LAUNCHER_PLUGIN_PATH}" DESTINATION "${STAGE_DIR}/plugins/access")
 file(COPY "${WHISPER_MODEL_PATH}" DESTINATION "${STAGE_DIR}/models")
 file(COPY "${VAD_MODEL_PATH}" DESTINATION "${STAGE_DIR}/models")
 file(COPY "${SOURCE_ROOT}/models/manifest.json" DESTINATION "${STAGE_DIR}/models")
@@ -86,4 +85,5 @@ foreach(_vw_stage_file IN LISTS _vw_stage_files)
   endif()
 endforeach()
 
-message(STATUS "Release inputs validated: gpu=${_gpu} cpu=${_cpu} plugin=${PLUGIN_PATH} settings=${SETTINGS_DIR}")
+message(STATUS
+  "Release inputs validated: gpu=${_gpu} cpu=${_cpu} plugin=${PLUGIN_PATH} launcher=${SETTINGS_LAUNCHER_PLUGIN_PATH} settings=${SETTINGS_DIR}")
