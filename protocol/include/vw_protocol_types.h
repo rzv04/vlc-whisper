@@ -71,6 +71,10 @@ typedef enum vw_error_code {
   E_SOURCE_OPEN = 10
 } vw_error_code_t;
 
+#define VW_ERROR_INTERNAL 9U
+#define VW_ERROR_SOURCE_OPEN 10U
+#define VW_ERROR_MAX 10U
+
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
 
@@ -175,7 +179,12 @@ typedef struct vw_msg_control {
   uint16_t reason;
 } vw_msg_control_t;
 
+typedef vw_msg_control_t vw_msg_pause_t;
+typedef vw_msg_control_t vw_msg_resume_t;
+typedef vw_msg_control_t vw_msg_stop_t;
+
 // Control-message reason codes (vw_msg_control_t.reason), per docs/api-contracts.md.
+// Per-message wire values matching v1.6 protocol encoding.
 #define VW_CTRL_REASON_USER_PAUSE 1U          // PAUSE: user paused playback
 #define VW_CTRL_REASON_USER_RESUME 1U         // RESUME: user resumed playback
 #define VW_CTRL_REASON_USER_STOP 1U           // STOP: user stopped the session

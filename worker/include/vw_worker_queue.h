@@ -45,4 +45,8 @@ bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out);
 // so any thread may read it without taking the queue lock.
 uint64_t vw_worker_queue_get_dropped_audio_us(const vw_worker_queue_t* q);
 
+// Returns the total duration of AUDIO frames still owned by the inbound frame queue. This is the
+// reader-thread backlog that has not yet been popped into the worker's audio buffer.
+uint64_t vw_worker_queue_get_queued_audio_us(const vw_worker_queue_t* q);
+
 #endif  // VW_WORKER_QUEUE_H_

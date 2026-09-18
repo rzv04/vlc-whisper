@@ -270,7 +270,7 @@ int main(void) {
     EXPECT(vw_worker_config_parse_args(&cfg, 3, argv_clamp_mid) == 0);
     EXPECT(cfg.n_threads == 16);
   }
-  // --- failure: --language auto is rejected; concrete Whisper language required (VW-020) ---
+  // --- failure: --language auto is rejected; concrete Whisper language required ---
   {
     vw_worker_config_t cfg;
     EXPECT(vw_worker_config_init_defaults(&cfg));

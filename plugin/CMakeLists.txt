@@ -8,7 +8,6 @@ set_source_files_properties(src/vw_whisper_module.c PROPERTIES
 add_library(vlc_whisper_plugin SHARED
     src/vw_whisper_module.c
     src/vw_benchmark.c
-    src/vw_session.c
     src/vw_audio_capture.c
     src/vw_caption_presenter.c
     src/vw_worker_client.c

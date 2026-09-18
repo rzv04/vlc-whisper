@@ -669,6 +669,9 @@ static bool send_control_frame(vw_worker_client_t* client, vw_message_type_t typ
 
 void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason) {
   if (!client || !client->pipe_handle || !client->session_active) return;
+  if (reason == 0) {
+    reason = VW_CTRL_REASON_USER_STOP;
+  }
   if (send_control_frame(client, VW_MSG_STOP_SESSION, reason)) {
     client->session_active = false;
   }

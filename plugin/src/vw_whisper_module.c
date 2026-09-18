@@ -1692,7 +1692,6 @@ static int vw_plugin_open(vlc_object_t* obj) {
   sys->capture.total_samples_processed = 0;
   sys->capture.last_pts_us = 0;
   sys->capture.reset_pending = &sys->capture_reset_pending;
-  sys->capture.invalid_pts_drain_pending = &sys->invalid_pts_pending;
   sys->capture.queue = sys->queue;
   sys->capture.playback_rate = &sys->playback_rate;
 

@@ -313,5 +313,6 @@ int main(void) {
   vw_benchmark_record_caption_received(&epoch, &segment, 4200000, false);
   EXPECT(epoch.latency_samples[0] == 200000);
   EXPECT(epoch.audio_chunks_sent == 2);
+
   return vw_test_finish("test_benchmark");
 }

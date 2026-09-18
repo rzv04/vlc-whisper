@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
+import tempfile
+import uuid
 import wave
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -45,8 +48,134 @@ def find_executable(build_dir: Path, relative_dir: str, stems: tuple[str, ...]) 
     raise FileNotFoundError(f"could not find {names} under {directory}")
 
 
+def validate_executable_path(path: Path | str, description: str = "executable") -> Path:
+    """Validate that path exists and is an executable file."""
+    p = Path(path).resolve()
+    if not (os.path.isfile(p) and os.access(p, os.X_OK)):
+        raise ValueError(f"{description} path is not an executable file: {p}")
+    return p
+
+
 def hypothesis_from_result(result: dict[str, Any]) -> str:
-    return " ".join(str(segment.get("text", "")).strip() for segment in result.get("segments", [])).strip()
+    """Extract joined hypothesis from runner result, validating segments schema."""
+    if not isinstance(result, dict):
+        raise ValueError(f"runner result must be a dict, got {type(result).__name__}")
+    if "segments" not in result or not isinstance(result["segments"], list):
+        raise ValueError("runner result missing or invalid 'segments' (expected list)")
+    segments = result["segments"]
+    for idx, seg in enumerate(segments):
+        if not isinstance(seg, dict):
+            raise ValueError(f"segment at index {idx} must be a dict, got {type(seg).__name__}")
+        if "text" not in seg or not isinstance(seg["text"], str):
+            raise ValueError(f"segment at index {idx} missing or invalid 'text' field (expected str)")
+    return " ".join(seg["text"].strip() for seg in segments).strip()
+
+
+def load_manifest(manifest_path: Path | str) -> dict[str, Any]:
+    """Load and strictly validate the quality benchmark manifest JSON schema."""
+    path = Path(manifest_path)
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+        manifest = json.loads(raw_text)
+    except OSError as exc:
+        raise ValueError(f"failed reading manifest file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"malformed JSON in manifest {path}: {exc}") from exc
+
+    if not isinstance(manifest, dict):
+        raise ValueError(f"manifest root must be a JSON object, got {type(manifest).__name__}")
+
+    dataset_revision = manifest.get("dataset_revision")
+    if not isinstance(dataset_revision, str) or not dataset_revision:
+        raise ValueError("manifest missing or invalid 'dataset_revision' (expected non-empty str)")
+
+    samples = manifest.get("samples")
+    if not isinstance(samples, list):
+        raise ValueError("manifest missing or invalid 'samples' (expected list)")
+
+    for idx, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            raise ValueError(f"sample at index {idx} must be a JSON object, got {type(sample).__name__}")
+
+        sample_id = sample.get("id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError(f"sample at index {idx} missing or invalid 'id' (expected non-empty str)")
+
+        # Validate and canonicalize audio_file / path aliases.
+        audio_file = sample.get("audio_file")
+        path_alias = sample.get("path")
+        if audio_file is None:
+            audio_file = path_alias
+        if not isinstance(audio_file, str) or not audio_file:
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) missing or invalid 'audio_file' (expected non-empty str)"
+            )
+        if path_alias is not None and path_alias != audio_file:
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) has conflicting 'audio_file' and 'path' values"
+            )
+        sample["audio_file"] = audio_file
+        sample["path"] = audio_file
+
+        # Validate reference_text / reference
+        reference_text = sample.get("reference_text")
+        reference_alias = sample.get("reference")
+        if reference_text is None:
+            reference_text = reference_alias
+        if not isinstance(reference_text, str):
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) missing or invalid 'reference_text' (expected str)"
+            )
+        if reference_alias is not None and reference_alias != reference_text:
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) has conflicting 'reference_text' and 'reference' values"
+            )
+        sample["reference_text"] = reference_text
+        sample["reference"] = reference_text
+
+        # Validate duration_seconds
+        if "duration_seconds" not in sample:
+            raise ValueError(f"sample '{sample_id}' (index {idx}) missing 'duration_seconds'")
+        duration = sample["duration_seconds"]
+        if (
+            isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or not math.isfinite(duration)
+            or duration < 0
+        ):
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) has invalid 'duration_seconds' ({duration!r}); "
+                "expected non-negative finite float"
+            )
+
+    return manifest
+
+
+def save_report_atomically(report_path: Path, content: str) -> None:
+    """Atomically write report content to destination path via temp file and rename."""
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=report_path.parent,
+            prefix=f"{report_path.name}.",
+            suffix=".tmp",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, report_path)
+    except Exception as exc:
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise OSError(f"failed to atomically save report to {report_path}: {exc}") from exc
 
 
 def add_counts(left: ErrorCounts, right: ErrorCounts) -> ErrorCounts:
@@ -110,16 +239,23 @@ def main() -> int:
         runner = args.runner.resolve() if args.runner else find_executable(
             build_dir, "tools/quality_benchmark", ("vw-quality-benchmark",)
         )
+        validate_executable_path(runner, "runner")
         worker = None
         if any(m in ("live", "lookahead") for m in modes):
             worker = args.worker.resolve() if args.worker else find_executable(
                 build_dir, "worker", ("vlc-whisper-worker", "vlc-whisper-worker-cpu")
             )
-    except FileNotFoundError as exc:
+            validate_executable_path(worker, "worker")
+    except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = load_manifest(manifest_path)
+    except ValueError as exc:
+        print(f"invalid manifest schema: {exc}", file=sys.stderr)
+        return 2
+
     samples = manifest.get("samples", [])
     if not samples:
         print("manifest contains no samples", file=sys.stderr)
@@ -201,6 +337,12 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 1
+            except OSError as exc:
+                print(
+                    f"failed to execute benchmark runner for {sample['id']} ({mode}): {exc}",
+                    file=sys.stderr,
+                )
+                return 1
             if completed.returncode != 0:
                 print(completed.stderr.rstrip(), file=sys.stderr)
                 print(f"benchmark runner failed for {sample['id']} ({mode})", file=sys.stderr)
@@ -213,7 +355,11 @@ def main() -> int:
                     print(completed.stderr.rstrip(), file=sys.stderr)
                 return 1
 
-            hypothesis = hypothesis_from_result(result)
+            try:
+                hypothesis = hypothesis_from_result(result)
+            except ValueError as exc:
+                print(f"invalid runner result schema for {sample['id']} ({mode}): {exc}", file=sys.stderr)
+                return 1
             counts = score_pair(reference, hypothesis)
             aggregate[(language, mode)] = add_counts(aggregate[(language, mode)], counts)
             per_sample.append(
@@ -260,10 +406,10 @@ def main() -> int:
 
     output_path = args.output
     if output_path is None:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        output_path = DEFAULT_RESULTS_DIR / f"quality-{stamp}.json"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+        unique_suffix = uuid.uuid4().hex[:8]
+        output_path = DEFAULT_RESULTS_DIR / f"quality-{stamp}-{unique_suffix}.json"
     output_path = output_path.resolve()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "schema_version": 1,
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -271,14 +417,19 @@ def main() -> int:
         "dataset_revision": manifest.get("dataset_revision"),
         "model": str(model_path),
         "runner": str(runner),
-        "worker": str(worker),
+        "worker": str(worker) if worker else None,
         "backend_requested": args.backend,
         "threads": args.threads,
         "normalizer": "vlcw-basic-v1",
         "aggregate": rows,
         "samples": per_sample,
     }
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_content = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    try:
+        save_report_atomically(output_path, report_content)
+    except OSError as exc:
+        print(f"failed writing report: {exc}", file=sys.stderr)
+        return 1
     print(f"\nLocal report: {output_path}")
     return 0
 

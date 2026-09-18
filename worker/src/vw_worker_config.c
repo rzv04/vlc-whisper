@@ -429,6 +429,58 @@ int vw_worker_config_parse_args(vw_worker_config_t* config, int argc, char** arg
   return 0;
 }
 
+bool vw_worker_config_default_model_dir(char* out, size_t out_size) {
+  if (!out || out_size == 0) return false;
+#ifdef _WIN32
+  wchar_t wbase[4096] = {0};
+  DWORD blen = GetEnvironmentVariableW(L"LOCALAPPDATA", wbase, 4096);
+  char tmp[4096] = {0};
+  int tmp_written = -1;
+  if (blen > 0 && blen < 4096) {
+    char utf8_base[4096] = {0};
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, wbase, -1, utf8_base, sizeof(utf8_base), NULL, NULL);
+    if (ulen > 0)
+      tmp_written = snprintf(tmp, sizeof(tmp), "%s\\vlc-whisper\\models", utf8_base);
+    else
+      tmp_written = snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+  } else {
+    wchar_t whome[4096] = {0};
+    DWORD hlen = GetEnvironmentVariableW(L"USERPROFILE", whome, 4096);
+    if (hlen > 0 && hlen < 4096) {
+      char utf8_home[4096] = {0};
+      int ulen = WideCharToMultiByte(CP_UTF8, 0, whome, -1, utf8_home, sizeof(utf8_home), NULL, NULL);
+      if (ulen > 0)
+        tmp_written = snprintf(tmp, sizeof(tmp), "%s\\AppData\\Local\\vlc-whisper\\models", utf8_home);
+      else
+        tmp_written = snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+    } else {
+      tmp_written = snprintf(tmp, sizeof(tmp), ".\\vlc-whisper\\models");
+    }
+  }
+  if (tmp_written < 0 || (size_t)tmp_written >= sizeof(tmp)) return false;
+  if ((size_t)tmp_written >= out_size) return false;
+  snprintf(out, out_size, "%s", tmp);
+  return true;
+#else
+  const char* xdg = getenv("XDG_DATA_HOME");
+  char tmp[4096];
+  int tmp_written;
+  if (xdg && xdg[0]) {
+    tmp_written = snprintf(tmp, sizeof(tmp), "%s/vlc-whisper/models", xdg);
+  } else {
+    const char* home = getenv("HOME");
+    if (home && home[0])
+      tmp_written = snprintf(tmp, sizeof(tmp), "%s/.local/share/vlc-whisper/models", home);
+    else
+      tmp_written = snprintf(tmp, sizeof(tmp), "/tmp/vlc-whisper/models");
+  }
+  if (tmp_written < 0 || (size_t)tmp_written >= sizeof(tmp)) return false;
+  if ((size_t)tmp_written >= out_size) return false;
+  snprintf(out, out_size, "%s", tmp);
+  return true;
+#endif
+}
+
 bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char* out, size_t out_size) {
   if (!config || !out || out_size == 0 || !config->model_path[0]) return false;
   if (vw_worker_config_file_exists(config->model_path)) {
@@ -459,6 +511,18 @@ bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char*
       vw_worker_config_join_path(install_model_dir, sizeof(install_model_dir), executable_dir, "models") &&
       vw_worker_config_join_path(out, out_size, install_model_dir, filename) && vw_worker_config_file_exists(out)) {
     return true;
+  }
+
+  // Fallback probe for the default per-user model directory before giving up.
+  char default_dir[VW_PATH_MAX_BYTES];
+  if (vw_worker_config_default_model_dir(default_dir, sizeof(default_dir))) {
+    char candidate[VW_PATH_MAX_BYTES];
+    if (vw_worker_config_join_path(candidate, sizeof(candidate), default_dir, filename) &&
+        vw_worker_config_file_exists(candidate)) {
+      if (strlen(candidate) >= out_size) return false;
+      snprintf(out, out_size, "%s", candidate);
+      return true;
+    }
   }
 
   return false;
