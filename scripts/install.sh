@@ -39,7 +39,7 @@ case "${VERSION_ID:-}" in
 esac
 CHECKSUM="${PACKAGE}.sha256"
 
-for cmd in apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp; do
+for cmd in apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp getent cut; do
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 done
 if [ "$(id -u)" != "0" ]; then
@@ -89,8 +89,31 @@ curl -fsSL "$BASE/$PACKAGE" -o "$tmp/$PACKAGE"
 curl -fsSL "$BASE/$CHECKSUM" -o "$tmp/$CHECKSUM"
 expected="$(grep -Eo '[[:xdigit:]]{64}' "$tmp/$CHECKSUM" | head -n 1)"
 [ -n "$expected" ] || die "release checksum is invalid"
-actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1 }')"
+actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1}')"
 [ "$actual" = "$expected" ] || die "release checksum mismatch"
+
+# Reinstall intentionally resets durable settings. Do this as the invoking user
+# before the privileged package step so subsequent Apply operations need no sudo/root.
+settings_owner=""
+settings_home="${HOME:-}"
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+  settings_owner="$SUDO_USER"
+  settings_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
+[ -n "$settings_home" ] || die "could not determine the user home for settings reset"
+if [ -n "${XDG_CONFIG_HOME:-}" ] && [ -z "$settings_owner" ]; then
+  settings_dir="$XDG_CONFIG_HOME/vlc-whisper"
+else
+  settings_dir="$settings_home/.config/vlc-whisper"
+fi
+mkdir -p "$settings_dir"
+rm -f "$settings_dir/settings.json" "$settings_dir/model-command"
+printf '%s\n' reset > "$settings_dir/reset-settings"
+chmod 700 "$settings_dir"
+chmod 600 "$settings_dir/reset-settings"
+if [ -n "$settings_owner" ]; then
+  chown "$settings_owner" "$settings_dir" "$settings_dir/reset-settings"
+fi
 
 if [ "$(id -u)" = "0" ]; then
   apt-get install -y "$tmp/$PACKAGE"
@@ -116,8 +139,10 @@ fi
 [ -f "$plugin_root/audio_filter/libvlc_whisper_plugin.so" ] || die "plugin was not installed into the detected VLC tree"
 [ -x "$vlc_root/vlc-whisper-worker" ] || die "worker was not installed beside the detected VLC tree"
 [ -f "$lua_root/vlc_whisper_settings.lua" ] || die "Lua settings extension was not installed into the detected VLC Lua tree"
+[ -x "/usr/bin/vlc-whisper-settings" ] || die "standalone settings application was not installed"
 [ -f "$vlc_root/models/ggml-tiny.bin" ] || die "bundled Whisper model was not installed"
 
 echo "vlc-whisper: installed for VLC $installed"
 echo "vlc-whisper: plugin: $plugin_root/audio_filter/libvlc_whisper_plugin.so"
-echo "vlc-whisper: settings: $lua_root/vlc_whisper_settings.lua"
+echo "vlc-whisper: settings launcher: $lua_root/vlc_whisper_settings.lua"
+echo "vlc-whisper: settings app: /usr/bin/vlc-whisper-settings"
