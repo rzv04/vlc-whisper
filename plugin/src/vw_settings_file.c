@@ -403,14 +403,28 @@ int64_t vw_settings_override_int(const char* key, int64_t fallback) {
   }
 
   bool value = false;
-  return vw_json_bool(json, key, &value) ? (value ? 1 : 0) : fallback;
+  if (!vw_json_bool(json, key, &value)) return fallback;
+  if (value && strcmp(key, "whisper-translate-enabled") == 0) {
+    char effective[8];
+    if (vw_settings_read_named("translate-enabled-effective", effective, sizeof(effective))) {
+      effective[strcspn(effective, "\r\n")] = '\0';
+      if (strcmp(effective, "0") == 0) return 0;
+    }
+  }
+  return value ? 1 : 0;
+}
+
+void vw_settings_ack_model_command(const char* consumed) {
+  if (!consumed || !vw_valid_command(consumed)) return;
+  char current[64];
+  if (!vw_settings_read_named("model-command", current, sizeof(current))) return;
+  current[strcspn(current, "\r\n")] = '\0';
+  if (strcmp(current, consumed) == 0) vw_settings_delete_named("model-command");
 }
 
 void vw_settings_note_psz(const char* key, const char* value) {
   if (!key || !value) return;
-  if (strcmp(key, "whisper-model-download") == 0 && value[0] == '\0') {
-    vw_settings_delete_named("model-command");
-  } else if (strcmp(key, "whisper-backend-active") == 0) {
+  if (strcmp(key, "whisper-backend-active") == 0) {
     vw_settings_write_named("backend-active", value);
   } else if (strcmp(key, "whisper-model-status") == 0) {
     vw_settings_write_named("model-status", value);
@@ -420,7 +434,12 @@ void vw_settings_note_psz(const char* key, const char* value) {
 }
 
 void vw_settings_note_int(const char* key, int64_t value) {
-  if (!key || strcmp(key, "whisper-model-progress") != 0) return;
+  if (!key) return;
+  if (strcmp(key, "whisper-translate-enabled") == 0) {
+    vw_settings_write_named("translate-enabled-effective", value ? "1" : "0");
+    return;
+  }
+  if (strcmp(key, "whisper-model-progress") != 0) return;
   char text[32];
   snprintf(text, sizeof(text), "%lld", (long long)value);
   vw_settings_write_named("model-progress", text);
