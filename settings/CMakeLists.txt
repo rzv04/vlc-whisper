@@ -1,3 +1,11 @@
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.20)
+    project(vlc_whisper_settings VERSION 0.1.0 LANGUAGES CXX)
+    include(CTest)
+endif()
+
+set(VW_SETTINGS_DEPLOY_DIR "" CACHE PATH "Pre-deployed Windows VLC-Whisper Settings runtime directory")
+
 find_package(Qt6 6.2 COMPONENTS Widgets Network QUIET)
 if(NOT Qt6_FOUND)
     message(STATUS "Qt6 Widgets/Network not found: standalone settings target is unavailable")
@@ -22,7 +30,10 @@ endif()
 
 if(WIN32)
     set_target_properties(vlc-whisper-settings PROPERTIES WIN32_EXECUTABLE TRUE)
-    set(VW_SETTINGS_DEPLOY_DIR "${CMAKE_BINARY_DIR}/settings-deploy" CACHE INTERNAL "Qt settings deployment directory")
+    if(NOT VW_SETTINGS_DEPLOY_DIR)
+        set(VW_SETTINGS_DEPLOY_DIR "${CMAKE_BINARY_DIR}/settings-deploy" CACHE PATH
+            "Pre-deployed Windows VLC-Whisper Settings runtime directory" FORCE)
+    endif()
     find_program(VW_WINDEPLOYQT_EXECUTABLE NAMES windeployqt windeployqt6)
     if(VW_WINDEPLOYQT_EXECUTABLE)
         add_custom_target(vw_settings_deploy
@@ -30,12 +41,12 @@ if(WIN32)
             COMMAND ${CMAKE_COMMAND} -E make_directory "${VW_SETTINGS_DEPLOY_DIR}"
             COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:vlc-whisper-settings>"
                     "${VW_SETTINGS_DEPLOY_DIR}/vlc-whisper-settings.exe"
-            COMMAND ${VW_WINDEPLOYQT_EXECUTABLE} --no-translations --no-system-d3d-compiler
+            COMMAND ${VW_WINDEPLOYQT_EXECUTABLE} --release --no-translations
                     "${VW_SETTINGS_DEPLOY_DIR}/vlc-whisper-settings.exe"
             DEPENDS vlc-whisper-settings
             COMMENT "Deploying Qt runtime for VLC-Whisper Settings"
             VERBATIM)
     else()
-        message(STATUS "windeployqt not found: Windows installer will fail closed if settings deployment is requested")
+        message(STATUS "windeployqt not found: build the app normally, then provide VW_SETTINGS_DEPLOY_DIR to packaging")
     endif()
 endif()
