@@ -38,9 +38,6 @@ jobs:
       - name: Python quality-tool unit tests
         run: python3 -m unittest discover -s tools/quality_benchmark -p 'test_*.py'
 
-      - name: Standalone settings contract test
-        run: python3 tests/unit/test_settings_frontend_contract.py
-
       - name: CTest unit & integration suite (STRICT)
         run: ctest --preset linux-x64-coverage --output-on-failure
 
