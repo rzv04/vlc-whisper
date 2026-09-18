@@ -23,7 +23,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build clang-format valgrind gcovr python3-pip
+          sudo apt-get install -y cmake ninja-build clang-format valgrind gcovr python3-pip qt6-base-dev
           sudo python3 -m pip install --break-system-packages --upgrade gcovr
 
       - name: Configure CMake (coverage preset)
@@ -51,7 +51,7 @@ jobs:
             protocol/include/*.h protocol/src/*.c \
             worker/include/*.h worker/src/*.c \
             tests/include/*.h tests/unit/*.c tests/integration/*.c \
-            tools/quality_benchmark/*.c
+            tools/quality_benchmark/*.c settings/src/*.cpp
 
       - name: Generate per-file coverage summary (gcovr)
         if: github.event_name == 'pull_request'
