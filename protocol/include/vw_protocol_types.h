@@ -71,7 +71,6 @@ typedef enum vw_error_code {
   E_SOURCE_OPEN = 10
 } vw_error_code_t;
 
-#define VW_ERROR_NONE 0U
 #define VW_ERROR_INTERNAL 9U
 #define VW_ERROR_SOURCE_OPEN 10U
 #define VW_ERROR_MAX 10U

@@ -120,8 +120,8 @@ static void test_protocol_validate_control_reasons(void) {
   stop_msg.reason = 4;
   vw_test_check_false("arbitrary stop reason rejected", vw_protocol_validate_payload(VW_MSG_STOP_SESSION, &stop_msg));
 
-  vw_msg_error_t err_msg = {.error_code = VW_ERROR_NONE};
-  vw_test_check_true("valid error code accepted", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
+  vw_msg_error_t err_msg = {.error_code = 0};
+  vw_test_check_false("zero error code rejected", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));
 
   err_msg.error_code = VW_ERROR_INTERNAL;
   vw_test_check_true("valid internal error code accepted", vw_protocol_validate_payload(VW_MSG_ERROR, &err_msg));

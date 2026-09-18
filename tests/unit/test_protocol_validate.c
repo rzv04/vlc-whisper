@@ -96,8 +96,8 @@ int main(void) {
   // Validate STATUS / ERROR
   vw_msg_status_t status = {0};
   EXPECT(vw_protocol_validate_payload(VW_MSG_STATUS, &status));
-  vw_msg_error_t err = {.error_code = VW_ERROR_NONE};
-  EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
+  vw_msg_error_t err = {.error_code = 0};
+  EXPECT(!vw_protocol_validate_payload(VW_MSG_ERROR, &err));
   err.error_code = VW_ERROR_INTERNAL;
   EXPECT(vw_protocol_validate_payload(VW_MSG_ERROR, &err));
   err.error_code = VW_ERROR_SOURCE_OPEN;

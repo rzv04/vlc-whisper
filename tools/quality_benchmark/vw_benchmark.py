@@ -119,14 +119,19 @@ def load_manifest(manifest_path: Path | str) -> dict[str, Any]:
 
         # Validate reference_text / reference
         reference_text = sample.get("reference_text")
+        reference_alias = sample.get("reference")
         if reference_text is None:
-            reference_text = sample.get("reference")
+            reference_text = reference_alias
         if not isinstance(reference_text, str):
             raise ValueError(
                 f"sample '{sample_id}' (index {idx}) missing or invalid 'reference_text' (expected str)"
             )
-        sample.setdefault("reference_text", reference_text)
-        sample.setdefault("reference", reference_text)
+        if reference_alias is not None and reference_alias != reference_text:
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) has conflicting 'reference_text' and 'reference' values"
+            )
+        sample["reference_text"] = reference_text
+        sample["reference"] = reference_text
 
         # Validate duration_seconds
         if "duration_seconds" not in sample:
