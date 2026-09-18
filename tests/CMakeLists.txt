@@ -141,7 +141,7 @@ if(WIN32)
 endif()
 add_vw_test(test_worker_client unit/vw_test_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 add_vw_test(test_worker_client_seek_epoch unit/test_worker_client_seek_epoch.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
-add_vw_test(test_worker_client_compat unit/test_worker_client_compat.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
+add_vw_test(test_worker_client_compat unit/vw_test_worker_client_compat.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_worker_client.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_linux.c ${CMAKE_SOURCE_DIR}/plugin/src/vw_platform_win32.c)
 
 # Failure-path worker seam tests use deterministic test doubles for decoder/VAD/Whisper so they do not need
 # model files, real media, VLC GUI, or a platform decoder. Production worker/session code remains unmodified.
@@ -183,6 +183,10 @@ add_vw_stub_worker_contract_test(test_new_session_resets_all_session_state
                                  integration/test_new_session_resets_all_session_state.c)
 add_vw_stub_worker_contract_test(test_worker_p2_contracts
                                  integration/vw_test_worker_p2_contracts.c)
+add_vw_stub_worker_contract_test(test_paused_source_preview
+                                 integration/test_paused_source_preview.c)
+target_sources(test_paused_source_preview PRIVATE ${CMAKE_SOURCE_DIR}/plugin/src/vw_caption_presenter.c)
+target_compile_definitions(test_paused_source_preview PRIVATE __PLUGIN__ MODULE_STRING="vlc_whisper" _GNU_SOURCE)
 
 add_vw_test(test_oversized_uri_rejected_before_truncation unit/test_oversized_uri_rejected_before_truncation.c)
 target_compile_definitions(test_oversized_uri_rejected_before_truncation
