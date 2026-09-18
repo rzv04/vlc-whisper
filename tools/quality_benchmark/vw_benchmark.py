@@ -101,16 +101,21 @@ def load_manifest(manifest_path: Path | str) -> dict[str, Any]:
         if not isinstance(sample_id, str) or not sample_id:
             raise ValueError(f"sample at index {idx} missing or invalid 'id' (expected non-empty str)")
 
-        # Validate audio_file / path
+        # Validate and canonicalize audio_file / path aliases.
         audio_file = sample.get("audio_file")
+        path_alias = sample.get("path")
         if audio_file is None:
-            audio_file = sample.get("path")
+            audio_file = path_alias
         if not isinstance(audio_file, str) or not audio_file:
             raise ValueError(
                 f"sample '{sample_id}' (index {idx}) missing or invalid 'audio_file' (expected non-empty str)"
             )
-        sample.setdefault("audio_file", audio_file)
-        sample.setdefault("path", audio_file)
+        if path_alias is not None and path_alias != audio_file:
+            raise ValueError(
+                f"sample '{sample_id}' (index {idx}) has conflicting 'audio_file' and 'path' values"
+            )
+        sample["audio_file"] = audio_file
+        sample["path"] = audio_file
 
         # Validate reference_text / reference
         reference_text = sample.get("reference_text")

@@ -157,6 +157,29 @@ class QualityHelpersTest(unittest.TestCase):
             self.assertEqual(data2["samples"][0]["audio_file"], "b.wav")
             self.assertEqual(data2["samples"][0]["reference_text"], "ref")
 
+    def test_load_manifest_rejects_conflicting_audio_path_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_file = Path(tmp) / "manifest.json"
+            manifest_file.write_text(
+                json.dumps(
+                    {
+                        "dataset_revision": "r1",
+                        "samples": [
+                            {
+                                "id": "s1",
+                                "audio_file": "validated.wav",
+                                "path": "used-later.wav",
+                                "reference_text": "text",
+                                "duration_seconds": 1.0,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "conflicting 'audio_file' and 'path'"):
+                load_manifest(manifest_file)
+
     def test_atomic_report_saving(self):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "sub" / "report.json"
