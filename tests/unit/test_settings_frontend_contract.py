@@ -14,12 +14,15 @@ def main() -> None:
     settings_cmake = text("settings/CMakeLists.txt")
     settings_cpp = text("settings/src/vw_qt_settings_main.cpp")
     plugin_cmake = text("plugin/CMakeLists.txt")
+    plugin_module = text("plugin/src/vw_whisper_module.c")
     launcher_bridge = text("plugin/src/vw_settings_launcher_module.c")
     settings_bridge = text("plugin/src/vw_settings_file.c")
     launcher = text("lua/extensions/vlc_whisper_settings.lua")
     win_installer = text("cmake/vw_installer.nsi.in")
     linux_packaging = text("cmake/vw_packaging_linux.cmake")
+    linux_postinst = text("cmake/debian/postinst")
     linux_installer = text("scripts/install.sh")
+    readme = text("README.md")
 
     for key in (
         "whisper-backend",
@@ -43,6 +46,8 @@ def main() -> None:
     assert "QNetwork" not in settings_cpp
     assert "WinHttp" not in settings_cpp and "winhttp" not in settings_cpp.lower()
     assert "curl" not in settings_cpp.lower(), "settings GUI must not own HTTP/model downloads"
+    assert "QTimer" in settings_cpp, "runtime status refresh must remain bounded inside the Qt process"
+    assert "downloading" in settings_cpp and "verifying" in settings_cpp
 
     assert "vlc-whisper-settings" in settings_cmake
     assert "--smoke-test" in settings_cpp and "QT_QPA_PLATFORM=offscreen" in settings_cmake
@@ -53,6 +58,7 @@ def main() -> None:
     assert "add_library(vlc_whisper_settings_launcher" not in plugin_cmake
     assert "--launch-detached" in launcher_bridge
     assert "CreateProcessW" in launcher_bridge
+    assert "WNOHANG" in launcher_bridge, "POSIX bootstrap acknowledgement must have a deadline"
     for forbidden in ("system(", "ShellExecute", "cmd.exe", "powershell", "start \"\""):
         assert forbidden.lower() not in launcher_bridge.lower(), f"native bridge uses shell launcher: {forbidden}"
     assert "spike" not in settings_cmake.lower()
@@ -63,14 +69,24 @@ def main() -> None:
         assert forbidden not in lowered, f"blocking/shell launcher primitive remains: {forbidden}"
     assert 'vlc.stream("vlc-whisper-settings://launch")' in launcher
     assert launcher.count("vlc.dialog(") == 1, "Lua may only use a one-shot launch-error dialog"
+    assert "error_dlg:hide()" in launcher, "repeated launch failures must not stack dialogs"
     assert "Engine:" not in launcher and "Translation (to):" not in launcher
     assert "try reinstalling vlc-whisper" in lowered
 
+    assert "vw_settings_ack_model_command" in settings_bridge
+    assert "vw_settings_ack_model_command" in plugin_module
+    assert "translate-enabled-effective" in settings_bridge
+
     assert "vlc-whisper-settings" in win_installer
     assert "settings.json" in win_installer and "reset-settings" in win_installer
+    assert 'ClearErrors\n  FileOpen $0 "$INSTALL_USER_APPDATA\\reset-settings" w' in win_installer
+    assert 'RMDir /r /REBOOTOK "$INSTDIR\\vlc-whisper-settings"' in win_installer
     assert "vlc-whisper-settings" in linux_packaging
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
+    assert "VW_LINUX_RELEASE_PACKAGE" in linux_packaging
+    assert "runuser" in linux_postinst and "runuser" in linux_installer
     assert "settings.json" in linux_installer and "reset-settings" in linux_installer
+    assert 'subgraph SETTINGS["Standalone Settings Process"]' in readme
 
 
 if __name__ == "__main__":
