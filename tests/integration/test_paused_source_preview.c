@@ -203,7 +203,8 @@ int main(void) {
         g_last_subpic_b_ephemer = false;
 
         vw_paused_preview_arm(&preview_state);
-        vw_test_check_true("first regenerated cue consumes paused preview token", vw_paused_preview_take(&preview_state));
+        vw_test_check_true("first regenerated cue consumes paused preview token",
+                           vw_paused_preview_take(&preview_state));
         vw_test_check_true("regenerated source cue renders through paused presenter",
                            vw_caption_presenter_show_paused(&presenter, &recv.segment));
         vw_test_check_true("paused presenter renders exactly one replacement", g_put_subpicture_calls == 1);
