@@ -19,6 +19,7 @@
 #include <QSaveFile>
 #include <QScreen>
 #include <QScrollArea>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
@@ -220,6 +221,10 @@ class vw_settings_window_t final : public QWidget {
 
     vw_load_settings();
     vw_size_for_screen();
+
+    auto* refresh = new QTimer(this);
+    connect(refresh, &QTimer::timeout, this, [this]() { vw_refresh_runtime_status(); });
+    refresh->start(1000);
   }
 
   QSize sizeHint() const override { return vw_content_ ? vw_content_->sizeHint() : QWidget::sizeHint(); }
@@ -308,15 +313,29 @@ class vw_settings_window_t final : public QWidget {
     const auto& model = vw_selected_model();
     const bool bundled = vw_bundled_model_exists(model);
     const bool user = QFileInfo::exists(vw_user_model_path(model));
-    if (user) vw_download_pending_ = false;
-    if (bundled && user)
+    const QString command = vw_read_small_file(vw_command_path_);
+    const QString status = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-status")));
+    const QString stage = status.section(QLatin1Char(':'), 0, 0);
+    const QString progress = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-progress")));
+
+    vw_download_pending_ = (!command.isEmpty() && command != QStringLiteral("abort")) ||
+                           stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying");
+
+    if (stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying") ||
+        stage == QStringLiteral("aborting")) {
+      vw_model_status_->setText(QStringLiteral("Model: %1%2")
+                                    .arg(stage, progress.isEmpty() ? QString() : QStringLiteral(" (%1%)").arg(progress)));
+    } else if (stage == QStringLiteral("failed")) {
+      vw_model_status_->setText(QStringLiteral("Model: download failed"));
+    } else if (bundled && user) {
       vw_model_status_->setText(QStringLiteral("Model: available (bundled + downloaded)"));
-    else if (bundled)
+    } else if (bundled) {
       vw_model_status_->setText(QStringLiteral("Model: available (bundled)"));
-    else if (user)
+    } else if (user) {
       vw_model_status_->setText(QStringLiteral("Model: available (downloaded)"));
-    else
+    } else {
       vw_model_status_->setText(QStringLiteral("Model: not installed (download required)"));
+    }
 
     if (vw_download_pending_) {
       vw_download_->setText(QStringLiteral("Abort Model Download"));
@@ -330,6 +349,11 @@ class vw_settings_window_t final : public QWidget {
     const QString active = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("backend-active")));
     vw_backend_status_->setText(QStringLiteral("Detected backend: ") +
                                 (active.isEmpty() ? QStringLiteral("(pending -- start playback)") : active));
+  }
+
+  void vw_refresh_runtime_status() {
+    vw_refresh_backend_status();
+    vw_refresh_model_status();
   }
 
   bool vw_write_object(const QJsonObject& settings) {
@@ -384,15 +408,14 @@ class vw_settings_window_t final : public QWidget {
     vw_logging_->setChecked(settings.value(QStringLiteral("whisper-logging")).toBool(false));
     vw_show_paused_->setChecked(settings.value(QStringLiteral("whisper-show-paused")).toBool(true));
     vw_translation_enabled_->setChecked(settings.value(QStringLiteral("whisper-translate-enabled")).toBool(false));
+    if (vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("translate-enabled-effective"))) ==
+        QStringLiteral("0"))
+      vw_translation_enabled_->setChecked(false);
     vw_select(vw_translation_from_,
               settings.value(QStringLiteral("whisper-translate-from")).toString(QStringLiteral("auto")));
     vw_select(vw_translation_to_,
               settings.value(QStringLiteral("whisper-translate-to")).toString(QStringLiteral("en")));
     vw_select(vw_translation_mode_, settings.value(QStringLiteral("whisper-translate-mode")).toInt(1));
-
-    const QString command = vw_read_small_file(vw_command_path_);
-    const QString status = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-status")));
-    vw_download_pending_ = (!command.isEmpty() && command != QStringLiteral("abort")) || status == QStringLiteral("downloading");
 
     if (invalid)
       vw_backend_status_->setText(QStringLiteral("Detected backend: (settings.json invalid -- using defaults)"));
@@ -426,6 +449,7 @@ class vw_settings_window_t final : public QWidget {
       vw_backend_status_->setText(QStringLiteral("Detected backend: (could not write settings.json)"));
       return;
     }
+    QFile::remove(QDir(vw_settings_dir_).filePath(QStringLiteral("translate-enabled-effective")));
     vw_persisted_ = settings;
     vw_refresh_backend_status();
     vw_refresh_model_status();
