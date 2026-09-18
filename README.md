@@ -168,11 +168,17 @@ VLC-Whisper separates realtime VLC integration from settings, inference, and net
 flowchart TB
     subgraph VLC["VLC Media Player Process"]
         AOUT["Audio Output Pipeline"] -->|"PCM callback"| PLUGIN["vlc_whisper audio filter"]
-        LUA["VLC-Whisper Settings Lua launcher"] -->|"detached launch"| QT["Standalone Qt settings process"]
-        QT -->|"atomic per-user settings.json / one-shot model command"| SENDER["Plugin sender thread"]
-        PLUGIN -->|"bounded SPSC queue"| SENDER
+        LUA["VLC-Whisper Settings Lua launcher"]
+        PLUGIN -->|"bounded SPSC queue"| SENDER["Plugin sender thread"]
         SENDER -->|"SPU subpictures"| SPU["VLC video output"]
     end
+
+    subgraph SETTINGS["Standalone Settings Process"]
+        QT["Standalone Qt settings process"]
+    end
+
+    LUA -->|"detached launch"| QT
+    QT -->|"atomic per-user settings.json / one-shot model command"| SENDER
 
     subgraph IPC["Authenticated local IPC"]
         SENDER -->|"audio + control"| WORKER_IN
