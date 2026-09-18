@@ -44,12 +44,17 @@ def main() -> None:
 
     assert "vlc-whisper-settings" in settings_cmake
     assert "--smoke-test" in settings_cpp and "QT_QPA_PLATFORM=offscreen" in settings_cmake
+    assert "QProcess::startDetached" in settings_cpp
+    assert "--launch-detached" in settings_cpp
     assert "spike" not in settings_cmake.lower()
     assert not (ROOT / "spikes/qt-settings").exists(), "production branch must remove the Qt spike"
 
     lowered = launcher.lower()
     for forbidden in ("while ", "os.clock", "dlg:update", "sleep(", "wait(", "poll("):
         assert forbidden not in lowered, f"blocking launcher primitive remains: {forbidden}"
+    for shell_artifact in ('start ""', "cmd.exe", "powershell", "conhost"):
+        assert shell_artifact not in lowered, f"launcher must not explicitly spawn shell artifact: {shell_artifact}"
+    assert "--launch-detached" in launcher
     assert launcher.count("vlc.dialog(") == 1, "Lua may only use a one-shot launch-error dialog"
     assert "Engine:" not in launcher and "Translation (to):" not in launcher
     assert "vlc-whisper-settings.exe" in launcher
