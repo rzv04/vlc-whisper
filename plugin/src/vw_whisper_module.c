@@ -504,10 +504,10 @@ typedef struct vw_plugin_sys {
   _Atomic bool source_mode_active;
   _Atomic bool session_active;
   vw_paused_preview_state_t paused_preview;  // sender-owned one-shot state; reset on every session identity change
-  _Atomic float playback_rate;         // current playback rate polled by sender, read by audio callback (VW-019)
-  _Atomic bool capture_reset_pending;  // sender requests capture resampler reset, callback clears (VW-019)
-  _Atomic bool invalid_pts_pending;    // producer signals sender to drain old queued audio after invalid interval
-  bool last_pts_was_invalid;           // callback-local invalid PTS state; kept per filter instance, not TLS
+  _Atomic float playback_rate;               // current playback rate polled by sender, read by audio callback (VW-019)
+  _Atomic bool capture_reset_pending;        // sender requests capture resampler reset, callback clears (VW-019)
+  _Atomic bool invalid_pts_pending;          // producer signals sender to drain old queued audio after invalid interval
+  bool last_pts_was_invalid;                 // callback-local invalid PTS state; kept per filter instance, not TLS
   uint64_t chunks_sent;
   uint32_t frames_received;
   uint32_t segments_received;
@@ -1260,8 +1260,7 @@ static void* vw_plugin_sender_main(void* arg) {
       bool is_source_mode = atomic_load(&sys->source_mode_active);
       bool preview_after_paused_seek = paused && is_source_mode && show_paused_subtitles;
       vw_log_event(VW_LOG_LEVEL_INFO, "PLUGIN_DISCONTINUITY", "seek=%lld mode=%s paused_preview=%d",
-                   (long long)seek_target_us, is_source_mode ? "source" : "live",
-                   preview_after_paused_seek ? 1 : 0);
+                   (long long)seek_target_us, is_source_mode ? "source" : "live", preview_after_paused_seek ? 1 : 0);
       if (preview_after_paused_seek) {
         vw_paused_preview_arm(&sys->paused_preview);
       } else {
@@ -1970,6 +1969,6 @@ vlc_module_begin() set_shortname("VLC-Whisper") set_description("Offline Whisper
 #pragma GCC diagnostic pop
 
 #if defined(__linux__) && defined(__GNUC__)
-                                                        EXTERN_SYMBOL DLL_SYMBOL
+                                                            EXTERN_SYMBOL DLL_SYMBOL
     int vlc_entry__3_0_0ft64(vlc_set_cb vlc_set, void* opaque) __attribute__((alias("vlc_entry__3_0_0f")));
 #endif
