@@ -14,6 +14,12 @@ else()
     target_compile_options(vlc-whisper-settings PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+if(BUILD_TESTING AND NOT WIN32)
+    add_test(NAME test_settings_headless COMMAND $<TARGET_FILE:vlc-whisper-settings> --smoke-test)
+    set_tests_properties(test_settings_headless PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-settings-config;XDG_DATA_HOME=${CMAKE_BINARY_DIR}/test-settings-data")
+endif()
+
 if(WIN32)
     set_target_properties(vlc-whisper-settings PROPERTIES WIN32_EXECUTABLE TRUE)
     set(VW_SETTINGS_DEPLOY_DIR "${CMAKE_BINARY_DIR}/settings-deploy" CACHE INTERNAL "Qt settings deployment directory")
