@@ -306,15 +306,14 @@ static void test_rejection_diagnostic_send_failure_is_fatal(void) {
   _Atomic bool running = true;
   _Atomic bool fatal_exit = false;
   vw_worker_translation_delivery_view_t delivery = {.handle = &broken,
-                                                     .sequence = &sequence,
-                                                     .session_id = &session_id,
-                                                     .session_active = &session_active,
-                                                     .running = &running,
-                                                     .fatal_exit = &fatal_exit};
+                                                    .sequence = &sequence,
+                                                    .session_id = &session_id,
+                                                    .session_active = &session_active,
+                                                    .running = &running,
+                                                    .fatal_exit = &fatal_exit};
   vw_worker_translation_diag_register_transport_state(&delivery);
 
-  bool handled =
-      vw_worker_translate_async_submit_scoped(NULL, &segment, "en", "ro", &broken, &sequence, &session_id);
+  bool handled = vw_worker_translate_async_submit_scoped(NULL, &segment, "en", "ro", &broken, &sequence, &session_id);
   assert(handled);
   assert(atomic_load(&fatal_exit));
   assert(!atomic_load(&running));

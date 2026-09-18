@@ -61,8 +61,7 @@ static inline void vw_worker_translation_diag_mark_transport_failed(vw_ipc_handl
 }
 
 // Once a diagnostic write has failed, never append another worker frame to a possibly partial ERROR frame.
-static inline bool vw_worker_translation_diag_guarded_ipc_send(vw_ipc_handle_t* handle, const void* data,
-                                                               size_t size) {
+static inline bool vw_worker_translation_diag_guarded_ipc_send(vw_ipc_handle_t* handle, const void* data, size_t size) {
   if (handle && vw_worker_translation_transport_state.handle == handle &&
       atomic_load(&vw_worker_translation_transport_state.failed)) {
     return false;
@@ -183,18 +182,21 @@ static inline void vw_worker_translation_diag_prepare_local_rejection(const vw_c
   result->failure.cause = VW_TRANSLATE_FAILURE_LOCAL;
 }
 
-static inline bool vw_worker_translation_diag_report_local_rejection(
-    const vw_caption_segment_t* segment, vw_ipc_handle_t* handle, uint64_t* sequence,
-    const vw_session_id_t* session_id) {
+static inline bool vw_worker_translation_diag_report_local_rejection(const vw_caption_segment_t* segment,
+                                                                     vw_ipc_handle_t* handle, uint64_t* sequence,
+                                                                     const vw_session_id_t* session_id) {
   if (!segment || !handle || !sequence || !session_id) return false;
   vw_translate_async_result_t result;
   vw_worker_translation_diag_prepare_local_rejection(segment, &result);
   vw_error_code_t code = E_TRANSLATION_LOCAL;
   char detail[VW_MAX_ERROR_MSG_BYTES];
   if (!vw_worker_translation_diag_build(&result, &code, detail, sizeof(detail))) return false;
-  vw_worker_translation_delivery_view_t delivery = {
-      .handle = handle, .sequence = sequence, .session_id = session_id, .session_active = NULL,
-      .running = NULL, .fatal_exit = NULL};
+  vw_worker_translation_delivery_view_t delivery = {.handle = handle,
+                                                    .sequence = sequence,
+                                                    .session_id = session_id,
+                                                    .session_active = NULL,
+                                                    .running = NULL,
+                                                    .fatal_exit = NULL};
   return vw_worker_translation_diag_send(&delivery, code, detail);
 }
 
@@ -211,8 +213,7 @@ static inline void vw_worker_translation_diag_deliver(const vw_translate_async_r
   bool active_delivery = delivery->session_active && *delivery->session_active && delivery->session_id;
   bool matching_session = false;
   if (result && active_delivery) {
-    matching_session =
-        memcmp(result->segment.session_id.bytes, delivery->session_id->bytes, VW_SESSION_ID_BYTES) == 0;
+    matching_session = memcmp(result->segment.session_id.bytes, delivery->session_id->bytes, VW_SESSION_ID_BYTES) == 0;
   }
   bool active_session = active_delivery && matching_session;
 
@@ -228,9 +229,9 @@ static inline void vw_worker_translation_diag_deliver(const vw_translate_async_r
   context->deliver(result, context->user_data);
 }
 
-static inline bool vw_worker_translate_async_try_deliver_scoped(
-    vw_translate_async_t* async, vw_translate_async_delivery_fn deliver, void* user_data,
-    vw_worker_translation_delivery_view_t delivery) {
+static inline bool vw_worker_translate_async_try_deliver_scoped(vw_translate_async_t* async,
+                                                                vw_translate_async_delivery_fn deliver, void* user_data,
+                                                                vw_worker_translation_delivery_view_t delivery) {
   vw_worker_translation_diag_register_transport_state(&delivery);
   if (delivery.handle == vw_worker_translation_transport_state.handle &&
       atomic_load(&vw_worker_translation_transport_state.failed)) {
@@ -243,10 +244,9 @@ static inline bool vw_worker_translate_async_try_deliver_scoped(
 }
 
 static inline bool vw_worker_translate_async_submit_scoped(vw_translate_async_t* async,
-                                                           const vw_caption_segment_t* segment,
-                                                           const char* source_lang, const char* target_lang,
-                                                           vw_ipc_handle_t* handle, uint64_t* sequence,
-                                                           const vw_session_id_t* session_id) {
+                                                           const vw_caption_segment_t* segment, const char* source_lang,
+                                                           const char* target_lang, vw_ipc_handle_t* handle,
+                                                           uint64_t* sequence, const vw_session_id_t* session_id) {
   if (handle == vw_worker_translation_transport_state.handle &&
       atomic_load(&vw_worker_translation_transport_state.failed)) {
     // A prior partial diagnostic write already made this transport unusable. Treat this cue as handled so callers
@@ -267,23 +267,22 @@ static inline bool vw_worker_translate_async_submit_scoped(vw_translate_async_t*
 }
 
 #ifdef VW_WORKER_TRANSLATION_DIAG_OVERRIDE
-#define VW_WORKER_TRANSLATION_SEQUENCE_PTR(value) \
-  _Generic((value), uint64_t*: (value), default: &(value))
-#define VW_WORKER_TRANSLATION_SESSION_PTR(value)                                                   \
-  _Generic((value), vw_session_id_t*: (value), const vw_session_id_t*: (value), default: &(value))
-#define VW_WORKER_TRANSLATION_DELIVERY_VIEW(user_data)                                      \
-  ((vw_worker_translation_delivery_view_t){.handle = (user_data)->handle,                    \
-                                           .sequence = (user_data)->sequence,                 \
-                                           .session_id = (user_data)->session_id,             \
-                                           .session_active = (user_data)->session_active,     \
-                                           .running = (user_data)->running,                   \
+#define VW_WORKER_TRANSLATION_SEQUENCE_PTR(value) _Generic((value), uint64_t *: (value), default: &(value))
+#define VW_WORKER_TRANSLATION_SESSION_PTR(value) \
+  _Generic((value), vw_session_id_t *: (value), const vw_session_id_t*: (value), default: &(value))
+#define VW_WORKER_TRANSLATION_DELIVERY_VIEW(user_data)                                    \
+  ((vw_worker_translation_delivery_view_t){.handle = (user_data)->handle,                 \
+                                           .sequence = (user_data)->sequence,             \
+                                           .session_id = (user_data)->session_id,         \
+                                           .session_active = (user_data)->session_active, \
+                                           .running = (user_data)->running,               \
                                            .fatal_exit = (user_data)->fatal_exit})
-#define vw_translate_async_try_deliver(async, deliver, user_data)                                      \
-  vw_worker_translate_async_try_deliver_scoped((async), (deliver), (user_data),                         \
+#define vw_translate_async_try_deliver(async, deliver, user_data)               \
+  vw_worker_translate_async_try_deliver_scoped((async), (deliver), (user_data), \
                                                VW_WORKER_TRANSLATION_DELIVERY_VIEW(user_data))
-#define vw_translate_async_submit(async, segment, source_lang, target_lang)                              \
-  vw_worker_translate_async_submit_scoped((async), (segment), (source_lang), (target_lang), (handle),   \
-                                          VW_WORKER_TRANSLATION_SEQUENCE_PTR(sequence),                  \
+#define vw_translate_async_submit(async, segment, source_lang, target_lang)                           \
+  vw_worker_translate_async_submit_scoped((async), (segment), (source_lang), (target_lang), (handle), \
+                                          VW_WORKER_TRANSLATION_SEQUENCE_PTR(sequence),               \
                                           VW_WORKER_TRANSLATION_SESSION_PTR(session_id))
 #define vw_ipc_send(handle, data, size) vw_worker_translation_diag_guarded_ipc_send((handle), (data), (size))
 #endif

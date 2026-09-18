@@ -411,9 +411,8 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
             decoded && (err.error_code == E_TRANSLATION_PROVIDER || err.error_code == E_TRANSLATION_TRANSPORT ||
                         err.error_code == E_TRANSLATION_PARSE || err.error_code == E_TRANSLATION_DEADLINE ||
                         err.error_code == E_TRANSLATION_LOCAL);
-        bool stale_translation =
-            translation_error && err.recoverable &&
-            memcmp(err.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0;
+        bool stale_translation = translation_error && err.recoverable &&
+                                 memcmp(err.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0;
         if (stale_translation) {
           // A prior caption epoch may finish translation after STOP. Its diagnostic is valid transport traffic but
           // must not abort or be attributed to the new START handshake.
