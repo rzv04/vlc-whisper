@@ -18,11 +18,23 @@ add_library(vlc_whisper_plugin SHARED
     src/vw_platform_linux.c
 )
 
+# VLC's Lua 5.1 build deliberately disables dynamic Lua modules and exposes no
+# process-spawn API. This tiny access module gives the Lua extension one local,
+# shell-free URI whose only job is to invoke the Qt --launch-detached bootstrap.
+add_library(vlc_whisper_settings_launcher SHARED
+    src/vw_settings_launcher_module.c
+)
+
 find_package(Threads REQUIRED)
 
 target_compile_definitions(vlc_whisper_plugin PRIVATE
     __PLUGIN__
     MODULE_STRING="vlc_whisper"
+    _GNU_SOURCE
+)
+target_compile_definitions(vlc_whisper_settings_launcher PRIVATE
+    __PLUGIN__
+    MODULE_STRING="vlc_whisper_settings_launcher"
     _GNU_SOURCE
 )
 
@@ -31,6 +43,9 @@ target_include_directories(vlc_whisper_plugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../worker/third_party/vlc-3.0.23/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../worker/include
+)
+target_include_directories(vlc_whisper_settings_launcher PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../worker/third_party/vlc-3.0.23/include
 )
 
 target_link_libraries(vlc_whisper_plugin PRIVATE
@@ -59,8 +74,17 @@ target_compile_options(vlc_whisper_plugin PRIVATE
     -Wextra
     -Wpedantic
 )
+target_compile_options(vlc_whisper_settings_launcher PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
 
 set_target_properties(vlc_whisper_plugin PROPERTIES
     PREFIX "lib"
     OUTPUT_NAME "vlc_whisper_plugin"
+)
+set_target_properties(vlc_whisper_settings_launcher PROPERTIES
+    PREFIX "lib"
+    OUTPUT_NAME "vlc_whisper_settings_launcher"
 )
