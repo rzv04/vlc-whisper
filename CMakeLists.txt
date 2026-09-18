@@ -59,6 +59,12 @@ if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
 
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME test_settings_frontend_contract
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/unit/test_settings_frontend_contract.py)
+    endif()
+
     # Tests that compile vw_worker.c directly must use the exact source-local translation diagnostic adapter that the
     # production worker uses, so cross-component tests exercise the macro-expanded submit/delivery path.
     set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c DIRECTORY ${CMAKE_SOURCE_DIR}/tests APPEND PROPERTY
@@ -74,6 +80,9 @@ if(BUILD_TESTING)
             USES_TERMINAL)
     endif()
 endif()
+
+# Standalone Qt settings application
+add_subdirectory(settings)
 
 # Separate sample snippet targets (marked EXCLUDE_FROM_ALL)
 add_subdirectory(samples EXCLUDE_FROM_ALL)
