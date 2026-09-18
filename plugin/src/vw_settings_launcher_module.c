@@ -11,14 +11,17 @@
 #include <windows.h>
 #include <wchar.h>
 #else
+#include <signal.h>
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 extern char** environ;
 #endif
 
 #define VW_LAUNCHER_PATH_CHARS 4096
+#define VW_LAUNCHER_WAIT_MS 1500
 
 typedef struct {
   char result[2];
@@ -76,7 +79,7 @@ static bool vw_settings_launcher_start(void) {
   if (!CreateProcessW(executable, command, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, working_dir, &startup, &process))
     return false;
 
-  DWORD wait_result = WaitForSingleObject(process.hProcess, 1500);
+  DWORD wait_result = WaitForSingleObject(process.hProcess, VW_LAUNCHER_WAIT_MS);
   DWORD exit_code = 1;
   bool ok = wait_result == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exit_code) && exit_code == 0;
   CloseHandle(process.hThread);
@@ -91,8 +94,19 @@ static bool vw_settings_launcher_start(void) {
   if (posix_spawn(&pid, executable, NULL, NULL, args, environ) != 0) return false;
 
   int status = 0;
-  if (waitpid(pid, &status, 0) != pid) return false;
-  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  const struct timespec pause = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000};
+  for (int elapsed_ms = 0; elapsed_ms < VW_LAUNCHER_WAIT_MS; elapsed_ms += 10) {
+    pid_t waited = waitpid(pid, &status, WNOHANG);
+    if (waited == pid) return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    if (waited < 0) return false;
+    nanosleep(&pause, NULL);
+  }
+
+  // The bootstrap should only live long enough to call QProcess::startDetached().
+  // Reap an unexpected hung bootstrap so VLC never accumulates launcher artifacts.
+  kill(pid, SIGKILL);
+  (void)waitpid(pid, &status, 0);
+  return false;
 }
 #endif
 
