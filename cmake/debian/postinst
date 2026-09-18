@@ -9,4 +9,19 @@ if [ -n "$plugin_file" ] && [ -n "$cache_gen" ] && [ -x "$cache_gen" ]; then
   "$cache_gen" "$plugin_root" >/dev/null 2>&1 || echo "vlc-whisper: warning: VLC plugin cache refresh failed" >&2
 fi
 
+# A reinstall is an explicit settings reset. When dpkg was invoked through sudo,
+# reset only that invoking user's per-user file; never sweep other home directories.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  settings_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  if [ -n "$settings_home" ]; then
+    settings_dir="$settings_home/.config/vlc-whisper"
+    mkdir -p "$settings_dir"
+    rm -f "$settings_dir/settings.json" "$settings_dir/model-command"
+    printf '%s\n' reset > "$settings_dir/reset-settings"
+    chmod 700 "$settings_dir"
+    chmod 600 "$settings_dir/reset-settings"
+    chown "$SUDO_USER" "$settings_dir" "$settings_dir/reset-settings"
+  fi
+fi
+
 exit 0
