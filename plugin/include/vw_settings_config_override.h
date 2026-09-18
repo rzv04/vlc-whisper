@@ -7,14 +7,15 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
-#include <vlc_block.h>
 #include <vlc_common.h>
 #include <vlc_configuration.h>
-#include <vlc_filter.h>
-#include <vlc_input.h>
-#include <vlc_plugin.h>
 
 #include "vw_settings_file.h"
+
+#undef config_GetPsz
+#undef config_GetInt
+#undef config_PutPsz
+#undef config_PutInt
 
 static _Thread_local char vw_settings_last_model_command[64];
 
