@@ -6,7 +6,6 @@
 
 #include <vlc_access.h>
 #include <vlc_common.h>
-#include <vlc_plugin.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -40,7 +39,7 @@ static bool vw_settings_launcher_executable(wchar_t* out, size_t out_count) {
   if (length == 0 || length >= sizeof(path) / sizeof(path[0])) return false;
   path[length] = L'\0';
 
-  // <VLC>/plugins/access/libvlc_whisper_settings_launcher.dll -> <VLC>
+  // <VLC>/plugins/audio_filter/libvlc_whisper_plugin.dll -> <VLC>
   for (int i = 0; i < 3; ++i) {
     wchar_t* slash = wcsrchr(path, L'\\');
     if (!slash) return false;
@@ -129,7 +128,7 @@ static int vw_settings_launcher_control(stream_t* stream, int query, va_list arg
   }
 }
 
-static int vw_settings_launcher_open(vlc_object_t* object) {
+int vw_settings_launcher_open(vlc_object_t* object) {
   stream_t* stream = (stream_t*)object;
   if (!stream->psz_location || strcmp(stream->psz_location, "launch") != 0) return VLC_EGENERIC;
 
@@ -142,20 +141,7 @@ static int vw_settings_launcher_open(vlc_object_t* object) {
   return VLC_SUCCESS;
 }
 
-static void vw_settings_launcher_close(vlc_object_t* object) {
+void vw_settings_launcher_close(vlc_object_t* object) {
   stream_t* stream = (stream_t*)object;
   free(stream->p_sys);
 }
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-vlc_module_begin()
-    set_shortname("VLC-Whisper Settings Launcher")
-    set_description("Shell-free VLC-Whisper Settings launcher bridge")
-    set_capability("access", 0)
-    set_category(CAT_INPUT)
-    set_subcategory(SUBCAT_INPUT_ACCESS)
-    add_shortcut("vlc-whisper-settings")
-    set_callbacks(vw_settings_launcher_open, vw_settings_launcher_close)
-vlc_module_end()
-#pragma GCC diagnostic pop
