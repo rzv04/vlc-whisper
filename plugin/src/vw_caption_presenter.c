@@ -464,8 +464,7 @@ bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input
                         : (raw_duration_us < min_media_floor_us) ? min_media_floor_us
                                                                  : raw_duration_us;
 
-  bool rendered =
-      vw_render(presenter, &presenter->pending_segment, duration_us, input_time_us, media_timeline, false);
+  bool rendered = vw_render(presenter, &presenter->pending_segment, duration_us, input_time_us, media_timeline, false);
   presenter->has_pending = false;
   return rendered;
 }
