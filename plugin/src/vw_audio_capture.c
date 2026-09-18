@@ -110,7 +110,7 @@ bool vw_audio_capture_process_block(vw_audio_capture_t* cap, const vw_audio_inpu
   cap->sample_remainder = (uint32_t)acc;
   cap->total_input_frames += input->frame_count;
   cap->last_pts_us = current_pts_us;
-  cap->total_samples_processed += total_emitted;
+  atomic_fetch_add_explicit(&cap->total_samples_processed, total_emitted, memory_order_relaxed);
 
   return true;
 }

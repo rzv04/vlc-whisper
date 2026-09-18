@@ -31,7 +31,9 @@ bool vw_protocol_decode_header(const uint8_t* buffer, size_t buffer_size, vw_fra
 #define ENC_BYTES(ptr, len)                          \
   do {                                               \
     if (written + (len) > buffer_size) return false; \
-    memcpy(buffer + written, (ptr), (len));          \
+    if ((len) > 0) {                                 \
+      memcpy(buffer + written, (ptr), (len));        \
+    }                                                \
     written += (len);                                \
   } while (0)
 
@@ -45,6 +47,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
   switch (type) {
     case VW_MSG_HELLO: {
       const vw_msg_hello_t* p = (const vw_msg_hello_t*)payload;
+      if (p->client_version_length > 0 && !p->client_version) return false;
       ENC_FIELD(p->min_major);
       ENC_FIELD(p->max_major);
       ENC_BYTES(p->auth_token, VW_AUTH_TOKEN_BYTES);
@@ -54,6 +57,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_HELLO_ACK: {
       const vw_msg_hello_ack_t* p = (const vw_msg_hello_ack_t*)payload;
+      if (p->worker_version_length > 0 && !p->worker_version) return false;
       ENC_FIELD(p->selected_major);
       ENC_FIELD(p->selected_minor);
       ENC_FIELD(p->capability_flags);
@@ -97,6 +101,7 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
     }
     case VW_MSG_AUDIO_PCM: {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
+      if (p->pcm_bytes > 0 && !p->pcm_data) return false;
       ENC_BYTES(p->session_id.bytes, VW_SESSION_ID_BYTES);
       ENC_FIELD(p->start_pts_us);
       ENC_FIELD(p->duration_us);
@@ -206,7 +211,9 @@ bool vw_protocol_encode_payload(vw_message_type_t type, const void* payload, uin
 #define DEC_BYTES(ptr, len)                           \
   do {                                                \
     if (read_pos + (len) > buffer_size) return false; \
-    memcpy((ptr), buffer + read_pos, (len));          \
+    if ((len) > 0) {                                  \
+      memcpy((ptr), buffer + read_pos, (len));        \
+    }                                                 \
     read_pos += (len);                                \
   } while (0)
 
@@ -413,5 +420,6 @@ bool vw_protocol_decode_payload(vw_message_type_t type, const uint8_t* buffer, s
     default:
       return false;
   }
+  if (read_pos != buffer_size) return false;
   return true;
 }

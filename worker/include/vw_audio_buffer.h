@@ -90,6 +90,9 @@ bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, 
 // Returns current sample count stored in the audio buffer.
 size_t vw_audio_buffer_get_count(const vw_audio_buffer_t* buf);
 
+// Queries the number of audio samples currently available in the buffer.
+size_t vw_audio_buffer_get_available(const vw_audio_buffer_t* buf);
+
 // Copies up to max_out float32 samples from the buffer into out_samples starting from the oldest sample.
 // Returns the number of samples copied and sets out_pts_us to the timestamp of the first copied sample.
 size_t vw_audio_buffer_get_samples(const vw_audio_buffer_t* buf, float* out_samples, size_t max_out,

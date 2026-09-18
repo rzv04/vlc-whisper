@@ -95,6 +95,7 @@ Open `View > VLC-Whisper Settings`.
 - **Speech model:** choose the bundled model or a downloaded catalog model. `.en` models are English-only.
 - **Audio language:** choose the primary spoken language.
 - **CPU threads:** `4` is a reasonable default for many systems.
+- **Paused subtitles:** enabled by default for local files; holds the visible cue and previews the first cue after seeking while paused.
 - **Translation:** disabled by default; choose translation-only or dual-line display when enabled.
 - **Model download:** choose a model and press **Download Selected Model**.
 

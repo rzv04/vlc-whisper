@@ -34,11 +34,18 @@ def safe_sample_id(value: Any, fallback: int) -> str:
 
 def write_pcm16_wav(path: Path, pcm_bytes: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(pcm_bytes)
+    tmp_path = path.with_suffix(".tmp")
+    try:
+        with wave.open(str(tmp_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(SAMPLE_RATE)
+            wav.writeframes(pcm_bytes)
+        tmp_path.replace(path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 def tensor_to_pcm16(audio_decoder: Any) -> tuple[bytes, float]:
@@ -91,6 +98,10 @@ def download_language(
         if not duration_is_eligible(duration_seconds, min_seconds, max_seconds):
             continue
 
+        reference = str(row.get("transcription", "")).strip()
+        if not reference:
+            continue
+
         sample_id = safe_sample_id(row.get("id"), row_index)
         filename = f"fleurs-{language}-{sample_id}.wav"
         relative_path = Path("audio") / language / filename
@@ -106,7 +117,7 @@ def download_language(
                 "split": DATASET_SPLIT,
                 "dataset_revision": revision,
                 "source_id": row.get("id"),
-                "reference": str(row.get("transcription", "")).strip(),
+                "reference": reference,
                 "duration_seconds": round(duration_seconds, 6),
                 "sample_rate": SAMPLE_RATE,
                 "channels": 1,
@@ -204,7 +215,9 @@ def main() -> int:
         "samples": samples,
     }
     manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_manifest = manifest_path.with_suffix(".tmp")
+    tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_manifest.replace(manifest_path)
     total_seconds = sum(float(sample["duration_seconds"]) for sample in samples)
     print(f"Wrote {len(samples)} local samples ({total_seconds:.1f}s) to {output_dir}")
     print(f"Manifest: {manifest_path}")
