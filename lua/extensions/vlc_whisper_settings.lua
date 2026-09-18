@@ -1,42 +1,8 @@
 -- VLC-Whisper Settings launcher for VLC 3.0.x Lua 5.1.
--- The extension does bounded local discovery + one short launch acknowledgement only.
--- The Qt bootstrap process performs the detached spawn; Lua never polls, sleeps, or monitors it.
+-- Lua opens one local VLC access URI and reads its one-byte launch result. The
+-- native bridge invokes the Qt --launch-detached bootstrap without a shell.
 
 local error_dlg = nil
-
-local function env_get(name)
-  local ok, value = pcall(function()
-    if os and os.getenv then return os.getenv(name) end
-    return nil
-  end)
-  return ok and value or nil
-end
-
-local function config_dir(name)
-  local ok, value = pcall(function()
-    if vlc and vlc.config and vlc.config[name] then return vlc.config[name]() end
-    if config and config[name] then return config[name]() end
-    return nil
-  end)
-  return ok and value or nil
-end
-
-local function join_path(base, suffix)
-  if base == nil or base == "" then return nil end
-  if base:sub(-1) == "/" or base:sub(-1) == "\\" then return base .. suffix end
-  return base .. "/" .. suffix
-end
-
-local function file_exists(path)
-  if path == nil or path == "" then return false end
-  local ok, file = pcall(function()
-    if vlc and vlc.io and vlc.io.open then return vlc.io.open(path, "rb") end
-    return nil
-  end)
-  if not ok or file == nil then return false end
-  pcall(function() file:close() end)
-  return true
-end
 
 local function logging_enabled()
   local ok, value = pcall(function()
@@ -51,21 +17,6 @@ local function log_error(message)
   if logging_enabled() then pcall(function() vlc.msg.err(message) end) end
 end
 
-local function resolve_settings_executable()
-  if env_get("OS") == "Windows_NT" then
-    local datadir = config_dir("datadir")
-    local candidate = join_path(datadir, "vlc-whisper-settings/vlc-whisper-settings.exe")
-    if file_exists(candidate) then return candidate end
-    local program_files = env_get("ProgramFiles")
-    candidate = join_path(program_files, "VideoLAN/VLC/vlc-whisper-settings/vlc-whisper-settings.exe")
-    if file_exists(candidate) then return candidate end
-    return nil
-  end
-  local candidate = "/usr/bin/vlc-whisper-settings"
-  if file_exists(candidate) then return candidate end
-  return nil
-end
-
 local function show_launch_error()
   log_error("[VLC-Whisper] standalone settings process could not be started")
   error_dlg = vlc.dialog("VLC-Whisper Settings Error")
@@ -76,16 +27,10 @@ local function show_launch_error()
 end
 
 local function launch_settings()
-  local path = resolve_settings_executable()
-  if path == nil or path:find('"', 1, true) then return false end
-
-  -- The installed target is a GUI binary on Windows. Do not use start/cmd/PowerShell wrappers:
-  -- this short invocation asks Qt to QProcess::startDetached() the real settings instance and
-  -- returns success only when that OS process creation succeeded.
-  local command = '"' .. path .. '" --launch-detached'
-  local ok, result = pcall(function() return os.execute(command) end)
-  if not ok then return false end
-  return result == true or result == 0
+  local ok, stream = pcall(function() return vlc.stream("vlc-whisper-settings://launch") end)
+  if not ok or stream == nil then return false end
+  local read_ok, result = pcall(function() return stream:read(2) end)
+  return read_ok and result ~= nil and result:sub(1, 1) == "1"
 end
 
 function descriptor()
