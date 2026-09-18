@@ -1,6 +1,7 @@
 #ifndef VW_SETTINGS_CONFIG_OVERRIDE_H
 #define VW_SETTINGS_CONFIG_OVERRIDE_H
 
+#include <stdio.h>
 #include <string.h>
 
 #ifdef _WIN32
