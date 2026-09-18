@@ -188,7 +188,6 @@ Function un.IsVLCProcessRunning
   ${EndIf}
 FunctionEnd
 
-
 ; Stop only worker processes whose executable path belongs to this installation.
 ; The wait stays inside PowerShell so the NSIS InstFiles section does not jump
 ; backwards and make the progress bar visibly retreat/advance.
@@ -207,7 +206,6 @@ Function un.StopOwnedWorkers
   Pop $1
   Push $0
 FunctionEnd
-
 
 ; ------------------------------------------------------------------------------
 ; Section 1: Core Plugin, Worker & Models
@@ -361,6 +359,11 @@ Section "VLC Plugin & AI Engine" SecCore
   SetOutPath "$INSTDIR\lua\extensions"
   File "@VW_STAGE_DIR@/lua/extensions/vlc_whisper_settings.lua"
 
+  ; The standalone GUI and its Qt runtime are private VLC-Whisper assets. The GUI
+  ; itself writes only to the invoking user's profile and therefore never needs elevation.
+  SetOutPath "$INSTDIR\vlc-whisper-settings"
+  File /r "@VW_STAGE_DIR@/settings/*.*"
+
   SetOutPath "$INSTDIR\vlc-whisper"
   File /oname=LICENSE-vlc-whisper.txt "@VW_STAGE_DIR@/LICENSE"
   File /oname=THIRD_PARTY_NOTICES-vlc-whisper.md "@VW_STAGE_DIR@/THIRD_PARTY_NOTICES.md"
@@ -369,6 +372,16 @@ Section "VLC Plugin & AI Engine" SecCore
   WriteRegStr HKLM "Software\VLC-Whisper" "Version" "@PROJECT_VERSION@"
   SetShellVarContext current
   StrCpy $INSTALL_USER_APPDATA "$LOCALAPPDATA\vlc-whisper"
+  CreateDirectory "$INSTALL_USER_APPDATA"
+  ; Reinstall is an explicit reset boundary: remove the durable JSON and leave a
+  ; marker so the plugin uses defaults even if it starts before the GUI recreates JSON.
+  Delete "$INSTALL_USER_APPDATA\settings.json"
+  Delete "$INSTALL_USER_APPDATA\model-command"
+  FileOpen $0 "$INSTALL_USER_APPDATA\reset-settings" w
+  ${IfNot} ${Errors}
+    FileWrite $0 "reset$\r$\n"
+    FileClose $0
+  ${EndIf}
   WriteRegStr HKLM "Software\VLC-Whisper" "InstallUserAppData" "$INSTALL_USER_APPDATA"
   SetShellVarContext all
 
@@ -468,7 +481,7 @@ Section "Uninstall"
 
   ReadRegStr $0 HKLM "Software\VLC-Whisper" "InstallUserAppData"
   ${If} $0 != ""
-    DetailPrint "Removing model cache at stored location: $0"
+    DetailPrint "Removing model cache and settings at stored location: $0"
     RMDir /r "$0\models"
     RMDir "$0"
     ${If} ${FileExists} "$0\*.*"
@@ -479,6 +492,7 @@ Section "Uninstall"
   Delete "$INSTDIR\lua\extensions\vlc_whisper_settings.lua"
   RMDir "$INSTDIR\lua\extensions"
   RMDir "$INSTDIR\lua"
+  RMDir /r "$INSTDIR\vlc-whisper-settings"
   Delete "$INSTDIR\vlc-whisper\LICENSE-vlc-whisper.txt"
   Delete "$INSTDIR\vlc-whisper\THIRD_PARTY_NOTICES-vlc-whisper.md"
   RMDir "$INSTDIR\vlc-whisper"
