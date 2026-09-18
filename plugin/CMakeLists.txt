@@ -1,14 +1,15 @@
 # Legacy module teardown still uses vw_log_set_sink(NULL, NULL). Preinclude source-local adapters that bind anonymous
-# removal to the current VLC object, bridge standalone settings, and route translation diagnostics before the legacy
-# generic-error switch sees them.
+# removal to the current VLC object, bridge standalone settings, append the shell-free launcher access submodule, and
+# route translation diagnostics before the legacy generic-error switch sees them.
 set_source_files_properties(src/vw_whisper_module.c PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_config_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_preclose_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_plugin_log_scope_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_module_override.h"
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_config_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_settings_launcher_module_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_preclose_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_plugin_log_scope_override.h;-include;${CMAKE_CURRENT_SOURCE_DIR}/include/vw_translation_failure_module_override.h"
     COMPILE_DEFINITIONS "VW_PLUGIN_LOG_SCOPE_OVERRIDE=1"
 )
 
 add_library(vlc_whisper_plugin SHARED
     src/vw_whisper_module.c
     src/vw_settings_file.c
+    src/vw_settings_launcher_module.c
     src/vw_benchmark.c
     src/vw_audio_capture.c
     src/vw_caption_presenter.c
@@ -18,23 +19,11 @@ add_library(vlc_whisper_plugin SHARED
     src/vw_platform_linux.c
 )
 
-# VLC's Lua 5.1 build deliberately disables dynamic Lua modules and exposes no
-# process-spawn API. This tiny access module gives the Lua extension one local,
-# shell-free URI whose only job is to invoke the Qt --launch-detached bootstrap.
-add_library(vlc_whisper_settings_launcher SHARED
-    src/vw_settings_launcher_module.c
-)
-
 find_package(Threads REQUIRED)
 
 target_compile_definitions(vlc_whisper_plugin PRIVATE
     __PLUGIN__
     MODULE_STRING="vlc_whisper"
-    _GNU_SOURCE
-)
-target_compile_definitions(vlc_whisper_settings_launcher PRIVATE
-    __PLUGIN__
-    MODULE_STRING="vlc_whisper_settings_launcher"
     _GNU_SOURCE
 )
 
@@ -43,9 +32,6 @@ target_include_directories(vlc_whisper_plugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../worker/third_party/vlc-3.0.23/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../protocol/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../worker/include
-)
-target_include_directories(vlc_whisper_settings_launcher PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../worker/third_party/vlc-3.0.23/include
 )
 
 target_link_libraries(vlc_whisper_plugin PRIVATE
@@ -74,17 +60,8 @@ target_compile_options(vlc_whisper_plugin PRIVATE
     -Wextra
     -Wpedantic
 )
-target_compile_options(vlc_whisper_settings_launcher PRIVATE
-    -Wall
-    -Wextra
-    -Wpedantic
-)
 
 set_target_properties(vlc_whisper_plugin PROPERTIES
     PREFIX "lib"
     OUTPUT_NAME "vlc_whisper_plugin"
-)
-set_target_properties(vlc_whisper_settings_launcher PROPERTIES
-    PREFIX "lib"
-    OUTPUT_NAME "vlc_whisper_settings_launcher"
 )
