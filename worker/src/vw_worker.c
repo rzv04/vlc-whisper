@@ -906,8 +906,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
                 }
               }
             }
-            if (!vw_worker_send_status(handle, session_id.bytes, config, engine, queue, audio_buf, session_active, paused,
-                                       &sequence)) {
+            if (!vw_worker_send_status(handle, session_id.bytes, config, engine, queue, audio_buf, session_active,
+                                       paused, &sequence)) {
               atomic_store(&fatal_exit, true);
               atomic_store(&running, false);
               break;
@@ -1026,9 +1026,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
               if (live_progressive_mode && read_cnt < VW_WINDOW_SAMPLES) {
                 size_t next_target = read_cnt + VW_LIVE_HOP_SAMPLES;
                 live_next_inference_samples = next_target < VW_WINDOW_SAMPLES ? next_target : VW_WINDOW_SAMPLES;
-                if (atomic_load(&running) &&
-                    !vw_worker_send_status(handle, session_id.bytes, config, engine, queue, audio_buf, session_active,
-                                           paused, &sequence)) {
+                if (atomic_load(&running) && !vw_worker_send_status(handle, session_id.bytes, config, engine, queue,
+                                                                    audio_buf, session_active, paused, &sequence)) {
                   atomic_store(&fatal_exit, true);
                   atomic_store(&running, false);
                 }
@@ -1144,9 +1143,8 @@ int vw_worker_run(const vw_worker_config_t* config) {
           if (builder) vw_segment_builder_clear(builder);
           if (vad_ctx) vw_vad_reset_state(vad_ctx);
           if (translator) vw_translate_async_invalidate(translator);
-          if (atomic_load(&running) &&
-              !vw_worker_send_status(handle, session_id.bytes, config, engine, queue, audio_buf, false, false,
-                                     &sequence)) {
+          if (atomic_load(&running) && !vw_worker_send_status(handle, session_id.bytes, config, engine, queue,
+                                                              audio_buf, false, false, &sequence)) {
             atomic_store(&fatal_exit, true);
             atomic_store(&running, false);
           }
