@@ -110,7 +110,8 @@ if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root"
     umask 077
     mkdir -p "$settings_dir"
     chmod 700 "$settings_dir"
-    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
+    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/model-path-download-base" \
+      "$settings_dir/reset-settings"
     printf "%s\n" reset > "$settings_dir/reset-settings"
   '
 else
@@ -120,7 +121,8 @@ else
   umask 077
   mkdir -p "$settings_dir"
   chmod 700 "$settings_dir"
-  rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
+  rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/model-path-download-base" \
+    "$settings_dir/reset-settings"
   printf '%s\n' reset > "$settings_dir/reset-settings"
 fi
 

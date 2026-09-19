@@ -377,6 +377,7 @@ Section "VLC Plugin & AI Engine" SecCore
   ; marker so the plugin uses defaults even if it starts before the GUI recreates JSON.
   Delete "$INSTALL_USER_APPDATA\settings.json"
   Delete "$INSTALL_USER_APPDATA\model-command"
+  Delete "$INSTALL_USER_APPDATA\model-path-download-base"
   ClearErrors
   FileOpen $0 "$INSTALL_USER_APPDATA\reset-settings" w
   ${IfNot} ${Errors}

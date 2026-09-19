@@ -27,7 +27,8 @@ if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
     umask 077
     mkdir -p "$settings_dir"
     chmod 700 "$settings_dir"
-    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
+    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/model-path-download-base" \
+      "$settings_dir/reset-settings"
     printf "%s\n" reset > "$settings_dir/reset-settings"
   '; then
     echo "vlc-whisper: failed to reset settings for $SUDO_USER" >&2

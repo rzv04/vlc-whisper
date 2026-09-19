@@ -129,7 +129,9 @@ class vw_settings_window_t final : public QWidget {
   vw_settings_window_t()
       : vw_settings_dir_(vw_config_dir()),
         vw_settings_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("settings.json"))),
-        vw_command_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("model-command"))) {
+        vw_command_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("model-command"))),
+        vw_model_download_base_path_(
+            QDir(vw_settings_dir_).filePath(QStringLiteral("model-path-download-base"))) {
     setWindowTitle(QStringLiteral("VLC-Whisper Settings"));
 
     vw_content_ = new QWidget(this);
@@ -394,6 +396,7 @@ class vw_settings_window_t final : public QWidget {
         }
       }
     } else if (vw_write_object(settings)) {
+      QFile::remove(vw_model_download_base_path_);
       QFile::remove(reset_path);
     } else {
       invalid = true;
@@ -424,7 +427,7 @@ class vw_settings_window_t final : public QWidget {
     vw_refresh_model_status();
   }
 
-  bool vw_save_settings() {
+  bool vw_save_settings(bool preserve_model_download_base = false) {
     bool ok = false;
     int threads = vw_threads_->text().trimmed().toInt(&ok);
     if (!ok) threads = 4;
@@ -451,6 +454,7 @@ class vw_settings_window_t final : public QWidget {
     }
     QFile::remove(QDir(vw_settings_dir_).filePath(QStringLiteral("translate-enabled-effective")));
     vw_persisted_ = settings;
+    if (!preserve_model_download_base) QFile::remove(vw_model_download_base_path_);
     vw_refresh_backend_status();
     vw_refresh_model_status();
     return true;
@@ -464,7 +468,15 @@ class vw_settings_window_t final : public QWidget {
 
   void vw_request_download() {
     const auto& model = vw_selected_model();
-    if (!vw_save_settings()) return;
+    if (!QFileInfo::exists(vw_model_download_base_path_)) {
+      const QString effective = vw_persisted_.value(QStringLiteral("model-path"))
+                                    .toString(QStringLiteral("models/ggml-tiny.bin"));
+      if (!vw_write_small_file(vw_model_download_base_path_, effective.toUtf8() + '\n')) {
+        vw_backend_status_->setText(QStringLiteral("Model request could not preserve the active model"));
+        return;
+      }
+    }
+    if (!vw_save_settings(true)) return;
     if (!vw_write_small_file(vw_command_path_, QByteArray(model.id) + '\n')) {
       vw_backend_status_->setText(QStringLiteral("Model request could not be queued"));
       return;
@@ -488,6 +500,7 @@ class vw_settings_window_t final : public QWidget {
   const QString vw_settings_dir_;
   const QString vw_settings_path_;
   const QString vw_command_path_;
+  const QString vw_model_download_base_path_;
   QJsonObject vw_persisted_;
   bool vw_download_pending_ = false;
   QWidget* vw_content_ = nullptr;

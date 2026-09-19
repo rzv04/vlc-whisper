@@ -43,6 +43,7 @@ def main() -> None:
     assert "XDG_CONFIG_HOME" in settings_cpp
     assert ".config/vlc-whisper" in settings_cpp
     assert "model-command" in settings_cpp and "model-command" in settings_bridge
+    assert "model-path-download-base" in settings_cpp and "model-path-download-base" in settings_bridge
     assert "QNetwork" not in settings_cpp
     assert "WinHttp" not in settings_cpp and "winhttp" not in settings_cpp.lower()
     assert "curl" not in settings_cpp.lower(), "settings GUI must not own HTTP/model downloads"

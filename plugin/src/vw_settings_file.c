@@ -559,11 +559,17 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
   if (!valid) return fallback;
 
   if (has_json && strcmp(key, "model-path") == 0) {
-    char active[VW_SETTINGS_PATH_MAX];
-    if (vw_settings_read_named("model-path-active", active, sizeof(active))) {
-      active[strcspn(active, "\r\n")] = '\0';
-      if (strcmp(vw_basename(active), vw_basename(selected)) == 0 && vw_settings_utf8_file_exists(active)) {
-        snprintf(selected, sizeof(selected), "%s", active);
+    char download_base[VW_SETTINGS_PATH_MAX];
+    if (vw_settings_read_named("model-path-download-base", download_base, sizeof(download_base))) {
+      download_base[strcspn(download_base, "\r\n")] = '\0';
+      if (vw_valid_model_path(download_base)) snprintf(selected, sizeof(selected), "%s", download_base);
+    } else {
+      char active[VW_SETTINGS_PATH_MAX];
+      if (vw_settings_read_named("model-path-active", active, sizeof(active))) {
+        active[strcspn(active, "\r\n")] = '\0';
+        if (strcmp(vw_basename(active), vw_basename(selected)) == 0 && vw_settings_utf8_file_exists(active)) {
+          snprintf(selected, sizeof(selected), "%s", active);
+        }
       }
     }
   }
@@ -618,7 +624,7 @@ void vw_settings_note_psz(const char* key, const char* value) {
   } else if (strcmp(key, "whisper-model-status") == 0) {
     vw_settings_write_named("model-status", value);
   } else if (strcmp(key, "model-path") == 0 && vw_valid_model_path(value) && vw_settings_utf8_file_exists(value)) {
-    vw_settings_write_named("model-path-active", value);
+    if (vw_settings_write_named("model-path-active", value)) vw_settings_delete_named("model-path-download-base");
   }
 }
 
