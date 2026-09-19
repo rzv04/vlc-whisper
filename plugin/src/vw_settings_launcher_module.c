@@ -149,14 +149,14 @@ static int vw_settings_launcher_control(stream_t* stream, int query, va_list arg
 }
 
 int vw_settings_launcher_open(vlc_object_t* object) {
-  stream_t* stream = (stream_t*)object;
-  if (!stream->psz_location || strcmp(stream->psz_location, "launch") != 0) return VLC_EGENERIC;
+  stream_t* p_access = (stream_t*)object;
+  if (!p_access->psz_location || strcmp(p_access->psz_location, "launch") != 0) return VLC_EGENERIC;
 
   vw_settings_launcher_sys_t* sys = (vw_settings_launcher_sys_t*)calloc(1, sizeof(*sys));
   if (!sys) return VLC_ENOMEM;
   sys->result[0] = vw_settings_launcher_start() ? '1' : '0';
   sys->result[1] = '\n';
-  stream->p_sys = sys;
+  p_access->p_sys = sys;
   ACCESS_SET_CALLBACKS(vw_settings_launcher_read, NULL, vw_settings_launcher_control, NULL);
   return VLC_SUCCESS;
 }
