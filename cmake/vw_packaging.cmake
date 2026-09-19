@@ -126,6 +126,7 @@ if(WIN32)
               -DWHISPER_MODEL_SHA256=${VW_MODEL_TINY_SHA256}
               -DVAD_MODEL_PATH=${VW_MODEL_VAD}
               -DVAD_MODEL_SHA256=${VW_MODEL_VAD_SHA256}
+              -DLUA_SETTINGS_PATH=${VW_GENERATED_LUA_SETTINGS}
               -DSETTINGS_DIR=${VW_SETTINGS_DEPLOY_DIR}
               -DSTAGE_DIR=${VW_STAGE_DIR}
               -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
@@ -173,8 +174,12 @@ if(WIN32)
     "${VW_MODEL_VAD}"
     DESTINATION models
   )
-  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lua"
-    DESTINATION .
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lua/"
+    DESTINATION lua
+    PATTERN "extensions/vlc_whisper_settings.lua" EXCLUDE
+  )
+  install(FILES "${VW_GENERATED_LUA_SETTINGS}"
+    DESTINATION lua/extensions
   )
   install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"

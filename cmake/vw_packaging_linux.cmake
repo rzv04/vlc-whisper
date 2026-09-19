@@ -72,7 +72,7 @@ install(FILES
   DESTINATION "${VW_LINUX_MODEL_DIR}"
 )
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/lua/extensions/vlc_whisper_settings.lua"
+  "${VW_GENERATED_LUA_SETTINGS}"
   DESTINATION "${VW_LINUX_VLC_LUA_DIR}"
 )
 install(FILES
