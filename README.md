@@ -201,7 +201,7 @@ Cross-component contracts are summarized in [`docs/invariants.md`](docs/invarian
 sudo apt-get update
 sudo apt-get install -y cmake ninja-build build-essential gcc g++ clang-format valgrind gcovr nsis curl pkg-config dpkg-dev \
   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
-  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libvulkan-dev glslc
+  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libvulkan-dev glslc spirv-headers
 ```
 
 ### Fedora / RHEL
@@ -254,13 +254,53 @@ For offline packaging, provide the pinned model files manually and omit `VW_PROV
 
 ## Linux Packaging
 
-The release preset provisions the same pinned models and produces `vlc-whisper-linux-amd64.deb` plus its SHA-256 file:
+The two release packages must be built in their matching Ubuntu userspace. Build the Ubuntu 24.04 package inside Ubuntu 24.04 (Noble), and the Ubuntu 26.04 package inside Ubuntu 26.04 (Resolute), using a VM, container, chroot, or native installation. Do not build both release artifacts from one arbitrary host and merely rename them.
+
+Install the release-build dependencies inside each environment:
 
 ```bash
-cmake --preset linux-x64-release
-# WARNING: On systems with less than 8 GB of RAM, compile with a lower number of jobs to prevent OOM
-cmake --build --preset linux-x64-release -j2 --target package
+apt-get update
+apt-get install -y git cmake ninja-build build-essential gcc g++ curl pkg-config dpkg-dev file \
+  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libvulkan-dev glslc spirv-headers
 ```
+
+From a recursive clone of the repository, build the matching package.
+
+### Ubuntu 24.04 (Noble)
+
+```bash
+cmake --preset linux-x64-release \
+  -DCPACK_PACKAGE_FILE_NAME=vlc-whisper-ubuntu-24.04-amd64 \
+  -DVW_PROVISION_MODELS=ON
+cmake --build --preset linux-x64-release -j2 --target package
+
+sha256sum --check build/linux-x64-release/vlc-whisper-ubuntu-24.04-amd64.deb.sha256
+dpkg-deb --info build/linux-x64-release/vlc-whisper-ubuntu-24.04-amd64.deb
+```
+
+Outputs:
+
+- `build/linux-x64-release/vlc-whisper-ubuntu-24.04-amd64.deb`
+- `build/linux-x64-release/vlc-whisper-ubuntu-24.04-amd64.deb.sha256`
+
+### Ubuntu 26.04 (Resolute)
+
+```bash
+cmake --preset linux-x64-release \
+  -DCPACK_PACKAGE_FILE_NAME=vlc-whisper-ubuntu-26.04-amd64 \
+  -DVW_PROVISION_MODELS=ON
+cmake --build --preset linux-x64-release -j2 --target package
+
+sha256sum --check build/linux-x64-release/vlc-whisper-ubuntu-26.04-amd64.deb.sha256
+dpkg-deb --info build/linux-x64-release/vlc-whisper-ubuntu-26.04-amd64.deb
+```
+
+Outputs:
+
+- `build/linux-x64-release/vlc-whisper-ubuntu-26.04-amd64.deb`
+- `build/linux-x64-release/vlc-whisper-ubuntu-26.04-amd64.deb.sha256`
+
+For offline packaging, provision the pinned Whisper and Silero VAD model files manually and omit `-DVW_PROVISION_MODELS=ON`; the package build still verifies the configured model hashes.
 
 > [!WARNING]
 > Compiling Vulkan shader translation units (`ggml-vulkan`) under `-O3` requires significant memory. On systems with less than 8 GB of RAM or without swap space, limit parallel build jobs (for example, `-j2` or `-j1`) to prevent compiler out-of-memory (OOM) termination:

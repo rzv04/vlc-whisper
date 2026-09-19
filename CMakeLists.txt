@@ -1,6 +1,26 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(vlc_whisper VERSION 0.1.0 LANGUAGES C CXX)
+project(vlc_whisper VERSION 0.2.0 LANGUAGES C CXX)
+
+set(VW_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${VW_GENERATED_DIR}/lua/extensions")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vw_winhttp_version_override.h.in"
+    "${VW_GENERATED_DIR}/vw_winhttp_version_override.h"
+    @ONLY
+)
+
+# The checked-in Lua file remains directly runnable for development, while the
+# packaged copy is generated from PROJECT_VERSION so release metadata cannot drift.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/lua/extensions/vlc_whisper_settings.lua" VW_LUA_SETTINGS_CONTENT)
+string(REGEX REPLACE
+    "version = \"[0-9]+\\.[0-9]+\\.[0-9]+\""
+    "version = \"${PROJECT_VERSION}\""
+    VW_LUA_SETTINGS_CONTENT
+    "${VW_LUA_SETTINGS_CONTENT}"
+)
+set(VW_GENERATED_LUA_SETTINGS "${VW_GENERATED_DIR}/lua/extensions/vlc_whisper_settings.lua")
+file(WRITE "${VW_GENERATED_LUA_SETTINGS}" "${VW_LUA_SETTINGS_CONTENT}")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -43,6 +63,16 @@ set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY 
              COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/worker/include/vw_worker_translation_diag_override.h")
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY vlc-whisper-worker APPEND PROPERTY
              COMPILE_DEFINITIONS VW_WORKER_TRANSLATION_DIAG_OVERRIDE=1)
+
+# Both Windows HTTP paths inherit the release identity from PROJECT_VERSION even
+# though their legacy call sites still pass literal user-agent strings.
+if(WIN32)
+    foreach(_vw_http_source IN ITEMS vw_translate.c vw_model_download.c)
+        set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/${_vw_http_source}
+                     TARGET_DIRECTORY vlc-whisper-worker APPEND PROPERTY
+                     COMPILE_OPTIONS "-include" "${VW_GENERATED_DIR}/vw_winhttp_version_override.h")
+    endforeach()
+endif()
 
 # Native VLC plugin module
 add_subdirectory(plugin)
