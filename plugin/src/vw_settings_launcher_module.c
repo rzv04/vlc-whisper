@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// clang-format off
 #include <vlc_common.h>
 #include <vlc_access.h>
+// clang-format on
 
 #ifdef _WIN32
 #include <windows.h>
