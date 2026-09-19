@@ -332,6 +332,16 @@ class vw_settings_window_t final : public QWidget {
     return false;
   }
 
+  QString vw_active_model_path_for_download() const {
+    const QString active = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-path-active")));
+    if (!active.isEmpty() && QFileInfo::exists(active)) return active;
+
+    const QString existing_marker = vw_read_small_file(vw_model_download_base_path_);
+    const QString prior_active = existing_marker.section(QLatin1Char('\n'), 1, 1).trimmed();
+    if (!prior_active.isEmpty()) return prior_active;
+
+    return vw_persisted_.value(QStringLiteral("model-path")).toString(QStringLiteral("models/ggml-tiny.bin"));
+  }
   void vw_refresh_model_status() {
     const auto& model = vw_selected_model();
     const bool bundled = vw_bundled_model_exists(model);
@@ -341,8 +351,8 @@ class vw_settings_window_t final : public QWidget {
     const QString stage = status.section(QLatin1Char(':'), 0, 0);
     const QString progress = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-progress")));
 
-    vw_download_pending_ =
-        !command.isEmpty() || stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying");
+    vw_download_pending_ = !command.isEmpty() || stage == QStringLiteral("downloading") ||
+                           stage == QStringLiteral("verifying") || stage == QStringLiteral("aborting");
 
     if (stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying") ||
         stage == QStringLiteral("aborting")) {
@@ -477,7 +487,7 @@ class vw_settings_window_t final : public QWidget {
     }
     QFile::remove(QDir(vw_settings_dir_).filePath(QStringLiteral("translate-enabled-effective")));
     vw_persisted_ = settings;
-    if (!preserve_model_download_base) QFile::remove(vw_model_download_base_path_);
+    if (!preserve_model_download_base && !vw_download_pending_) QFile::remove(vw_model_download_base_path_);
     vw_refresh_backend_status();
     vw_refresh_model_status();
     return true;
@@ -491,14 +501,11 @@ class vw_settings_window_t final : public QWidget {
 
   void vw_request_download() {
     const auto& model = vw_selected_model();
-    if (!QFileInfo::exists(vw_model_download_base_path_)) {
-      const QString effective =
-          vw_persisted_.value(QStringLiteral("model-path")).toString(QStringLiteral("models/ggml-tiny.bin"));
-      const QByteArray marker = QByteArray(model.filename) + '\n' + effective.toUtf8() + '\n';
-      if (!vw_write_small_file(vw_model_download_base_path_, marker)) {
-        vw_backend_status_->setText(QStringLiteral("Model request could not preserve the active model"));
-        return;
-      }
+    const QString effective = vw_active_model_path_for_download();
+    const QByteArray marker = QByteArray(model.filename) + '\n' + effective.toUtf8() + '\n';
+    if (!vw_write_small_file(vw_model_download_base_path_, marker)) {
+      vw_backend_status_->setText(QStringLiteral("Model request could not preserve the active model"));
+      return;
     }
     if (!vw_save_settings(true)) return;
     if (!vw_write_small_file(vw_command_path_, QByteArray(model.id) + '\n')) {
