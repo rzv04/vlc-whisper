@@ -1,0 +1,20 @@
+#ifndef VW_WINHTTP_VERSION_OVERRIDE_H_
+#define VW_WINHTTP_VERSION_OVERRIDE_H_
+
+#ifdef _WIN32
+#include <windows.h>
+#include <winhttp.h>
+
+// Keep all worker WinHTTP requests on the CMake project version even when a
+// call site supplies a legacy literal user agent.
+static inline HINTERNET vw_winhttp_open_versioned(LPCWSTR user_agent, DWORD access_type, LPCWSTR proxy_name,
+                                                   LPCWSTR proxy_bypass, DWORD flags) {
+  (void)user_agent;
+  return WinHttpOpen(L"VLC-Whisper/@PROJECT_VERSION@", access_type, proxy_name, proxy_bypass, flags);
+}
+
+#define WinHttpOpen(user_agent, access_type, proxy_name, proxy_bypass, flags) \
+  vw_winhttp_open_versioned((user_agent), (access_type), (proxy_name), (proxy_bypass), (flags))
+#endif
+
+#endif  // VW_WINHTTP_VERSION_OVERRIDE_H_
