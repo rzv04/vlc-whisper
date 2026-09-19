@@ -42,7 +42,25 @@ int main(void) {
   vw_write_settings(root, "{\"whisper-threads\": 12,]}");
   assert(vw_settings_override_int("whisper-threads", 7) == 4);
 
+  vw_write_settings(root, "{\"metadata\":{\"whisper-threads\":12},\"whisper-threads\":4}");
+  assert(vw_settings_override_int("whisper-threads", 7) == 4);
+
+  vw_write_settings(root, "{\"whisper-threads\":12,\"whisper-threads\":4}");
+  assert(vw_settings_override_int("whisper-threads", 7) == 4);
+
+  vw_write_settings(root, "{\"whisper-\\u0074hreads\":5}");
+  assert(vw_settings_override_int("whisper-threads", 7) == 5);
+
+  char reset_path[4096];
+  written = snprintf(reset_path, sizeof(reset_path), "%s/reset-settings", settings_directory);
+  assert(written > 0 && (size_t)written < sizeof(reset_path));
+  FILE* reset = fopen(reset_path, "wb");
+  assert(reset);
+  assert(fputs("reset\n", reset) >= 0);
+  assert(fclose(reset) == 0);
   vw_write_settings(root, "{\"whisper-threads\": 12}");
+  assert(vw_settings_override_int("whisper-threads", 7) == 4);
+  assert(unlink(reset_path) == 0);
   assert(vw_settings_override_int("whisper-threads", 7) == 12);
 
   char settings_path[4096];

@@ -958,6 +958,9 @@ static void* vw_plugin_sender_main(void* arg) {
         if (trans_to_new) free(trans_to_new);
 
         bool diff = false;
+        bool model_download_pending =
+            sys->model_download_id[0] || (dl_cmp[0] && strcmp(dl_cmp, "abort") != 0);
+        if (model_download_pending) mp_cmp = sys->cfg_model_path;
         if (strcmp(wp_cmp, sys->cfg_worker_path) != 0) diff = true;
         if (strcmp(mp_cmp, sys->cfg_model_path) != 0) diff = true;
         if (strcmp(be_cmp, sys->cfg_backend) != 0) diff = true;

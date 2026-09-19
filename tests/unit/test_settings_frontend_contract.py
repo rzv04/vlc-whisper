@@ -75,6 +75,7 @@ def main() -> None:
     assert "try reinstalling vlc-whisper" in lowered
 
     assert "vw_json_document_valid" in settings_bridge
+    assert "vw_json_key_equals" in settings_bridge
     assert "vw_settings_ack_model_command" in settings_bridge
     assert "vw_settings_ack_model_command" in config_bridge
     assert "vw_settings_last_model_command" in config_bridge
@@ -87,6 +88,8 @@ def main() -> None:
     assert "vlc-whisper-settings" in linux_packaging
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
     assert "vw_require_settings_for_package" in linux_packaging
+    for runtime_file in ("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll", "platforms/qwindows.dll"):
+        assert runtime_file in text("cmake/vw_check_workers.cmake"), runtime_file
     assert "runuser" in linux_postinst and "runuser" in linux_installer
     assert "|| true" not in linux_postinst, "post-install reset failures must fail the package"
     assert "settings.json" in linux_installer and "reset-settings" in linux_installer

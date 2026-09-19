@@ -12,6 +12,17 @@ endif()
 if(NOT DEFINED SETTINGS_DIR OR NOT EXISTS "${SETTINGS_DIR}/vlc-whisper-settings.exe")
   message(FATAL_ERROR "Missing deployed Qt settings application in '${SETTINGS_DIR}'")
 endif()
+set(_vw_settings_runtime
+  Qt6Core.dll
+  Qt6Gui.dll
+  Qt6Widgets.dll
+  Qt6Network.dll
+  platforms/qwindows.dll)
+foreach(_vw_runtime_file IN LISTS _vw_settings_runtime)
+  if(NOT EXISTS "${SETTINGS_DIR}/${_vw_runtime_file}")
+    message(FATAL_ERROR "Missing deployed Qt settings runtime file '${SETTINGS_DIR}/${_vw_runtime_file}'")
+  endif()
+endforeach()
 set(_gpu "${WORKER_DIR}/vlc-whisper-worker.exe")
 set(_cpu "${WORKER_DIR}/vlc-whisper-worker-cpu.exe")
 

@@ -318,18 +318,73 @@ static bool vw_json_document_valid(const char* json) {
   return *vw_json_skip_space(p) == '\0';
 }
 
+static int vw_json_hex_digit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static bool vw_json_key_equals(const char* begin, const char* end, const char* expected) {
+  const char* p = begin;
+  const char* q = expected;
+  while (p < end) {
+    unsigned value = (unsigned char)*p++;
+    if (value == '\\') {
+      if (p >= end) return false;
+      char escape = *p++;
+      if (escape == 'u') {
+        value = 0;
+        for (int i = 0; i < 4; ++i) {
+          if (p >= end) return false;
+          int digit = vw_json_hex_digit(*p++);
+          if (digit < 0) return false;
+          value = value * 16 + (unsigned)digit;
+        }
+        if (value > 0x7f) return false;
+      } else if (escape == '"' || escape == '\\' || escape == '/') {
+        value = (unsigned char)escape;
+      } else if (escape == 'b') {
+        value = '\b';
+      } else if (escape == 'f') {
+        value = '\f';
+      } else if (escape == 'n') {
+        value = '\n';
+      } else if (escape == 'r') {
+        value = '\r';
+      } else if (escape == 't') {
+        value = '\t';
+      } else {
+        return false;
+      }
+    }
+    if (!*q || value != (unsigned char)*q++) return false;
+  }
+  return *q == '\0';
+}
+
 static const char* vw_json_value(const char* json, const char* key) {
   if (!json || !key) return NULL;
-  char needle[128];
-  int n = snprintf(needle, sizeof(needle), "\"%s\"", key);
-  if (n <= 0 || (size_t)n >= sizeof(needle)) return NULL;
-  const char* p = strstr(json, needle);
-  if (!p) return NULL;
-  p += strlen(needle);
-  while (*p && isspace((unsigned char)*p)) p++;
-  if (*p++ != ':') return NULL;
-  while (*p && isspace((unsigned char)*p)) p++;
-  return p;
+  const char* p = vw_json_skip_space(json);
+  if (*p++ != '{') return NULL;
+  p = vw_json_skip_space(p);
+  const char* found = NULL;
+  while (*p && *p != '}') {
+    const char* key_begin = p + 1;
+    if (!vw_json_parse_string_value(&p)) return NULL;
+    const char* key_end = p - 1;
+    p = vw_json_skip_space(p);
+    if (*p++ != ':') return NULL;
+    p = vw_json_skip_space(p);
+    const char* value = p;
+    if (!vw_json_parse_value(&p, 1)) return NULL;
+    if (vw_json_key_equals(key_begin, key_end, key)) found = value;
+    p = vw_json_skip_space(p);
+    if (*p == '}') break;
+    if (*p++ != ',') return NULL;
+    p = vw_json_skip_space(p);
+  }
+  return found;
 }
 
 static bool vw_json_string(const char* json, const char* key, char* out, size_t out_size) {
@@ -474,10 +529,11 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
   char selected[VW_SETTINGS_PATH_MAX];
   char json[VW_SETTINGS_JSON_MAX];
   vw_settings_read_result_t read_result = vw_read_settings(json, sizeof(json));
-  bool has_json = read_result == VW_SETTINGS_VALID;
+  bool reset = vw_reset_pending();
+  bool has_json = !reset && read_result == VW_SETTINGS_VALID;
   if (has_json) {
     if (!vw_json_string(json, key, selected, sizeof(selected))) return fallback;
-  } else if (read_result == VW_SETTINGS_INVALID || vw_reset_pending()) {
+  } else if (reset || read_result == VW_SETTINGS_INVALID) {
     snprintf(selected, sizeof(selected), "%s", default_value);
   } else {
     return fallback;
@@ -525,8 +581,8 @@ int64_t vw_settings_override_int(const char* key, int64_t fallback) {
 
   char json[VW_SETTINGS_JSON_MAX];
   vw_settings_read_result_t read_result = vw_read_settings(json, sizeof(json));
-  if (read_result != VW_SETTINGS_VALID)
-    return read_result == VW_SETTINGS_INVALID || vw_reset_pending() ? default_value : fallback;
+  if (vw_reset_pending()) return default_value;
+  if (read_result != VW_SETTINGS_VALID) return read_result == VW_SETTINGS_INVALID ? default_value : fallback;
 
   if (strcmp(key, "whisper-threads") == 0 || strcmp(key, "whisper-translate-mode") == 0) {
     int64_t value = 0;
