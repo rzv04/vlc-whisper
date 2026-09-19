@@ -561,8 +561,13 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
   if (has_json && strcmp(key, "model-path") == 0) {
     char download_base[VW_SETTINGS_PATH_MAX];
     if (vw_settings_read_named("model-path-download-base", download_base, sizeof(download_base))) {
-      download_base[strcspn(download_base, "\r\n")] = '\0';
-      if (vw_valid_model_path(download_base)) snprintf(selected, sizeof(selected), "%s", download_base);
+      char* separator = strchr(download_base, '\n');
+      if (separator) {
+        *separator++ = '\0';
+        separator[strcspn(separator, "\r\n")] = '\0';
+        if (strcmp(download_base, vw_basename(selected)) == 0 && vw_valid_model_path(separator))
+          snprintf(selected, sizeof(selected), "%s", separator);
+      }
     } else {
       char active[VW_SETTINGS_PATH_MAX];
       if (vw_settings_read_named("model-path-active", active, sizeof(active))) {
@@ -624,7 +629,12 @@ void vw_settings_note_psz(const char* key, const char* value) {
   } else if (strcmp(key, "whisper-model-status") == 0) {
     vw_settings_write_named("model-status", value);
   } else if (strcmp(key, "model-path") == 0 && vw_valid_model_path(value) && vw_settings_utf8_file_exists(value)) {
-    if (vw_settings_write_named("model-path-active", value)) vw_settings_delete_named("model-path-download-base");
+    if (!vw_settings_write_named("model-path-active", value)) return;
+    char marker[VW_SETTINGS_PATH_MAX];
+    if (vw_settings_read_named("model-path-download-base", marker, sizeof(marker))) {
+      marker[strcspn(marker, "\r\n")] = '\0';
+      if (strcmp(marker, vw_basename(value)) == 0) vw_settings_delete_named("model-path-download-base");
+    }
   }
 }
 

@@ -105,7 +105,7 @@ if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root"
   command -v runuser >/dev/null 2>&1 || die "runuser is required to reset per-user settings safely"
   settings_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
   [ -n "$settings_home" ] || die "could not determine the user home for settings reset"
-  runuser -u "$SUDO_USER" -- env HOME="$settings_home" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" sh -c '
+  runuser -u "$SUDO_USER" -- env HOME="$settings_home" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" sh -eu -c '
     settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/vlc-whisper"
     umask 077
     mkdir -p "$settings_dir"

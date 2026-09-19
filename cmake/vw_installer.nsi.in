@@ -188,6 +188,17 @@ Function un.IsVLCProcessRunning
   ${EndIf}
 FunctionEnd
 
+Function IsOwnedSettingsProcessRunning
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$target=''$INSTDIR\vlc-whisper-settings\vlc-whisper-settings.exe''; try { $$owned=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $$_.Name -eq ''vlc-whisper-settings.exe'' -and $$_.ExecutablePath -eq $$target }; if ($$null -eq $$owned) { exit 1 } else { exit 0 } } catch { exit 2 }"'
+  Pop $0
+  Pop $1
+  ${If} $0 == "1"
+    Push 0
+  ${Else}
+    Push 1
+  ${EndIf}
+FunctionEnd
+
 ; Stop only worker processes whose executable path belongs to this installation.
 ; The wait stays inside PowerShell so the NSIS InstFiles section does not jump
 ; backwards and make the progress bar visibly retreat/advance.
@@ -359,8 +370,22 @@ Section "VLC Plugin & AI Engine" SecCore
   SetOutPath "$INSTDIR\lua\extensions"
   File "@VW_STAGE_DIR@/lua/extensions/vlc_whisper_settings.lua"
 
-  ; The standalone GUI and its Qt runtime are private VLC-Whisper assets. The GUI
-  ; itself writes only to the invoking user's profile and therefore never needs elevation.
+  ; The standalone GUI and its Qt runtime are private VLC-Whisper assets. Windows
+  ; locks these files while the owned settings process is running, so require it
+  ; to close before copying to avoid a mixed-version installation.
+  check_settings_running:
+    Call IsOwnedSettingsProcessRunning
+    Pop $0
+    ${If} $0 == 1
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+        "VLC-Whisper Settings is currently running. Close it, then click Retry to continue." \
+        IDRETRY check_settings_running IDCANCEL settings_abort
+    ${EndIf}
+    Goto no_settings_running
+  settings_abort:
+    SetErrorLevel 1
+    Quit
+  no_settings_running:
   SetOutPath "$INSTDIR\vlc-whisper-settings"
   File /r "@VW_STAGE_DIR@/settings/*.*"
 

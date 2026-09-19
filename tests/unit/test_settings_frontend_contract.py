@@ -85,6 +85,7 @@ def main() -> None:
     assert "vlc-whisper-settings" in win_installer
     assert "settings.json" in win_installer and "reset-settings" in win_installer
     assert 'ClearErrors\n  FileOpen $0 "$INSTALL_USER_APPDATA\\reset-settings" w' in win_installer
+    assert "IsOwnedSettingsProcessRunning" in win_installer
     assert 'RMDir /r /REBOOTOK "$INSTDIR\\vlc-whisper-settings"' in win_installer
     assert "vlc-whisper-settings" in linux_packaging
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging

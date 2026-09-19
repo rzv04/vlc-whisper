@@ -69,7 +69,7 @@ int main(void) {
   assert(written > 0 && (size_t)written < sizeof(download_base_path));
   FILE* download_base = fopen(download_base_path, "wb");
   assert(download_base);
-  assert(fputs("models/ggml-tiny.bin\n", download_base) >= 0);
+  assert(fputs("ggml-base.bin\nmodels/ggml-tiny.bin\n", download_base) >= 0);
   assert(fclose(download_base) == 0);
   fallback_model = malloc(32);
   assert(fallback_model);
@@ -84,6 +84,16 @@ int main(void) {
   FILE* activated = fopen(activated_path, "wb");
   assert(activated);
   assert(fclose(activated) == 0);
+  char earlier_path[4096];
+  written = snprintf(earlier_path, sizeof(earlier_path), "%s/ggml-tiny.bin", root);
+  assert(written > 0 && (size_t)written < sizeof(earlier_path));
+  FILE* earlier = fopen(earlier_path, "wb");
+  assert(earlier);
+  assert(fclose(earlier) == 0);
+  vw_settings_note_psz("model-path", earlier_path);
+  assert(access(download_base_path, F_OK) == 0);
+  assert(unlink(earlier_path) == 0);
+
   vw_settings_note_psz("model-path", activated_path);
   assert(access(download_base_path, F_OK) != 0);
   fallback_model = malloc(32);

@@ -471,7 +471,8 @@ class vw_settings_window_t final : public QWidget {
     if (!QFileInfo::exists(vw_model_download_base_path_)) {
       const QString effective = vw_persisted_.value(QStringLiteral("model-path"))
                                     .toString(QStringLiteral("models/ggml-tiny.bin"));
-      if (!vw_write_small_file(vw_model_download_base_path_, effective.toUtf8() + '\n')) {
+      const QByteArray marker = QByteArray(model.filename) + '\n' + effective.toUtf8() + '\n';
+      if (!vw_write_small_file(vw_model_download_base_path_, marker)) {
         vw_backend_status_->setText(QStringLiteral("Model request could not preserve the active model"));
         return;
       }
