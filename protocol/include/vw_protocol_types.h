@@ -78,7 +78,7 @@ typedef enum vw_error_code {
 
 #define VW_ERROR_INTERNAL 9U
 #define VW_ERROR_SOURCE_OPEN 10U
-#define VW_ERROR_MAX 10U
+#define VW_ERROR_MAX 15U
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
