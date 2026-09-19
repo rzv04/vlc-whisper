@@ -4,7 +4,7 @@
 <p align="center">
   <img src="./assets/vlc-whisper-logo-animation.gif" width="700" alt="VLC-Whisper">
 </p>
-
+  <p align="center"> <strong>Local real-time AI captions for VLC, with optional live text translation.</strong></p>
 <p align="center">
   <a href="https://github.com/rzv04/vlc-whisper/releases"><img src="https://img.shields.io/github/v/release/rzv04/vlc-whisper?color=blue&label=version" alt="Release"></a>
   <a href="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml"><img src="https://github.com/rzv04/vlc-whisper/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
@@ -14,17 +14,16 @@
   <img src="https://img.shields.io/badge/C-C17-blue" alt="C17">
 </p>
 
-> **Private, local real-time AI captions for VLC, with optional live text translation.**
 
-VLC-Whisper transcribes local media, network VoD, and live/non-seekable streams through a local `whisper.cpp` worker. Audio is never sent to a cloud transcription service. When translation is explicitly enabled, finalized subtitle text is sent to Google Translate endpoints over HTTPS.
 
-## Live Demo
+VLC-Whisper transcribes local media and livestreams (IPTV, VoD, other network streams) with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) into 10+ languages, with translation into 250+ languages through Google Translate.
+
 
 <p align="center">
   <video src="https://github.com/user-attachments/assets/94ab40aa-f654-4441-b8fb-98575e29d946" width="900" controls></video>
 </p>
 
-## Quick Start — Windows
+## Quick Start - Windows
 
 ### Installer (recommended)
 
@@ -32,24 +31,15 @@ VLC-Whisper transcribes local media, network VoD, and live/non-seekable streams 
 2. Run the installer.
 3. Launch **VLC (with AI Whisper Captions)** and play media.
 
-For VLC launched by another application, enable the filter under:
+For VLC launched by another application (such as [iptvnator](https://github.com/4gray/iptvnator/)), enable the filter under:
 
 `Tools > Preferences > Show settings: All > Audio > Filters > Offline Whisper AI Captions Filter`
 
-### Portable ZIP
+Uninstall is done through Control Panel.
 
-1. Extract `vlc-whisper-<version>-win64.zip` into the VLC installation directory.
-2. Refresh the plugin cache (or remove `plugins.dat`):
+## Quick Start - Ubuntu x64
 
-```cmd
-vlc-cache-gen.exe "C:\Program Files\VideoLAN\VLC\plugins"
-```
-
-3. Enable the VLC-Whisper audio filter in VLC preferences.
-
-## Quick Start — Ubuntu x64
-
-VLC-Whisper currently supports the Ubuntu APT build of VLC **3.0.23 or newer**. Snap and Flatpak VLC are detected by the installer but are not modified because their sandboxed plugin trees are separate.
+VLC-Whisper currently supports the Ubuntu APT build of VLC **3.0.23 or newer**. Snap and Flatpak VLC installations are not supported.
 
 ### Install script (recommended)
 
@@ -57,19 +47,15 @@ VLC-Whisper currently supports the Ubuntu APT build of VLC **3.0.23 or newer**. 
 curl -fsSL https://raw.githubusercontent.com/rzv04/vlc-whisper/main/scripts/install.sh | sh
 ```
 
-The script checks Ubuntu/x86_64, discovers the installed Ubuntu version (`24.04` or `26.04`), checks the available VLC version, downloads the matching checksummed release `.deb`, and installs required runtime dependencies through APT. It discovers VLC's multiarch plugin/Lua paths from the installed Debian packages rather than assuming an `x86_64-linux-gnu` path.
+### Manual .deb install
 
-### DEB
-
-Download the matching `vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubuntu-26.04-amd64.deb` package and its checksum from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
+Download`vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubuntu-26.04-amd64.deb` package, depending on your Ubuntu version, from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
 
 ```bash
 sudo apt install ./vlc-whisper-ubuntu-<version>-amd64.deb
 ```
 
-The package installs the native audio filter, isolated worker, bundled models, and `VLC-Whisper Settings` Lua extension and refreshes VLC's plugin cache.
-
-Uninstall either installation with:
+Uninstall with:
 
 ```bash
 sudo apt remove vlc-whisper
@@ -78,39 +64,12 @@ sudo apt remove vlc-whisper
 ## Features
 
 - Local Whisper transcription with Vulkan GPU acceleration or CPU fallback.
-- Local files, network VoD, IPTV, and live/non-seekable media.
-- In-VLC settings for backend, model, language, threads, and translation.
-- Explicit model downloads with SHA-256 integrity verification.
-- Optional translation of finalized subtitle text.
+- Real-time transcription of local files, network VoD, IPTV, and live/non-seekable media.
+- Settings for backend, model, language, threads, and translation.
+- Explicit model downloads with hash verification.
+- Optional translation of subtitle text.
 - Worker-process isolation so caption failures do not block VLC playback.
 - Seek, pause/resume, media-swap, and discontinuity handling through caption-session epochs.
-
-## Settings
-
-Open `View > VLC-Whisper Settings`.
-
-![settings](./assets/vlc-whisper-settings.png)
-
-- **Engine:** Auto is recommended; it uses GPU acceleration when available.
-- **Speech model:** choose the bundled model or a downloaded catalog model. `.en` models are English-only.
-- **Audio language:** choose the primary spoken language.
-- **CPU threads:** `4` is a reasonable default for many systems.
-- **Paused subtitles:** enabled by default for local files; holds the visible cue and previews the first cue after seeking while paused.
-- **Translation:** disabled by default; choose translation-only or dual-line display when enabled.
-- **Model download:** choose a model and press **Download Selected Model**.
-
-> [!WARNING]
-> The settings UI is currently a VLC Lua extension. VLC extension limitations can leave displayed model/configuration state stale until **Apply** is pressed; treat the applied configuration as authoritative.
-
-## Privacy and Network Behavior
-
-> [!INFO]
-> **Transcription audio stays local.** Network access is limited to explicit model downloads and opt-in translation. VLC-Whisper does not use cloud transcription or telemetry.
-
-- **Transcription/audio:** local only.
-- **Model downloads:** explicit user action; downloaded model bytes are integrity-checked before activation.
-- **Translation:** opt-in; finalized subtitle text is sent over HTTPS. Audio is never sent for translation.
-- **Logs:** diagnostics are opt-in and must not contain PCM, subtitle bodies, tokens, or credentials.
 
 ## Troubleshooting
 
@@ -140,7 +99,7 @@ On Windows, use **Control Panel > Programs > Uninstall a program**, Windows **In
 
 ## Benchmark Results
 
-> [!INFO]
+> [!NOTE]
 > These are anecdotal project regression measurements, not general `whisper.cpp` benchmarks. They use a small 20-clip FLEURS subset (10 English, 10 Romanian) and the bundled `tiny` model with 4 CPU threads.
 
 | Language | Mode | WER | CER | WER excl. insertions* | CER excl. insertions* | Raw word errors / ref words |
@@ -152,7 +111,7 @@ On Windows, use **Control Panel > Programs > Uninstall a program**, Windows **In
 | **Romanian (`ro`)** | **Local media** | **89.75%** | **33.00%** | **75.82%** | **29.47%** | 219 / 244 |
 | **Romanian (`ro`)** | **Livestream** | **159.43%** | **91.52%** | **69.67%** | **24.28%** | 389 / 244 |
 
-_*The insertion-free columns are reconstructed diagnostic rates from the preserved per-sample hypotheses and references using the benchmark's normalizer and the same minimum Levenshtein-distance objective. They remove insertion edit operations from the error numerator while retaining substitutions, deletions, and the original reference denominator. Where multiple minimum-distance alignments exist, the reconstruction uses the minimum insertion count, making the adjustment conservative. These are not standard WER/CER scores; duplicate rolling-window re-emission is a major source of insertions in livestream mode, but the adjustment removes all aligned insertions rather than attempting to label individual insertions as duplicates._
+_*These are not standard WER/CER scores; Due to the current rolling-window approach to transcription, duplicated words are major contributors to the error rates._
 
 See [`docs/quality-benchmark.md`](docs/quality-benchmark.md) for methodology and benchmark options.
 
@@ -188,8 +147,8 @@ flowchart TB
     end
 ```
 
-> [!INFO]
-> The core engineering rule is **captioning may fail; playback must not**. The VLC audio callback performs bounded capture/enqueue work only. Inference, blocking IPC, filesystem access, downloads, translation, and teardown waits belong off that path.
+> [!NOTE]
+> The core architectural rule is **captioning may fail; playback must not**. Transcription and other work must be offloaded to background workers, (_with the exception of media start and end_), and must not block the video playback.
 
 Cross-component contracts are summarized in [`docs/invariants.md`](docs/invariants.md); detailed protocol semantics live in [`docs/api-contracts.md`](docs/api-contracts.md).
 
@@ -339,9 +298,9 @@ Use [`tools/quality_benchmark/README.md`](tools/quality_benchmark/README.md) for
 
 Start with [`AGENTS.md`](AGENTS.md) and [`docs/invariants.md`](docs/invariants.md), then open only the technical reference relevant to the changed behavior.
 
-- [`docs/architecture.md`](docs/architecture.md) — process and lifecycle architecture.
-- [`docs/api-contracts.md`](docs/api-contracts.md) — IPC protocol and API wire semantics.
-- [`docs/roadmap.md`](docs/roadmap.md) — current and planned work.
+- [`docs/architecture.md`](docs/architecture.md) - process and lifecycle architecture.
+- [`docs/api-contracts.md`](docs/api-contracts.md) - IPC protocol and API wire semantics.
+- [`docs/roadmap.md`](docs/roadmap.md) - current and planned work.
 
 ## License
 
