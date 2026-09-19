@@ -76,4 +76,22 @@ if(VW_BERGAMOT_BUILD_ENGINE)
         vw_bergamot_spike_core
         vw_bergamot_engine
     )
+
+    if(BUILD_TESTING)
+        foreach(non_finite_budget nan inf)
+            add_test(
+                NAME vw_bergamot_rejects_budget_${non_finite_budget}
+                COMMAND vw-bergamot-translate-spike benchmark
+                    --model-config unused.yml
+                    --budget-ms ${non_finite_budget}
+                    unused.srt
+            )
+            set_tests_properties(
+                vw_bergamot_rejects_budget_${non_finite_budget}
+                PROPERTIES
+                    WILL_FAIL TRUE
+                    PASS_REGULAR_EXPRESSION "--budget-ms expects a positive finite number"
+            )
+        endforeach()
+    endif()
 endif()

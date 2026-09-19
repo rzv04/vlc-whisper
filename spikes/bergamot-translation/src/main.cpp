@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
@@ -63,7 +64,9 @@ double parse_double(const std::string& value, const char* option) {
   } catch (...) {
     throw std::runtime_error(std::string(option) + " expects a number");
   }
-  if (consumed != value.size() || parsed <= 0.0) throw std::runtime_error(std::string(option) + " expects a positive number");
+  if (consumed != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
+    throw std::runtime_error(std::string(option) + " expects a positive finite number");
+  }
   return parsed;
 }
 
