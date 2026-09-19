@@ -78,7 +78,7 @@ typedef enum vw_error_code {
 
 #define VW_ERROR_INTERNAL 9U
 #define VW_ERROR_SOURCE_OPEN 10U
-#define VW_ERROR_MAX 10U
+#define VW_ERROR_MAX 15U
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)
@@ -175,7 +175,7 @@ typedef struct vw_msg_audio {  // plugin to worker
   vw_session_id_t session_id;
   int64_t start_pts_us;
   int64_t duration_us;
-  uint32_t pcm_bytes;  // duration_us * 16000 / 1_000_000 * 2
+  uint32_t pcm_bytes;  // duration_us * 16000 / 1000000 * 2
   const uint8_t* pcm_data;
 } vw_msg_audio_t;
 
