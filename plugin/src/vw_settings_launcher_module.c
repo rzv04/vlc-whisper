@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <vlc_access.h>
 #include <vlc_common.h>
+#include <vlc_access.h>
 
 #ifdef _WIN32
 #include <windows.h>
