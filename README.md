@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/rzv04/vlc-whisper/main/scripts/inst
 
 ### Manual .deb install
 
-Download`vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubuntu-26.04-amd64.deb` package, depending on your Ubuntu version, from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
+Download `vlc-whisper-ubuntu-24.04-amd64.deb` or `vlc-whisper-ubuntu-26.04-amd64.deb` package, depending on your Ubuntu version, from [Releases](https://github.com/rzv04/vlc-whisper/releases), then install it with:
 
 ```bash
 sudo apt install ./vlc-whisper-ubuntu-<version>-amd64.deb
