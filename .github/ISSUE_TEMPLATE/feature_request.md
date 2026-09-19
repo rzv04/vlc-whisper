@@ -12,11 +12,11 @@ A clear and concise description of the feature or improvement you are proposing.
 
 ## Problem / Rationale
 
-What problem does this feature solve? How does it align with offline privacy and real-time playback invariants?
+What problem does this feature solve? How does it align with the current version?
 
 ## Proposed Technical Design
 
-Describe your proposed implementation, affected modules (plugin vs worker), and IPC protocol changes if applicable.
+Concisely describe your proposed implementation.
 
 ## Alternatives Considered
 
