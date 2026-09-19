@@ -92,6 +92,12 @@ expected="$(grep -Eo '[[:xdigit:]]{64}' "$tmp/$CHECKSUM" | head -n 1)"
 actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1}')"
 [ "$actual" = "$expected" ] || die "release checksum mismatch"
 
+if [ "$(id -u)" = "0" ]; then
+  apt-get install -y "$tmp/$PACKAGE"
+else
+  sudo apt-get install -y "$tmp/$PACKAGE"
+fi
+
 # Reinstall intentionally resets durable settings. Keep the entire reset at the
 # invoking user's privilege level so user-controlled symlinks cannot redirect a
 # privileged write/chmod/chown operation.
@@ -116,12 +122,6 @@ else
   chmod 700 "$settings_dir"
   rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
   printf '%s\n' reset > "$settings_dir/reset-settings"
-fi
-
-if [ "$(id -u)" = "0" ]; then
-  apt-get install -y "$tmp/$PACKAGE"
-else
-  sudo apt-get install -y "$tmp/$PACKAGE"
 fi
 
 installed="$(dpkg-query -W -f='${Version}' vlc 2>/dev/null || true)"

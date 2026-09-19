@@ -80,6 +80,10 @@ static bool vw_settings_launcher_start(void) {
     return false;
 
   DWORD wait_result = WaitForSingleObject(process.hProcess, VW_LAUNCHER_WAIT_MS);
+  if (wait_result == WAIT_TIMEOUT) {
+    if (TerminateProcess(process.hProcess, 1))
+      (void)WaitForSingleObject(process.hProcess, VW_LAUNCHER_WAIT_MS);
+  }
   DWORD exit_code = 1;
   bool ok = wait_result == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exit_code) && exit_code == 0;
   CloseHandle(process.hThread);

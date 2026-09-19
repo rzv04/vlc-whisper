@@ -318,8 +318,8 @@ class vw_settings_window_t final : public QWidget {
     const QString stage = status.section(QLatin1Char(':'), 0, 0);
     const QString progress = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-progress")));
 
-    vw_download_pending_ = (!command.isEmpty() && command != QStringLiteral("abort")) ||
-                           stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying");
+    vw_download_pending_ = !command.isEmpty() || stage == QStringLiteral("downloading") ||
+                           stage == QStringLiteral("verifying");
 
     if (stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying") ||
         stage == QStringLiteral("aborting")) {
@@ -424,7 +424,7 @@ class vw_settings_window_t final : public QWidget {
     vw_refresh_model_status();
   }
 
-  void vw_save_settings() {
+  bool vw_save_settings() {
     bool ok = false;
     int threads = vw_threads_->text().trimmed().toInt(&ok);
     if (!ok) threads = 4;
@@ -447,12 +447,13 @@ class vw_settings_window_t final : public QWidget {
 
     if (!vw_write_object(settings)) {
       vw_backend_status_->setText(QStringLiteral("Detected backend: (could not write settings.json)"));
-      return;
+      return false;
     }
     QFile::remove(QDir(vw_settings_dir_).filePath(QStringLiteral("translate-enabled-effective")));
     vw_persisted_ = settings;
     vw_refresh_backend_status();
     vw_refresh_model_status();
+    return true;
   }
 
   void vw_show_translation_test_guidance() {
@@ -463,6 +464,7 @@ class vw_settings_window_t final : public QWidget {
 
   void vw_request_download() {
     const auto& model = vw_selected_model();
+    if (!vw_save_settings()) return;
     if (!vw_write_small_file(vw_command_path_, QByteArray(model.id) + '\n')) {
       vw_backend_status_->setText(QStringLiteral("Model request could not be queued"));
       return;
@@ -478,7 +480,7 @@ class vw_settings_window_t final : public QWidget {
       vw_backend_status_->setText(QStringLiteral("Model abort could not be queued"));
       return;
     }
-    vw_download_pending_ = false;
+    vw_download_pending_ = true;
     vw_refresh_model_status();
     vw_backend_status_->setText(QStringLiteral("Model download: abort requested"));
   }

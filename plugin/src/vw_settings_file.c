@@ -147,7 +147,7 @@ static bool vw_settings_read_named(const char* name, char* out, size_t out_size)
   if (!f) return false;
   size_t n = fread(out, 1, out_size - 1, f);
   int extra = fgetc(f);
-  bool ok = !ferror(f) && extra == EOF;
+  bool ok = !ferror(f) && extra == EOF && memchr(out, '\0', n) == NULL;
   fclose(f);
   out[n] = '\0';
   return ok;
@@ -193,6 +193,129 @@ static void vw_settings_delete_named(const char* name) {
 #else
   vw_settings_delete_suffix(name);
 #endif
+}
+
+
+static const char* vw_json_skip_space(const char* p) {
+  while (*p && isspace((unsigned char)*p)) p++;
+  return p;
+}
+
+static bool vw_json_parse_value(const char** cursor, unsigned depth);
+
+static bool vw_json_parse_string_value(const char** cursor) {
+  const char* p = *cursor;
+  if (*p++ != '"') return false;
+  while (*p && *p != '"') {
+    unsigned char c = (unsigned char)*p++;
+    if (c < 0x20) return false;
+    if (c != '\\') continue;
+    char escape = *p++;
+    if (!escape) return false;
+    if (strchr("\"\\/bfnrt", escape)) continue;
+    if (escape != 'u') return false;
+    for (int i = 0; i < 4; ++i) {
+      if (!isxdigit((unsigned char)*p++)) return false;
+    }
+  }
+  if (*p++ != '"') return false;
+  *cursor = p;
+  return true;
+}
+
+static bool vw_json_parse_number(const char** cursor) {
+  const char* p = *cursor;
+  if (*p == '-') p++;
+  if (*p == '0') {
+    p++;
+  } else {
+    if (*p < '1' || *p > '9') return false;
+    while (isdigit((unsigned char)*p)) p++;
+  }
+  if (*p == '.') {
+    p++;
+    if (!isdigit((unsigned char)*p)) return false;
+    while (isdigit((unsigned char)*p)) p++;
+  }
+  if (*p == 'e' || *p == 'E') {
+    p++;
+    if (*p == '+' || *p == '-') p++;
+    if (!isdigit((unsigned char)*p)) return false;
+    while (isdigit((unsigned char)*p)) p++;
+  }
+  *cursor = p;
+  return true;
+}
+
+static bool vw_json_parse_array(const char** cursor, unsigned depth) {
+  const char* p = vw_json_skip_space(*cursor + 1);
+  if (*p == ']') {
+    *cursor = p + 1;
+    return true;
+  }
+  for (;;) {
+    if (!vw_json_parse_value(&p, depth + 1)) return false;
+    p = vw_json_skip_space(p);
+    if (*p == ']') {
+      *cursor = p + 1;
+      return true;
+    }
+    if (*p++ != ',') return false;
+    p = vw_json_skip_space(p);
+  }
+}
+
+static bool vw_json_parse_object(const char** cursor, unsigned depth) {
+  const char* p = vw_json_skip_space(*cursor + 1);
+  if (*p == '}') {
+    *cursor = p + 1;
+    return true;
+  }
+  for (;;) {
+    if (!vw_json_parse_string_value(&p)) return false;
+    p = vw_json_skip_space(p);
+    if (*p++ != ':') return false;
+    p = vw_json_skip_space(p);
+    if (!vw_json_parse_value(&p, depth + 1)) return false;
+    p = vw_json_skip_space(p);
+    if (*p == '}') {
+      *cursor = p + 1;
+      return true;
+    }
+    if (*p++ != ',') return false;
+    p = vw_json_skip_space(p);
+  }
+}
+
+static bool vw_json_parse_value(const char** cursor, unsigned depth) {
+  if (depth > 32) return false;
+  const char* p = vw_json_skip_space(*cursor);
+  if (*p == '"') {
+    if (!vw_json_parse_string_value(&p)) return false;
+  } else if (*p == '{') {
+    if (!vw_json_parse_object(&p, depth)) return false;
+  } else if (*p == '[') {
+    if (!vw_json_parse_array(&p, depth)) return false;
+  } else if (*p == '-' || isdigit((unsigned char)*p)) {
+    if (!vw_json_parse_number(&p)) return false;
+  } else if (strncmp(p, "true", 4) == 0) {
+    p += 4;
+  } else if (strncmp(p, "false", 5) == 0) {
+    p += 5;
+  } else if (strncmp(p, "null", 4) == 0) {
+    p += 4;
+  } else {
+    return false;
+  }
+  *cursor = p;
+  return true;
+}
+
+static bool vw_json_document_valid(const char* json) {
+  if (!json) return false;
+  const char* p = vw_json_skip_space(json);
+  if (*p != '{' || !vw_json_parse_object(&p, 0)) return false;
+  return *vw_json_skip_space(p) == '\0';
 }
 
 static const char* vw_json_value(const char* json, const char* key) {
@@ -289,8 +412,15 @@ static bool vw_valid_command(const char* value) {
   return vw_one_of(value, values, sizeof(values) / sizeof(values[0]));
 }
 
-static bool vw_read_settings(char* json, size_t size) {
-  return vw_settings_read_named("settings.json", json, size);
+typedef enum {
+  VW_SETTINGS_UNAVAILABLE = 0,
+  VW_SETTINGS_VALID,
+  VW_SETTINGS_INVALID,
+} vw_settings_read_result_t;
+
+static vw_settings_read_result_t vw_read_settings(char* json, size_t size) {
+  if (!vw_settings_read_named("settings.json", json, size)) return VW_SETTINGS_UNAVAILABLE;
+  return vw_json_document_valid(json) ? VW_SETTINGS_VALID : VW_SETTINGS_INVALID;
 }
 
 static bool vw_reset_pending(void) {
@@ -343,10 +473,11 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
 
   char selected[VW_SETTINGS_PATH_MAX];
   char json[VW_SETTINGS_JSON_MAX];
-  bool has_json = vw_read_settings(json, sizeof(json));
+  vw_settings_read_result_t read_result = vw_read_settings(json, sizeof(json));
+  bool has_json = read_result == VW_SETTINGS_VALID;
   if (has_json) {
     if (!vw_json_string(json, key, selected, sizeof(selected))) return fallback;
-  } else if (vw_reset_pending()) {
+  } else if (read_result == VW_SETTINGS_INVALID || vw_reset_pending()) {
     snprintf(selected, sizeof(selected), "%s", default_value);
   } else {
     return fallback;
@@ -393,7 +524,9 @@ int64_t vw_settings_override_int(const char* key, int64_t fallback) {
   if (!vw_default_int(key, &default_value)) return fallback;
 
   char json[VW_SETTINGS_JSON_MAX];
-  if (!vw_read_settings(json, sizeof(json))) return vw_reset_pending() ? default_value : fallback;
+  vw_settings_read_result_t read_result = vw_read_settings(json, sizeof(json));
+  if (read_result != VW_SETTINGS_VALID)
+    return read_result == VW_SETTINGS_INVALID || vw_reset_pending() ? default_value : fallback;
 
   if (strcmp(key, "whisper-threads") == 0 || strcmp(key, "whisper-translate-mode") == 0) {
     int64_t value = 0;

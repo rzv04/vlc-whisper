@@ -59,6 +59,7 @@ def main() -> None:
     assert "--launch-detached" in launcher_bridge
     assert "CreateProcessW" in launcher_bridge
     assert "WNOHANG" in launcher_bridge, "POSIX bootstrap acknowledgement must have a deadline"
+    assert "TerminateProcess" in launcher_bridge, "timed-out Windows bootstrap must not launch settings later"
     for forbidden in ("system(", "ShellExecute", "cmd.exe", "powershell", "start \"\""):
         assert forbidden.lower() not in launcher_bridge.lower(), f"native bridge uses shell launcher: {forbidden}"
     assert "spike" not in settings_cmake.lower()
@@ -73,6 +74,7 @@ def main() -> None:
     assert "Engine:" not in launcher and "Translation (to):" not in launcher
     assert "try reinstalling vlc-whisper" in lowered
 
+    assert "vw_json_document_valid" in settings_bridge
     assert "vw_settings_ack_model_command" in settings_bridge
     assert "vw_settings_ack_model_command" in config_bridge
     assert "vw_settings_last_model_command" in config_bridge
@@ -86,7 +88,11 @@ def main() -> None:
     assert "libqt6widgets6" in linux_packaging and "libqt6network6" in linux_packaging
     assert "vw_require_settings_for_package" in linux_packaging
     assert "runuser" in linux_postinst and "runuser" in linux_installer
+    assert "|| true" not in linux_postinst, "post-install reset failures must fail the package"
     assert "settings.json" in linux_installer and "reset-settings" in linux_installer
+    install_position = linux_installer.index('apt-get install -y "$tmp/$PACKAGE"')
+    reset_position = linux_installer.index('rm -f "$settings_dir/settings.json"')
+    assert install_position < reset_position, "settings must only reset after installation succeeds"
     assert 'subgraph SETTINGS["Standalone Settings Process"]' in readme
 
 

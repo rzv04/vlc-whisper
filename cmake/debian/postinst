@@ -12,17 +12,26 @@ fi
 # A reinstall is an explicit settings reset. Perform every user-controlled
 # filesystem operation as the invoking user so symlinks cannot turn the
 # privileged maintainer script into an ownership/write primitive.
-if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  command -v runuser >/dev/null 2>&1 || {
+    echo "vlc-whisper: runuser is required to reset settings safely" >&2
+    exit 1
+  }
   settings_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-  if [ -n "$settings_home" ]; then
-    runuser -u "$SUDO_USER" -- env HOME="$settings_home" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" sh -c '
-      settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/vlc-whisper"
-      umask 077
-      mkdir -p "$settings_dir" || exit 0
-      chmod 700 "$settings_dir" || exit 0
-      rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
-      printf "%s\n" reset > "$settings_dir/reset-settings"
-    ' || true
+  [ -n "$settings_home" ] || {
+    echo "vlc-whisper: could not determine the home for $SUDO_USER" >&2
+    exit 1
+  }
+  if ! runuser -u "$SUDO_USER" -- env HOME="$settings_home" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" sh -eu -c '
+    settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/vlc-whisper"
+    umask 077
+    mkdir -p "$settings_dir"
+    chmod 700 "$settings_dir"
+    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/reset-settings"
+    printf "%s\n" reset > "$settings_dir/reset-settings"
+  '; then
+    echo "vlc-whisper: failed to reset settings for $SUDO_USER" >&2
+    exit 1
   fi
 fi
 
