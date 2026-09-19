@@ -50,6 +50,16 @@ def main() -> None:
     assert "QTimer" in settings_cpp, "runtime status refresh must remain bounded inside the Qt process"
     assert "downloading" in settings_cpp and "verifying" in settings_cpp
 
+    request_download = settings_cpp.split("void vw_request_download()", 1)[1].split("void vw_request_abort()", 1)[0]
+    assert "vw_active_model_path_for_download()" in request_download
+    assert "QFileInfo::exists(vw_model_download_base_path_)" not in request_download, (
+        "each new download request must refresh its rollback marker"
+    )
+    assert "vw_write_small_file(vw_model_download_base_path_, marker)" in request_download
+    assert "if (!preserve_model_download_base && !vw_download_pending_)" in settings_cpp, (
+        "Apply must not discard rollback state while a model request is pending"
+    )
+
     assert "vlc-whisper-settings" in settings_cmake
     assert "--smoke-test" in settings_cpp and "QT_QPA_PLATFORM=offscreen" in settings_cmake
     assert "QProcess::startDetached" in settings_cpp
