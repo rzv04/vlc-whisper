@@ -1,13 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "vw_settings_file.h"
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "vw_settings_file.h"
 
 static void vw_write_settings(const char* directory, const char* payload) {
   char path[4096];

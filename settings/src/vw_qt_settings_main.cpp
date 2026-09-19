@@ -23,7 +23,6 @@
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
-
 #include <algorithm>
 #include <array>
 
@@ -59,23 +58,44 @@ constexpr std::array<vw_model_choice_t, 7> vw_models{{
 }};
 
 constexpr std::array<vw_choice_t, 6> vw_languages{{
-    {"en", "English (en)"}, {"ro", "Romanian (ro)"}, {"tr", "Turkish (tr)"},
-    {"de", "German (de)"},  {"fr", "French (fr)"},   {"es", "Spanish (es)"},
+    {"en", "English (en)"},
+    {"ro", "Romanian (ro)"},
+    {"tr", "Turkish (tr)"},
+    {"de", "German (de)"},
+    {"fr", "French (fr)"},
+    {"es", "Spanish (es)"},
 }};
 
 constexpr std::array<vw_choice_t, 14> vw_translation_sources{{
-    {"auto", "Auto detect (auto)"}, {"en", "English (en)"},    {"ro", "Romanian (ro)"},
-    {"es", "Spanish (es)"},        {"fr", "French (fr)"},     {"de", "German (de)"},
-    {"it", "Italian (it)"},        {"pt", "Portuguese (pt)"}, {"ru", "Russian (ru)"},
-    {"uk", "Ukrainian (uk)"},     {"tr", "Turkish (tr)"},    {"ja", "Japanese (ja)"},
-    {"ko", "Korean (ko)"},        {"zh", "Chinese (zh)"},
+    {"auto", "Auto detect (auto)"},
+    {"en", "English (en)"},
+    {"ro", "Romanian (ro)"},
+    {"es", "Spanish (es)"},
+    {"fr", "French (fr)"},
+    {"de", "German (de)"},
+    {"it", "Italian (it)"},
+    {"pt", "Portuguese (pt)"},
+    {"ru", "Russian (ru)"},
+    {"uk", "Ukrainian (uk)"},
+    {"tr", "Turkish (tr)"},
+    {"ja", "Japanese (ja)"},
+    {"ko", "Korean (ko)"},
+    {"zh", "Chinese (zh)"},
 }};
 
 constexpr std::array<vw_choice_t, 13> vw_translation_targets{{
-    {"en", "English (en)"},    {"ro", "Romanian (ro)"}, {"es", "Spanish (es)"},
-    {"fr", "French (fr)"},     {"de", "German (de)"},   {"it", "Italian (it)"},
-    {"pt", "Portuguese (pt)"}, {"ru", "Russian (ru)"},  {"uk", "Ukrainian (uk)"},
-    {"tr", "Turkish (tr)"},    {"ja", "Japanese (ja)"}, {"ko", "Korean (ko)"},
+    {"en", "English (en)"},
+    {"ro", "Romanian (ro)"},
+    {"es", "Spanish (es)"},
+    {"fr", "French (fr)"},
+    {"de", "German (de)"},
+    {"it", "Italian (it)"},
+    {"pt", "Portuguese (pt)"},
+    {"ru", "Russian (ru)"},
+    {"uk", "Ukrainian (uk)"},
+    {"tr", "Turkish (tr)"},
+    {"ja", "Japanese (ja)"},
+    {"ko", "Korean (ko)"},
     {"zh", "Chinese (zh)"},
 }};
 
@@ -130,8 +150,7 @@ class vw_settings_window_t final : public QWidget {
       : vw_settings_dir_(vw_config_dir()),
         vw_settings_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("settings.json"))),
         vw_command_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("model-command"))),
-        vw_model_download_base_path_(
-            QDir(vw_settings_dir_).filePath(QStringLiteral("model-path-download-base"))) {
+        vw_model_download_base_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("model-path-download-base"))) {
     setWindowTitle(QStringLiteral("VLC-Whisper Settings"));
 
     vw_content_ = new QWidget(this);
@@ -139,7 +158,8 @@ class vw_settings_window_t final : public QWidget {
     layout->setColumnStretch(1, 1);
 
     vw_engine_ = new QComboBox(this);
-    for (const auto& item : vw_engines) vw_engine_->addItem(QString::fromUtf8(item.label), QString::fromUtf8(item.value));
+    for (const auto& item : vw_engines)
+      vw_engine_->addItem(QString::fromUtf8(item.label), QString::fromUtf8(item.value));
     vw_add_row(layout, 0, QStringLiteral("Engine:"), vw_engine_);
 
     vw_model_ = new QComboBox(this);
@@ -198,7 +218,8 @@ class vw_settings_window_t final : public QWidget {
     layout->addWidget(vw_model_status_, 14, 0, 1, 2);
 
     auto* privacy = new QLabel(
-        QStringLiteral(".en models force English; enabling translation sends finalized subtitle text to Google."), this);
+        QStringLiteral(".en models force English; enabling translation sends finalized subtitle text to Google."),
+        this);
     privacy->setWordWrap(true);
     layout->addWidget(privacy, 15, 0, 1, 2);
 
@@ -320,13 +341,14 @@ class vw_settings_window_t final : public QWidget {
     const QString stage = status.section(QLatin1Char(':'), 0, 0);
     const QString progress = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-progress")));
 
-    vw_download_pending_ = !command.isEmpty() || stage == QStringLiteral("downloading") ||
-                           stage == QStringLiteral("verifying");
+    vw_download_pending_ =
+        !command.isEmpty() || stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying");
 
     if (stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying") ||
         stage == QStringLiteral("aborting")) {
-      vw_model_status_->setText(QStringLiteral("Model: %1%2")
-                                    .arg(stage, progress.isEmpty() ? QString() : QStringLiteral(" (%1%)").arg(progress)));
+      vw_model_status_->setText(
+          QStringLiteral("Model: %1%2")
+              .arg(stage, progress.isEmpty() ? QString() : QStringLiteral(" (%1%)").arg(progress)));
     } else if (stage == QStringLiteral("failed")) {
       vw_model_status_->setText(QStringLiteral("Model: download failed"));
     } else if (bundled && user) {
@@ -407,7 +429,8 @@ class vw_settings_window_t final : public QWidget {
     vw_select_model_path(settings.value(QStringLiteral("model-path")).toString(QStringLiteral("models/ggml-tiny.bin")));
     vw_select(vw_language_, settings.value(QStringLiteral("whisper-language")).toString(QStringLiteral("en")));
     vw_force_english_for_english_only_model();
-    vw_threads_->setText(QString::number(std::clamp(settings.value(QStringLiteral("whisper-threads")).toInt(4), 1, 16)));
+    vw_threads_->setText(
+        QString::number(std::clamp(settings.value(QStringLiteral("whisper-threads")).toInt(4), 1, 16)));
     vw_logging_->setChecked(settings.value(QStringLiteral("whisper-logging")).toBool(false));
     vw_show_paused_->setChecked(settings.value(QStringLiteral("whisper-show-paused")).toBool(true));
     vw_translation_enabled_->setChecked(settings.value(QStringLiteral("whisper-translate-enabled")).toBool(false));
@@ -469,8 +492,8 @@ class vw_settings_window_t final : public QWidget {
   void vw_request_download() {
     const auto& model = vw_selected_model();
     if (!QFileInfo::exists(vw_model_download_base_path_)) {
-      const QString effective = vw_persisted_.value(QStringLiteral("model-path"))
-                                    .toString(QStringLiteral("models/ggml-tiny.bin"));
+      const QString effective =
+          vw_persisted_.value(QStringLiteral("model-path")).toString(QStringLiteral("models/ggml-tiny.bin"));
       const QByteArray marker = QByteArray(model.filename) + '\n' + effective.toUtf8() + '\n';
       if (!vw_write_small_file(vw_model_download_base_path_, marker)) {
         vw_backend_status_->setText(QStringLiteral("Model request could not preserve the active model"));

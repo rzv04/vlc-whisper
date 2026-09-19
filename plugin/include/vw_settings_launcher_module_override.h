@@ -11,21 +11,16 @@ void vw_settings_launcher_close(vlc_object_t* object);
  * submodule so Lua can ask VLC itself to launch the standalone settings app
  * without using a command shell or adding another packaged plugin DLL. */
 #undef vlc_module_end
-#define vlc_module_end()                                                                                              \
-  add_submodule()                                                                                                     \
-  set_shortname("VLC-Whisper Settings Launcher")                                                                     \
-  set_description("Shell-free VLC-Whisper Settings launcher bridge")                                                \
-  set_capability("access", 0)                                                                                        \
-  set_category(CAT_INPUT)                                                                                            \
-  set_subcategory(SUBCAT_INPUT_ACCESS)                                                                               \
-  add_shortcut("vlc-whisper-settings")                                                                               \
-  set_callbacks(vw_settings_launcher_open, vw_settings_launcher_close)                                                \
-  (void)config;                                                                                                       \
-  return 0;                                                                                                           \
-  error:                                                                                                              \
-  return -1;                                                                                                          \
-  }                                                                                                                   \
-  VLC_MODULE_NAME_HIDDEN_SYMBOL                                                                                       \
+#define vlc_module_end()                                                                                    \
+  add_submodule() set_shortname("VLC-Whisper Settings Launcher")                                            \
+      set_description("Shell-free VLC-Whisper Settings launcher bridge") set_capability("access", 0)        \
+          set_category(CAT_INPUT) set_subcategory(SUBCAT_INPUT_ACCESS) add_shortcut("vlc-whisper-settings") \
+              set_callbacks(vw_settings_launcher_open, vw_settings_launcher_close)(void) config;            \
+  return 0;                                                                                                 \
+  error:                                                                                                    \
+  return -1;                                                                                                \
+  }                                                                                                         \
+  VLC_MODULE_NAME_HIDDEN_SYMBOL                                                                             \
   VLC_METADATA_EXPORTS
 
 #endif

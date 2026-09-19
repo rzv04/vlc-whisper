@@ -8,8 +8,8 @@
 #include <string.h>
 
 #ifdef _WIN32
-#include <windows.h>
 #include <wchar.h>
+#include <windows.h>
 #else
 #include <sys/stat.h>
 #include <unistd.h>
@@ -128,9 +128,7 @@ static void vw_settings_delete_suffix(const char* suffix) {
   if (vw_settings_build_path(suffix, path, sizeof(path))) unlink(path);
 }
 
-static bool vw_settings_utf8_file_exists(const char* path) {
-  return path && path[0] && access(path, F_OK) == 0;
-}
+static bool vw_settings_utf8_file_exists(const char* path) { return path && path[0] && access(path, F_OK) == 0; }
 #endif
 
 static bool vw_settings_read_named(const char* name, char* out, size_t out_size) {
@@ -194,7 +192,6 @@ static void vw_settings_delete_named(const char* name) {
   vw_settings_delete_suffix(name);
 #endif
 }
-
 
 static const char* vw_json_skip_space(const char* p) {
   while (*p && isspace((unsigned char)*p)) p++;
@@ -456,8 +453,8 @@ static const char* vw_basename(const char* path) {
 }
 
 static bool vw_valid_model_path(const char* path) {
-  static const char* const files[] = {"ggml-tiny.en.bin", "ggml-tiny.bin", "ggml-base.en.bin", "ggml-base.bin",
-                                      "ggml-small.bin", "ggml-medium.bin", "ggml-large-v3.bin"};
+  static const char* const files[] = {"ggml-tiny.en.bin", "ggml-tiny.bin",   "ggml-base.en.bin", "ggml-base.bin",
+                                      "ggml-small.bin",   "ggml-medium.bin", "ggml-large-v3.bin"};
   const char* base = vw_basename(path);
   return vw_one_of(base, files, sizeof(files) / sizeof(files[0]));
 }
@@ -478,9 +475,7 @@ static vw_settings_read_result_t vw_read_settings(char* json, size_t size) {
   return vw_json_document_valid(json) ? VW_SETTINGS_VALID : VW_SETTINGS_INVALID;
 }
 
-static bool vw_reset_pending(void) {
-  return vw_settings_named_exists("reset-settings");
-}
+static bool vw_reset_pending(void) { return vw_settings_named_exists("reset-settings"); }
 
 static const char* vw_default_string(const char* key) {
   if (strcmp(key, "whisper-backend") == 0) return "auto";
@@ -541,10 +536,9 @@ char* vw_settings_override_psz(const char* key, char* fallback) {
 
   static const char* const backends[] = {"auto", "gpu", "cpu"};
   static const char* const languages[] = {"en", "ro", "tr", "de", "fr", "es"};
-  static const char* const sources[] = {"auto", "en", "ro", "es", "fr", "de", "it", "pt",
-                                        "ru",   "uk", "tr", "ja", "ko", "zh"};
-  static const char* const targets[] = {"en", "ro", "es", "fr", "de", "it", "pt",
-                                        "ru", "uk", "tr", "ja", "ko", "zh"};
+  static const char* const sources[] = {"auto", "en", "ro", "es", "fr", "de", "it",
+                                        "pt",   "ru", "uk", "tr", "ja", "ko", "zh"};
+  static const char* const targets[] = {"en", "ro", "es", "fr", "de", "it", "pt", "ru", "uk", "tr", "ja", "ko", "zh"};
   bool valid = false;
   if (strcmp(key, "whisper-backend") == 0)
     valid = vw_one_of(selected, backends, sizeof(backends) / sizeof(backends[0]));

@@ -10,8 +10,8 @@
 // clang-format on
 
 #ifdef _WIN32
-#include <windows.h>
 #include <wchar.h>
+#include <windows.h>
 #else
 #include <signal.h>
 #include <spawn.h>
@@ -83,8 +83,7 @@ static bool vw_settings_launcher_start(void) {
 
   DWORD wait_result = WaitForSingleObject(process.hProcess, VW_LAUNCHER_WAIT_MS);
   if (wait_result == WAIT_TIMEOUT) {
-    if (TerminateProcess(process.hProcess, 1))
-      (void)WaitForSingleObject(process.hProcess, VW_LAUNCHER_WAIT_MS);
+    if (TerminateProcess(process.hProcess, 1)) (void)WaitForSingleObject(process.hProcess, VW_LAUNCHER_WAIT_MS);
   }
   DWORD exit_code = 1;
   bool ok = wait_result == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exit_code) && exit_code == 0;
