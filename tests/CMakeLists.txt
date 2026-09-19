@@ -117,6 +117,7 @@ target_compile_definitions(test_translate_async PRIVATE VW_TRANSLATE_TESTING=1)
 if(WIN32)
     target_link_libraries(test_translate_async PRIVATE winhttp)
 endif()
+
 add_vw_test(test_translation_blame unit/test_translation_blame.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c
             ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
 target_compile_definitions(test_translation_blame PRIVATE VW_TRANSLATE_TESTING=1)
