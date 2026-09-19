@@ -39,7 +39,7 @@ case "${VERSION_ID:-}" in
 esac
 CHECKSUM="${PACKAGE}.sha256"
 
-for cmd in apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp; do
+for cmd in apt-get apt-cache dpkg dpkg-query curl sha256sum awk grep dirname mktemp getent cut; do
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 done
 if [ "$(id -u)" != "0" ]; then
@@ -89,13 +89,41 @@ curl -fsSL "$BASE/$PACKAGE" -o "$tmp/$PACKAGE"
 curl -fsSL "$BASE/$CHECKSUM" -o "$tmp/$CHECKSUM"
 expected="$(grep -Eo '[[:xdigit:]]{64}' "$tmp/$CHECKSUM" | head -n 1)"
 [ -n "$expected" ] || die "release checksum is invalid"
-actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1 }')"
+actual="$(sha256sum "$tmp/$PACKAGE" | awk '{ print $1}')"
 [ "$actual" = "$expected" ] || die "release checksum mismatch"
 
 if [ "$(id -u)" = "0" ]; then
   apt-get install -y "$tmp/$PACKAGE"
 else
   sudo apt-get install -y "$tmp/$PACKAGE"
+fi
+
+# Reinstall intentionally resets durable settings. Keep the entire reset at the
+# invoking user's privilege level so user-controlled symlinks cannot redirect a
+# privileged write/chmod/chown operation.
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+  command -v runuser >/dev/null 2>&1 || die "runuser is required to reset per-user settings safely"
+  settings_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  [ -n "$settings_home" ] || die "could not determine the user home for settings reset"
+  runuser -u "$SUDO_USER" -- env HOME="$settings_home" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" sh -eu -c '
+    settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/vlc-whisper"
+    umask 077
+    mkdir -p "$settings_dir"
+    chmod 700 "$settings_dir"
+    rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/model-path-download-base" \
+      "$settings_dir/reset-settings"
+    printf "%s\n" reset > "$settings_dir/reset-settings"
+  '
+else
+  settings_home="${HOME:-}"
+  [ -n "$settings_home" ] || die "could not determine the user home for settings reset"
+  settings_dir="${XDG_CONFIG_HOME:-$settings_home/.config}/vlc-whisper"
+  umask 077
+  mkdir -p "$settings_dir"
+  chmod 700 "$settings_dir"
+  rm -f "$settings_dir/settings.json" "$settings_dir/model-command" "$settings_dir/model-path-download-base" \
+    "$settings_dir/reset-settings"
+  printf '%s\n' reset > "$settings_dir/reset-settings"
 fi
 
 installed="$(dpkg-query -W -f='${Version}' vlc 2>/dev/null || true)"
@@ -116,8 +144,10 @@ fi
 [ -f "$plugin_root/audio_filter/libvlc_whisper_plugin.so" ] || die "plugin was not installed into the detected VLC tree"
 [ -x "$vlc_root/vlc-whisper-worker" ] || die "worker was not installed beside the detected VLC tree"
 [ -f "$lua_root/vlc_whisper_settings.lua" ] || die "Lua settings extension was not installed into the detected VLC Lua tree"
+[ -x "/usr/bin/vlc-whisper-settings" ] || die "standalone settings application was not installed"
 [ -f "$vlc_root/models/ggml-tiny.bin" ] || die "bundled Whisper model was not installed"
 
 echo "vlc-whisper: installed for VLC $installed"
 echo "vlc-whisper: plugin: $plugin_root/audio_filter/libvlc_whisper_plugin.so"
-echo "vlc-whisper: settings: $lua_root/vlc_whisper_settings.lua"
+echo "vlc-whisper: settings launcher: $lua_root/vlc_whisper_settings.lua"
+echo "vlc-whisper: settings app: /usr/bin/vlc-whisper-settings"

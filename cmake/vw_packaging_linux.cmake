@@ -52,6 +52,19 @@ install(TARGETS vlc_whisper_plugin
 install(TARGETS vlc-whisper-worker
   RUNTIME DESTINATION "${VW_LINUX_VLC_ROOT}"
 )
+if(TARGET vlc-whisper-settings)
+  install(TARGETS vlc-whisper-settings
+    RUNTIME DESTINATION bin
+  )
+else()
+  # Keep ordinary developer configuration usable without Qt, but make the
+  # package target fail closed instead of shipping a Lua launcher with no GUI.
+  add_custom_target(vw_require_settings_for_package
+    COMMAND ${CMAKE_COMMAND} -E echo "VW: cannot package VLC-Whisper without the vlc-whisper-settings Qt target"
+    COMMAND ${CMAKE_COMMAND} -E false
+    VERBATIM
+  )
+endif()
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/models/manifest.json"
   "${VW_MODEL_TINY}"
@@ -101,7 +114,7 @@ set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "VLC-Whisper Contributors")
 set(CPACK_DEBIAN_PACKAGE_SECTION "video")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "vlc (>= 3.0.23), curl, ca-certificates, libvulkan1")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "vlc (>= 3.0.23), curl, ca-certificates, libvulkan1, libqt6widgets6, libqt6network6")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/cmake/debian/postrm")
@@ -110,4 +123,7 @@ set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 include(CPack)
 if(TARGET package)
   add_dependencies(package provision_models)
+  if(TARGET vw_require_settings_for_package)
+    add_dependencies(package vw_require_settings_for_package)
+  endif()
 endif()

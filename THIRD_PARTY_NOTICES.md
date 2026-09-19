@@ -138,3 +138,13 @@ http://www.apache.org/licenses/LICENSE-2.0
 - **URL**: https://www.gnu.org/licenses/gcc-exception-3.1.en.html
 
 Binaries compiled with MinGW-w64 incorporate GCC runtime support code covered by the GCC Runtime Library Exception v3.1, which grants permission to link the runtime library with independent modules without subjecting the resulting binary to the GNU General Public License.
+
+---
+
+## 8. Qt 6 Runtime (Standalone Settings Application)
+- **Project**: Qt 6 Core, GUI, Widgets, Network, and platform plugins
+- **Authors**: The Qt Company Ltd. and Qt contributors
+- **License**: GNU Lesser General Public License v3 (LGPL v3) for the open-source modules used here
+- **URL**: https://www.qt.io/ | https://code.qt.io/
+
+`vlc-whisper-settings` dynamically links to Qt 6. Windows packages deploy the corresponding shared Qt runtime files beside the settings executable; Linux packages use the distribution-provided shared Qt libraries. VLC-Whisper does not statically link or modify those Qt libraries. The applicable Qt source code and license texts are available from the Qt Project at https://code.qt.io/ and https://www.qt.io/licensing/open-source-lgpl-obligations.
