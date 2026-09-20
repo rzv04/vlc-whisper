@@ -34,6 +34,15 @@ jobs:
             test -n "$conflicts"
             while IFS= read -r file; do
               [ -z "$file" ] && continue
+              echo "PR55_CONFLICT_CONTEXT_BEGIN $file"
+              git checkout --conflict=merge -- "$file"
+              awk '
+                /^<<<<<<< / { printing=1; before=NR-25; if (before < 1) before=1 }
+                { lines[NR]=$0 }
+                /^>>>>>>> / && printing { after=NR+25; printing=0; for (i=before; i<=after; i++) wanted[i]=1 }
+                END { for (i=1; i<=NR; i++) if (wanted[i]) printf "%d:%s\n", i, lines[i] }
+              ' "$file"
+              echo "PR55_CONFLICT_CONTEXT_END $file"
               git checkout --ours -- "$file"
               git add -- "$file"
             done <<< "$conflicts"
