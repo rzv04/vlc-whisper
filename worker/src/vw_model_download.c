@@ -511,11 +511,29 @@ static void vw_model_download_reset_for_retry(vw_model_download_t* dl) {
   pthread_mutex_unlock(&dl->lock);
 }
 
+static void vw_model_download_finish_abort(vw_model_download_t* dl) {
+#ifndef _WIN32
+  unlink(dl->part_path);
+#else
+  vw_unlink_wide_utf8(dl->part_path);
+#endif
+  pthread_mutex_lock(&dl->lock);
+  dl->progress.stage = VW_MODEL_STAGE_IDLE;
+  dl->progress.bytes_done = 0;
+  dl->progress.pct = 0;
+  pthread_mutex_unlock(&dl->lock);
+}
+
 static void* vw_download_thread(void* arg) {
   vw_model_download_t* dl = (vw_model_download_t*)arg;
   if (!dl) return NULL;
 
   pthread_mutex_lock(&dl->lock);
+  if (atomic_load(&dl->abort_requested)) {
+    dl->progress.stage = VW_MODEL_STAGE_IDLE;
+    pthread_mutex_unlock(&dl->lock);
+    return NULL;
+  }
   dl->progress.stage = VW_MODEL_STAGE_DOWNLOADING;
   pthread_mutex_unlock(&dl->lock);
   vw_mkdir_p(dl->dest_dir);
@@ -529,19 +547,10 @@ static void* vw_download_thread(void* arg) {
     ok = vw_download_via_winhttp(dl);
 #endif
     if (atomic_load(&dl->abort_requested)) {
-#ifndef _WIN32
-      unlink(dl->part_path);
-#else
-      vw_unlink_wide_utf8(dl->part_path);
-#endif
       pthread_mutex_lock(&dl->lock);
       dl->progress.stage = VW_MODEL_STAGE_ABORTING;
-      dl->progress.bytes_done = 0;
-      dl->progress.pct = 0;
       pthread_mutex_unlock(&dl->lock);
-      pthread_mutex_lock(&dl->lock);
-      dl->progress.stage = VW_MODEL_STAGE_IDLE;
-      pthread_mutex_unlock(&dl->lock);
+      vw_model_download_finish_abort(dl);
       return NULL;
     }
     if (!ok) {
@@ -615,7 +624,19 @@ static void* vw_download_thread(void* arg) {
       pthread_mutex_unlock(&dl->lock);
       return NULL;
     }
+
+    // Linearize cancellation with publication. Whichever side acquires dl->lock first wins: an accepted abort
+    // prevents rename/DONE, while a completed rename/DONE makes a later abort a no-op.
+    pthread_mutex_lock(&dl->lock);
+    if (atomic_load(&dl->abort_requested)) {
+      dl->progress.stage = VW_MODEL_STAGE_ABORTING;
+      pthread_mutex_unlock(&dl->lock);
+      vw_model_download_finish_abort(dl);
+      return NULL;
+    }
     if (!vw_rename_atomic(dl->part_path, dl->final_path)) {
+      dl->progress.stage = VW_MODEL_STAGE_FAILED;
+      pthread_mutex_unlock(&dl->lock);
       vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_MODEL_DL", "atomic rename failed '%s' -> '%s' (errno=%d)", dl->part_path,
                    dl->final_path, errno);
 #ifndef _WIN32
@@ -623,12 +644,8 @@ static void* vw_download_thread(void* arg) {
 #else
       vw_unlink_wide_utf8(dl->part_path);
 #endif
-      pthread_mutex_lock(&dl->lock);
-      dl->progress.stage = VW_MODEL_STAGE_FAILED;
-      pthread_mutex_unlock(&dl->lock);
       return NULL;
     }
-    pthread_mutex_lock(&dl->lock);
     dl->progress.stage = VW_MODEL_STAGE_DONE;
     dl->progress.pct = 100;
     dl->progress.bytes_done = dl->entry.bytes;
@@ -638,9 +655,13 @@ static void* vw_download_thread(void* arg) {
     return NULL;
   }
   pthread_mutex_lock(&dl->lock);
-  if (dl->progress.stage != VW_MODEL_STAGE_DONE && dl->progress.stage != VW_MODEL_STAGE_IDLE &&
-      dl->progress.stage != VW_MODEL_STAGE_ABORTING) {
-    if (!atomic_load(&dl->abort_requested)) dl->progress.stage = VW_MODEL_STAGE_FAILED;
+  if (atomic_load(&dl->abort_requested)) {
+    dl->progress.stage = VW_MODEL_STAGE_IDLE;
+    dl->progress.bytes_done = 0;
+    dl->progress.pct = 0;
+  } else if (dl->progress.stage != VW_MODEL_STAGE_DONE && dl->progress.stage != VW_MODEL_STAGE_IDLE &&
+             dl->progress.stage != VW_MODEL_STAGE_ABORTING) {
+    dl->progress.stage = VW_MODEL_STAGE_FAILED;
   }
   pthread_mutex_unlock(&dl->lock);
   return NULL;
@@ -720,12 +741,15 @@ vw_model_download_t* vw_model_download_start(const vw_model_catalog_entry_t* ent
 
 void vw_model_download_abort(vw_model_download_t* dl) {
   if (!dl) return;
-  // Cancellation is owner-only: this thread publishes intent but never snapshots, waits on, or signals child_pid.
-  // The downloader thread that forked curl observes abort_requested and is solely responsible for kill/waitpid.
-  atomic_store(&dl->abort_requested, true);
+  // Publish cancellation while holding the same lock used by the rename/DONE transition. This makes abort and final
+  // publication a single linearizable decision instead of an atomic check followed by an unprotected rename window.
   pthread_mutex_lock(&dl->lock);
-  if (dl->progress.stage != VW_MODEL_STAGE_DONE && dl->progress.stage != VW_MODEL_STAGE_FAILED &&
-      dl->progress.stage != VW_MODEL_STAGE_IDLE) {
+  if (dl->progress.stage == VW_MODEL_STAGE_DONE || dl->progress.stage == VW_MODEL_STAGE_FAILED) {
+    pthread_mutex_unlock(&dl->lock);
+    return;
+  }
+  atomic_store(&dl->abort_requested, true);
+  if (dl->progress.stage != VW_MODEL_STAGE_IDLE) {
     dl->progress.stage = VW_MODEL_STAGE_ABORTING;
   }
   pthread_mutex_unlock(&dl->lock);

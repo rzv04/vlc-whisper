@@ -48,6 +48,9 @@ typedef struct vw_benchmark {
   uint64_t translation_tier2_count;
   uint64_t translation_tier3_count;
   uint64_t translation_failure_count;
+  uint64_t translation_provider_failure_count;
+  uint64_t translation_transport_failure_count;
+  uint64_t translation_parse_failure_count;
   uint64_t translation_timeout_count;
   uint64_t translation_duration_us;
   int64_t translation_latency_samples[VW_BENCHMARK_MAX_LATENCY_SAMPLES];
@@ -56,9 +59,13 @@ typedef struct vw_benchmark {
   bool live_clock_valid;
 } vw_benchmark_t;
 
-// Records translation telemetry and emits privacy-safe VLC failure diagnostics with second/millisecond timing,
-// preserving the worker's explicit-cause boundary without inferring provider-specific failure reasons.
+// Records caption-result translation totals, success-tier distribution, and latency samples without inferring failure
+// causes or emitting duplicate per-cue diagnostics from elapsed timing alone.
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success);
+
+// Records one explicit worker-owned translation failure cause, updates matching aggregate counters, and emits one
+// concise privacy-safe VLC translation diagnostic without subtitle bodies or credentials.
+void vw_benchmark_record_translation_failure(vw_benchmark_t* benchmark, uint32_t error_code, const char* detail);
 
 // Starts a bounded benchmark session, replacing the per-user temporary directory's single last-session `.txt` report
 // and writing human-readable second/millisecond aggregate timing without recording transcript or PCM data.

@@ -1,12 +1,12 @@
 # Contributing to VLC-Whisper
 
-Start with root `AGENTS.md`. It is the canonical coding/invariant rule set. Open only the technical references relevant to your change.
+Start with root `AGENTS.md`. It is the canonical coding/invariant rule set.
 
 ## Before implementation
 
 For meaningful behavior changes:
 
-1. Inspect the changed component, callers/consumers, and affected contract.
+1. Inspect the changed components, callers/consumers, and affected contracts.
 2. Map `producer -> boundary -> consumer -> lifecycle owner`.
 3. Define external failure handling before the happy path.
 4. Write failure/boundary/seam specs first when behavior crosses components.
@@ -15,7 +15,7 @@ Use `ai/task-template.md` for high-risk work and `docs/invariants.md` for the ca
 
 ## Test convention
 
-New C failure/contract tests use PR #50-style named accumulating expectations (`vw_test_check_true` / `vw_test_check_false`) and one `vw_test_finish`. Expectation names state behavior in plain language. Existing small fail-fast unit tests may keep legacy `EXPECT` macros.
+New C failure/contract tests use accumulating expectations (`vw_test_check_true` / `vw_test_check_false`) and one `vw_test_finish`. Expectation names state behavior in plain language. Existing small fail-fast unit tests may keep legacy `EXPECT` macros.
 
 A fixed known defect should gain a named regression where practical. Do not weaken tests to make an implementation green.
 

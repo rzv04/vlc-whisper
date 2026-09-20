@@ -415,19 +415,39 @@ bool vw_worker_client_start_session(vw_worker_client_t* client, int64_t timeline
         }
         bool drained =
             (receive_all(client->pipe_handle, resp_payload, resp_hdr.payload_length, deadline_us) == VW_IPC_RECV_OK);
+        if (!drained) {
+          free(resp_payload);
+          vw_worker_client_drop_transport(client);
+          return false;
+        }
+
         vw_msg_error_t err;
         memset(&err, 0, sizeof(err));
-        bool decoded = false;
-        if (drained && vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err)) {
-          decoded = true;
+        bool decoded = vw_protocol_decode_payload(VW_MSG_ERROR, resp_payload, resp_hdr.payload_length, &err) &&
+                       vw_protocol_validate_payload(VW_MSG_ERROR, &err);
+        if (!decoded) {
+          free(resp_payload);
+          vw_worker_client_drop_transport(client);
+          return false;
+        }
+        bool translation_error =
+            decoded && (err.error_code == E_TRANSLATION_PROVIDER || err.error_code == E_TRANSLATION_TRANSPORT ||
+                        err.error_code == E_TRANSLATION_PARSE || err.error_code == E_TRANSLATION_DEADLINE ||
+                        err.error_code == E_TRANSLATION_LOCAL);
+        bool stale_translation = translation_error && err.recoverable &&
+                                 memcmp(err.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0;
+        if (stale_translation) {
+          // A prior caption epoch may finish translation after STOP. Its diagnostic is valid transport traffic but
+          // must not abort or be attributed to the new START handshake.
+          free(resp_payload);
+          continue;
+        }
+        if (decoded) {
           vw_log_event(VW_LOG_LEVEL_WARN, "WORKER_START_ERROR", "code=%u recoverable=%u msg=%.*s", err.error_code,
                        err.recoverable, (int)strnlen(err.message, VW_MAX_ERROR_MSG_BYTES), err.message);
         }
         free(resp_payload);
-        if (!drained) {
-          vw_worker_client_drop_transport(client);
-          return false;
-        }
+
         // Recoverable E_SOURCE_OPEN is not a fatal START failure: the worker will follow with STARTED(source_active=0)
         // to transparently fall back to live PCM. Treat it as an informational handshake step and continue to STARTED.
         if (decoded && err.error_code == E_SOURCE_OPEN && err.recoverable) {
@@ -687,6 +707,9 @@ static bool send_control_frame(vw_worker_client_t* client, vw_message_type_t typ
 
 void vw_worker_client_stop_session(vw_worker_client_t* client, uint16_t reason) {
   if (!client || !client->pipe_handle || !client->session_active) return;
+  if (reason == 0) {
+    reason = VW_CTRL_REASON_USER_STOP;
+  }
   if (send_control_frame(client, VW_MSG_STOP_SESSION, reason)) {
     client->session_active = false;
   }

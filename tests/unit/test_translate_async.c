@@ -13,6 +13,7 @@
 
 #include "vw_translate.h"
 #include "vw_translate_async.h"
+#include "vw_worker_translation_diag_override.h"
 
 static uint32_t g_hook_delay_ms = 0;
 static atomic_bool g_first_request_blocked;
@@ -180,8 +181,10 @@ static void test_active_budget_runs_requests_concurrently(void) {
       assert(result.success);
       attempted_count++;
     } else {
-      assert(!result.attempted);
+      assert(result.attempted);
+      assert(result.segment.translation_attempted);
       assert(!result.success);
+      assert(result.failure.cause == VW_TRANSLATE_FAILURE_LOCAL);
       assert(result.segment.translated_text_utf8 == NULL);
     }
     popped_count++;
@@ -293,6 +296,29 @@ static void test_invalidation_clears_active_budget(void) {
   vw_translate_set_test_http_hook(NULL, NULL);
 }
 
+static void test_rejection_diagnostic_send_failure_is_fatal(void) {
+  char text[] = "fatal diagnostic transport";
+  vw_caption_segment_t segment = make_segment(99U, text);
+  vw_session_id_t session_id = segment.session_id;
+  vw_ipc_handle_t broken = {.pipe_handle = (void*)(intptr_t)-1};
+  uint64_t sequence = 17U;
+  bool session_active = true;
+  _Atomic bool running = true;
+  _Atomic bool fatal_exit = false;
+  vw_worker_translation_delivery_view_t delivery = {.handle = &broken,
+                                                    .sequence = &sequence,
+                                                    .session_id = &session_id,
+                                                    .session_active = &session_active,
+                                                    .running = &running,
+                                                    .fatal_exit = &fatal_exit};
+  vw_worker_translation_diag_register_transport_state(&delivery);
+
+  bool handled = vw_worker_translate_async_submit_scoped(NULL, &segment, "en", "ro", &broken, &sequence, &session_id);
+  assert(handled);
+  assert(atomic_load(&fatal_exit));
+  assert(!atomic_load(&running));
+}
+
 int main(void) {
   vw_translate_set_test_http_hook(async_http_hook, NULL);
   vw_translate_async_t* async = vw_translate_async_create();
@@ -343,6 +369,7 @@ int main(void) {
   test_active_budget_runs_requests_concurrently();
   test_hard_cap_inflight_fifo_ordering();
   test_invalidation_clears_active_budget();
+  test_rejection_diagnostic_send_failure_is_fatal();
 
   printf("test_translate_async PASSED.\n");
   return 0;

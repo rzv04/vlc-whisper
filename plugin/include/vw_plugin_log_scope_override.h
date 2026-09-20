@@ -10,6 +10,7 @@
 #include "vw_log.h"
 #include "vw_platform.h"
 #include "vw_queue.h"
+#include "vw_translation_failure_log.h"
 #include "vw_worker_client.h"
 
 typedef struct vlc_object_t vlc_object_t;
@@ -156,6 +157,7 @@ static inline void vw_plugin_stop_session_scoped(vw_worker_client_t* client, uin
       vw_benchmark_update_status(vw_plugin_teardown_benchmark, &recv.status);
     } else if (recv.type == VW_MSG_ERROR) {
       if (vw_plugin_teardown_errors) (*vw_plugin_teardown_errors)++;
+      (void)vw_plugin_record_translation_error(vw_plugin_teardown_benchmark, &recv.error);
     }
     if (recv.type != VW_MSG_CAPTION_SEGMENT ||
         memcmp(recv.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) != 0) {

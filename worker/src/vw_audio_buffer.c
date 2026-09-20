@@ -67,6 +67,8 @@ bool vw_audio_buffer_append_s16le(vw_audio_buffer_t* buf, const int16_t* pcm16, 
 
 size_t vw_audio_buffer_get_count(const vw_audio_buffer_t* buf) { return buf ? buf->count : 0; }
 
+size_t vw_audio_buffer_get_available(const vw_audio_buffer_t* buf) { return vw_audio_buffer_get_count(buf); }
+
 size_t vw_audio_buffer_get_samples(const vw_audio_buffer_t* buf, float* out_samples, size_t max_out,
                                    int64_t* out_pts_us) {
   if (!buf || !buf->samples || !out_samples || max_out == 0 || buf->count == 0) return 0;

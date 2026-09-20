@@ -10,6 +10,7 @@ local w_model = nil
 local w_language = nil
 local w_threads = nil
 local w_logging = nil
+local w_show_paused = nil
 local w_trans_enabled = nil
 local w_trans_from = nil
 local w_trans_to = nil
@@ -361,6 +362,7 @@ local function on_apply()
   local lang_id = w_language and w_language:get_value() or 1
   local thr_text = w_threads and w_threads:get_text() or "4"
   local logging = w_logging and w_logging:get_checked() or false
+  local show_paused = w_show_paused == nil or w_show_paused:get_checked()
 
   local trans_en = w_trans_enabled and w_trans_enabled:get_checked() or false
   local trans_from_id = w_trans_from and w_trans_from:get_value() or 1
@@ -390,6 +392,7 @@ local function on_apply()
   pcall(function() cfg_set("whisper-language", language) end)
   pcall(function() cfg_set("whisper-threads", threads) end)
   pcall(function() cfg_set("whisper-logging", logging) end)
+  pcall(function() cfg_set("whisper-show-paused", show_paused) end)
   pcall(function() cfg_set("whisper-translate-enabled", trans_en) end)
   pcall(function() cfg_set("whisper-translate-from", trans_from) end)
   pcall(function() cfg_set("whisper-translate-to", trans_to) end)
@@ -402,6 +405,7 @@ local function on_apply()
     vlc.msg.info("[VLC-Whisper] applied whisper-language=" .. language)
     vlc.msg.info("[VLC-Whisper] applied whisper-threads=" .. tostring(threads))
     vlc.msg.info("[VLC-Whisper] applied whisper-logging=true")
+    vlc.msg.info("[VLC-Whisper] applied whisper-show-paused=" .. tostring(show_paused))
     vlc.msg.info("[VLC-Whisper] applied whisper-translate-enabled=" .. tostring(trans_en))
     vlc.msg.info("[VLC-Whisper] applied whisper-translate-from=" .. trans_from)
     vlc.msg.info("[VLC-Whisper] applied whisper-translate-to=" .. trans_to)
@@ -495,6 +499,7 @@ local function build_dialog()
   local cur_language = nil
   local cur_threads = nil
   local cur_logging = nil
+  local cur_show_paused = nil
   local cur_active = nil
   local cur_trans_enabled = nil
   local cur_trans_from = nil
@@ -506,6 +511,7 @@ local function build_dialog()
   pcall(function() cur_language = cfg_get("whisper-language") end)
   pcall(function() cur_threads = cfg_get("whisper-threads") end)
   pcall(function() cur_logging = cfg_get("whisper-logging") end)
+  pcall(function() cur_show_paused = cfg_get("whisper-show-paused") end)
   pcall(function() cur_active = cfg_get("whisper-backend-active") end)
   pcall(function() cur_trans_enabled = cfg_get("whisper-translate-enabled") end)
   pcall(function() cur_trans_from = cfg_get("whisper-translate-from") end)
@@ -518,6 +524,8 @@ local function build_dialog()
   if cur_language == nil or cur_language == "" then cur_language = "en" end
   if cur_threads == nil or cur_threads == "" then cur_threads = "4" end
   cur_logging = cur_logging == true or cur_logging == 1 or cur_logging == "1" or cur_logging == "true"
+  cur_show_paused = cur_show_paused == nil or cur_show_paused == true or cur_show_paused == 1 or
+    cur_show_paused == "1" or cur_show_paused == "true"
   cur_threads = tostring(cur_threads)
   if cur_active == nil or cur_active == "" then cur_active = "(pending -- start playback)" end
 
@@ -567,36 +575,38 @@ local function build_dialog()
 
   w_logging = dlg:add_check_box("Enable diagnostic logging", cur_logging, 1, 6, 4, 1)
 
-  w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 7, 4, 1)
+  w_show_paused =
+    dlg:add_check_box("Show subtitles while paused (local files only)", cur_show_paused, 1, 7, 4, 1)
 
-  dlg:add_label("Source (from):", 1, 8, 1, 1)
-  w_trans_from = dlg:add_dropdown(2, 8, 3, 1)
+  w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 8, 4, 1)
+  dlg:add_label("Source (from):", 1, 9, 1, 1)
+  w_trans_from = dlg:add_dropdown(2, 9, 3, 1)
   populate_dropdown(w_trans_from, trans_from_labels, sel_trans_from)
 
-  dlg:add_label("Translation (to):", 1, 9, 1, 1)
-  w_trans_to = dlg:add_dropdown(2, 9, 3, 1)
+  dlg:add_label("Translation (to):", 1, 10, 1, 1)
+  w_trans_to = dlg:add_dropdown(2, 10, 3, 1)
   populate_dropdown(w_trans_to, trans_to_labels, sel_trans_to)
 
-  dlg:add_label("Screen placement:", 1, 10, 1, 1)
-  w_trans_mode = dlg:add_dropdown(2, 10, 3, 1)
+  dlg:add_label("Screen placement:", 1, 11, 1, 1)
+  w_trans_mode = dlg:add_dropdown(2, 11, 3, 1)
   populate_dropdown(w_trans_mode, trans_mode_labels, sel_trans_mode)
 
-  dlg:add_label("Translation test:", 1, 11, 1, 1)
-  w_trans_test_btn = dlg:add_button("How to test", on_test_translate, 2, 11, 3, 1)
+  dlg:add_label("Translation test:", 1, 12, 1, 1)
+  w_trans_test_btn = dlg:add_button("How to test", on_test_translate, 2, 12, 3, 1)
 
   w_trans_test_result =
-    dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 12, 4, 1)
+    dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 13, 4, 1)
 
-  dlg:add_button("Apply", on_apply, 1, 13, 2, 1)
-  w_download = dlg:add_button("Download Selected Model", on_download, 3, 13, 2, 1)
+  dlg:add_button("Apply", on_apply, 1, 14, 2, 1)
+  w_download = dlg:add_button("Download Selected Model", on_download, 3, 14, 2, 1)
   refresh_model_status(sel_model)
 
-  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 14, 4, 1)
+  w_status = dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 15, 4, 1)
 
-  w_model_status = dlg:add_label("Model availability: checking...", 1, 15, 4, 1)
+  w_model_status = dlg:add_label("Model availability: checking...", 1, 16, 4, 1)
   refresh_model_status(sel_model)
 
-  dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 16, 4, 1)
+  dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 17, 4, 1)
 end
 
 function descriptor()
@@ -626,6 +636,7 @@ function activate()
   w_language = nil
   w_threads = nil
   w_logging = nil
+  w_show_paused = nil
   w_trans_enabled = nil
   w_trans_from = nil
   w_trans_to = nil
@@ -653,6 +664,7 @@ function deactivate()
   w_language = nil
   w_threads = nil
   w_logging = nil
+  w_show_paused = nil
   w_trans_enabled = nil
   w_trans_from = nil
   w_trans_to = nil

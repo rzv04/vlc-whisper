@@ -444,6 +444,43 @@ int main(void) {
     EXPECT(!vw_protocol_decode_payload(VW_MSG_CAPTION_SEGMENT, buffer, written + 1U, &dec_tseg));
   }
 
+  // Inner-pointer NULL checks when length > 0
+  {
+    vw_msg_hello_t bad_hello = {.client_version_length = 5, .client_version = NULL};
+    EXPECT(!vw_protocol_encode_payload(VW_MSG_HELLO, &bad_hello, buffer, sizeof(buffer), &written));
+
+    vw_msg_hello_ack_t bad_ack = {.worker_version_length = 5, .worker_version = NULL};
+    EXPECT(!vw_protocol_encode_payload(VW_MSG_HELLO_ACK, &bad_ack, buffer, sizeof(buffer), &written));
+
+    vw_msg_audio_t bad_audio = {.pcm_bytes = 100, .pcm_data = NULL};
+    EXPECT(!vw_protocol_encode_payload(VW_MSG_AUDIO_PCM, &bad_audio, buffer, sizeof(buffer), &written));
+  }
+
+  // Verify trailing unconsumed bytes are rejected
+  {
+    vw_msg_hello_t h = {.min_major = 1, .max_major = 1, .client_version_length = 3, .client_version = (char*)"1.0"};
+    EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &h, buffer, sizeof(buffer), &written));
+    vw_msg_hello_t dec_h = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_HELLO, buffer, written, &dec_h));
+    buffer[written] = 0xAA;
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_HELLO, buffer, written + 1, &dec_h));
+
+    vw_msg_position_t pos = {.playback_rate = 1.0f};
+    EXPECT(vw_protocol_encode_payload(VW_MSG_POSITION, &pos, buffer, sizeof(buffer), &written));
+    vw_msg_position_t dec_pos = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_POSITION, buffer, written, &dec_pos));
+    EXPECT(!vw_protocol_decode_payload(VW_MSG_POSITION, buffer, written + 4, &dec_pos));
+  }
+
+  // Safe memcpy handling for len == 0 with NULL pointer
+  {
+    vw_msg_hello_t zero_hello = {.min_major = 1, .max_major = 1, .client_version_length = 0, .client_version = NULL};
+    EXPECT(vw_protocol_encode_payload(VW_MSG_HELLO, &zero_hello, buffer, sizeof(buffer), &written));
+    vw_msg_hello_t dec_zero = {0};
+    EXPECT(vw_protocol_decode_payload(VW_MSG_HELLO, buffer, written, &dec_zero));
+    EXPECT(dec_zero.client_version_length == 0);
+  }
+
   printf("test_protocol_codec PASSED\n");
   return 0;
 }

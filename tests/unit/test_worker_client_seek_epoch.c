@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include "vw_protocol_codec.h"
 #include "vw_protocol_types.h"
 #include "vw_worker_client.h"
+#include "vw_worker_translation_diag_override.h"
 
 #define VW_TEST_INITIAL_PTS_US 100000000LL
 #define VW_TEST_BACKWARD_PTS_US 30000000LL
@@ -50,6 +52,29 @@ static bool vw_test_send_started(vw_ipc_handle_t* server, uint64_t* worker_seque
   return vw_ipc_send(server, header_bytes, sizeof(header_bytes)) && vw_ipc_send(server, payload, payload_length);
 }
 
+static bool vw_test_send_translation_error(vw_ipc_handle_t* server, uint64_t* worker_sequence,
+                                           const uint8_t session_id[VW_SESSION_ID_BYTES]) {
+  vw_msg_error_t error;
+  memset(&error, 0, sizeof(error));
+  memcpy(error.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
+  error.error_code = E_TRANSLATION_PROVIDER;
+  error.recoverable = 1U;
+  snprintf(error.message, sizeof(error.message),
+           "segment=42 cause=provider tier=mobile attempts=0x07 status=429 latency_ms=734.000");
+
+  uint8_t payload[512];
+  size_t payload_length = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_ERROR, &error, payload, sizeof(payload), &payload_length)) return false;
+  vw_frame_header_t header = {.magic = VW_PROTOCOL_MAGIC,
+                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                              .type = VW_MSG_ERROR,
+                              .payload_length = (uint32_t)payload_length,
+                              .sequence = ++(*worker_sequence)};
+  uint8_t header_bytes[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&header, header_bytes, sizeof(header_bytes))) return false;
+  return vw_ipc_send(server, header_bytes, sizeof(header_bytes)) && vw_ipc_send(server, payload, payload_length);
+}
+
 static bool vw_test_send_caption(vw_ipc_handle_t* server, uint64_t* worker_sequence,
                                  const uint8_t session_id[VW_SESSION_ID_BYTES], uint64_t segment_id,
                                  int64_t start_pts_us, const char* translated_text) {
@@ -80,6 +105,74 @@ static bool vw_test_send_caption(vw_ipc_handle_t* server, uint64_t* worker_seque
   uint8_t header_bytes[sizeof(vw_frame_header_t)];
   if (!vw_protocol_encode_header(&header, header_bytes, sizeof(header_bytes))) return false;
   return vw_ipc_send(server, header_bytes, sizeof(header_bytes)) && vw_ipc_send(server, payload, payload_length);
+}
+
+typedef struct vw_test_translation_delivery {
+  vw_worker_translation_delivery_view_t delivery;
+  bool caption_sent;
+} vw_test_translation_delivery_t;
+
+static void vw_test_send_fallback_caption(const vw_translate_async_result_t* result, void* opaque) {
+  vw_test_translation_delivery_t* fixture = (vw_test_translation_delivery_t*)opaque;
+  if (!result || !fixture || !fixture->delivery.handle || !fixture->delivery.sequence) return;
+
+  vw_caption_segment_t segment = result->segment;
+  segment.text_utf8 = (char*)result->source_text;
+  segment.text_bytes = (uint16_t)strlen(result->source_text);
+  segment.translated_text_utf8 = NULL;
+  segment.translated_text_bytes = 0;
+  segment.translation_attempted = true;
+  segment.translation_tier = VW_TRANSLATE_TIER_NONE;
+
+  uint8_t payload[4096];
+  size_t payload_length = 0;
+  if (!vw_protocol_encode_payload(VW_MSG_CAPTION_SEGMENT, &segment, payload, sizeof(payload), &payload_length)) return;
+  vw_frame_header_t header = {.magic = VW_PROTOCOL_MAGIC,
+                              .major = VW_PROTOCOL_VERSION_MAJOR,
+                              .type = VW_MSG_CAPTION_SEGMENT,
+                              .payload_length = (uint32_t)payload_length,
+                              .sequence = ++(*fixture->delivery.sequence)};
+  uint8_t header_bytes[sizeof(vw_frame_header_t)];
+  if (!vw_protocol_encode_header(&header, header_bytes, sizeof(header_bytes))) return;
+  fixture->caption_sent = vw_ipc_send(fixture->delivery.handle, header_bytes, sizeof(header_bytes)) &&
+                          vw_ipc_send(fixture->delivery.handle, payload, payload_length);
+}
+
+static bool vw_test_send_translation_failure_then_fallback(vw_ipc_handle_t* server, uint64_t* worker_sequence,
+                                                           const uint8_t session_id[VW_SESSION_ID_BYTES]) {
+  vw_translate_async_result_t result;
+  memset(&result, 0, sizeof(result));
+  result.attempted = true;
+  result.success = false;
+  result.segment.segment_id = 77U;
+  result.segment.start_pts_us = 30500000LL;
+  result.segment.end_pts_us = 31500000LL;
+  result.segment.is_final = true;
+  result.segment.translation_latency_us = 734000U;
+  memcpy(result.segment.session_id.bytes, session_id, VW_SESSION_ID_BYTES);
+  snprintf(result.source_text, sizeof(result.source_text), "%s", "source fallback");
+  result.failure.cause = VW_TRANSLATE_FAILURE_PROVIDER;
+  result.failure.terminal_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
+  result.failure.attempted_tiers = 0x07U;
+  result.failure.provider_status = 429U;
+
+  vw_session_id_t active_session;
+  memcpy(active_session.bytes, session_id, VW_SESSION_ID_BYTES);
+  bool session_active = true;
+  _Atomic bool running = true;
+  _Atomic bool fatal_exit = false;
+  vw_test_translation_delivery_t fixture;
+  memset(&fixture, 0, sizeof(fixture));
+  fixture.delivery.handle = server;
+  fixture.delivery.sequence = worker_sequence;
+  fixture.delivery.session_id = &active_session;
+  fixture.delivery.session_active = &session_active;
+  fixture.delivery.running = &running;
+  fixture.delivery.fatal_exit = &fatal_exit;
+  vw_worker_translation_diag_context_t context = {
+      .deliver = vw_test_send_fallback_caption, .user_data = &fixture, .delivery = fixture.delivery};
+  vw_worker_translation_diag_deliver(&result, &context);
+  return fixture.caption_sent && atomic_load(&running) && !atomic_load(&fatal_exit);
 }
 
 static bool vw_test_expect_stop(vw_ipc_handle_t* server, const uint8_t expected_session[VW_SESSION_ID_BYTES]) {
@@ -195,6 +288,7 @@ static void* vw_test_seek_epoch_server(void* opaque) {
   uint8_t session_b[VW_SESSION_ID_BYTES];
   if (!vw_test_expect_stop(server, session_a) ||
       !vw_test_expect_start(server, VW_TEST_BACKWARD_PTS_US, session_a, session_b) ||
+      !vw_test_send_translation_error(server, &worker_sequence, session_a) ||
       !vw_test_send_started(server, &worker_sequence, session_b) ||
       !vw_test_expect_translate(server, session_b, false) ||
       !vw_test_expect_position(server, session_b, VW_TEST_BACKWARD_PTS_US)) {
@@ -202,7 +296,8 @@ static void* vw_test_seek_epoch_server(void* opaque) {
     return (void*)(intptr_t)8;
   }
 
-  if (!vw_test_send_caption(server, &worker_sequence, session_a, 1U, 115000000LL, NULL) ||
+  if (!vw_test_send_translation_failure_then_fallback(server, &worker_sequence, session_b) ||
+      !vw_test_send_caption(server, &worker_sequence, session_a, 1U, 115000000LL, NULL) ||
       !vw_test_send_caption(server, &worker_sequence, session_b, 2U, 31000000LL, NULL)) {
     vw_ipc_close(server);
     return (void*)(intptr_t)9;
@@ -276,6 +371,23 @@ int main(void) {
   assert(memcmp(session_a, client->session_id, VW_SESSION_ID_BYTES) != 0);
 
   vw_worker_recv_t received;
+  memset(&received, 0, sizeof(received));
+  assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
+  assert(received.type == VW_MSG_ERROR);
+  assert(received.error.error_code == E_TRANSLATION_PROVIDER);
+  assert(received.error.recoverable == 1U);
+  assert(memcmp(received.error.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0);
+  assert(strstr(received.error.message, "cause=provider") != NULL);
+
+  memset(&received, 0, sizeof(received));
+  assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
+  assert(received.type == VW_MSG_CAPTION_SEGMENT);
+  assert(received.segment.segment_id == 77U);
+  assert(memcmp(received.segment.session_id.bytes, client->session_id, VW_SESSION_ID_BYTES) == 0);
+  assert(received.segment.translation_attempted);
+  assert(received.segment.translated_text_utf8 == NULL);
+  assert(strcmp(received.segment.text_utf8, "source fallback") == 0);
+
   memset(&received, 0, sizeof(received));
   assert(vw_worker_client_receive_frame(client, 1000000U, &received) == VW_IPC_RECV_OK);
   vw_test_assert_stale_segment(&received, session_a, client->session_id, 1U);
