@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Merge current main and publish temporary result
+      - name: Merge current main and publish resolved temporary tree
         shell: bash
         run: |
           set -euo pipefail
@@ -27,27 +27,146 @@ jobs:
           merge_rc=$?
           set -e
           conflicts="$(git diff --name-only --diff-filter=U)"
-          echo "PR55_MERGE_CONFLICTS_BEGIN"
-          printf '%s\n' "$conflicts"
-          echo "PR55_MERGE_CONFLICTS_END"
+          printf 'Conflicts:\n%s\n' "$conflicts"
           if [ "$merge_rc" -ne 0 ]; then
-            test -n "$conflicts"
+            expected=$'lua/extensions/vlc_whisper_settings.lua\nprotocol/include/vw_protocol_types.h\nworker/src/vw_worker.c'
+            test "$conflicts" = "$expected"
             while IFS= read -r file; do
               [ -z "$file" ] && continue
-              echo "PR55_CONFLICT_CONTEXT_BEGIN $file"
               git checkout --conflict=merge -- "$file"
-              awk '
-                /^<<<<<<< / { printing=1; before=NR-25; if (before < 1) before=1 }
-                { lines[NR]=$0 }
-                /^>>>>>>> / && printing { after=NR+25; printing=0; for (i=before; i<=after; i++) wanted[i]=1 }
-                END { for (i=1; i<=NR; i++) if (wanted[i]) printf "%d:%s\n", i, lines[i] }
-              ' "$file"
-              echo "PR55_CONFLICT_CONTEXT_END $file"
-              git checkout --ours -- "$file"
-              git add -- "$file"
             done <<< "$conflicts"
           fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          # Keep main's paused-subtitle option and move it into the extra row introduced by the
+          # ASR-engine/backend split so no controls overlap.
+          path = Path("lua/extensions/vlc_whisper_settings.lua")
+          text = path.read_text()
+          old = '''<<<<<<< ours
+            w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 7, 4, 1)
+
+          =======
+            w_show_paused =
+              dlg:add_check_box("Show subtitles while paused (local files only)", cur_show_paused, 1, 6, 4, 1)
+
+            w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 7, 4, 1)
+
+          >>>>>>> theirs'''
+          new = '''  w_show_paused =
+            dlg:add_check_box("Show subtitles while paused (local files only)", cur_show_paused, 1, 7, 4, 1)
+
+            w_trans_enabled = dlg:add_check_box("Auto translation (real-time subtitles)", cur_trans_enabled, 1, 8, 4, 1)'''
+          text = replace_once(text, old, new, "lua conflict")
+          row_replacements = [
+              ('dlg:add_label("Source (from):", 1, 8, 1, 1)', 'dlg:add_label("Source (from):", 1, 9, 1, 1)'),
+              ('dlg:add_dropdown(2, 8, 3, 1)', 'dlg:add_dropdown(2, 9, 3, 1)'),
+              ('dlg:add_label("Translation (to):", 1, 9, 1, 1)', 'dlg:add_label("Translation (to):", 1, 10, 1, 1)'),
+              ('dlg:add_dropdown(2, 9, 3, 1)', 'dlg:add_dropdown(2, 10, 3, 1)'),
+              ('dlg:add_label("Screen placement:", 1, 10, 1, 1)', 'dlg:add_label("Screen placement:", 1, 11, 1, 1)'),
+              ('dlg:add_dropdown(2, 10, 3, 1)', 'dlg:add_dropdown(2, 11, 3, 1)'),
+              ('dlg:add_label("Translation test:", 1, 11, 1, 1)', 'dlg:add_label("Translation test:", 1, 12, 1, 1)'),
+              ('dlg:add_button("How to test", on_test_translate, 2, 11, 3, 1)', 'dlg:add_button("How to test", on_test_translate, 2, 12, 3, 1)'),
+              ('dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 12, 4, 1)', 'dlg:add_label("Worker runtime performs translation; this dialog never makes HTTP requests.", 1, 13, 4, 1)'),
+              ('dlg:add_button("Apply", on_apply, 1, 13, 2, 1)', 'dlg:add_button("Apply", on_apply, 1, 14, 2, 1)'),
+              ('dlg:add_button("Download Selected Model", on_download, 3, 13, 2, 1)', 'dlg:add_button("Download Selected Model", on_download, 3, 14, 2, 1)'),
+              ('dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 14, 4, 1)', 'dlg:add_label("Detected backend: " .. tostring(cur_active), 1, 15, 4, 1)'),
+              ('dlg:add_label("Model availability: checking...", 1, 15, 4, 1)', 'dlg:add_label("Model availability: checking...", 1, 16, 4, 1)'),
+              ('dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 16, 4, 1)', 'dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 17, 4, 1)'),
+          ]
+          for old_row, new_row in row_replacements:
+              text = replace_once(text, old_row, new_row, f"lua row {old_row}")
+          path.write_text(text)
+
+          # Preserve main's translation diagnostics and allocate the abstraction-only engine error
+          # a new, non-colliding code while expanding the validator's maximum.
+          path = Path("protocol/include/vw_protocol_types.h")
+          text = path.read_text()
+          old = '''<<<<<<< ours
+            E_ENGINE_UNAVAILABLE = 11
+          =======
+            E_TRANSLATION_PROVIDER = 11,
+            E_TRANSLATION_TRANSPORT = 12,
+            E_TRANSLATION_PARSE = 13,
+            E_TRANSLATION_DEADLINE = 14,
+            E_TRANSLATION_LOCAL = 15
+          >>>>>>> theirs'''
+          new = '''  E_TRANSLATION_PROVIDER = 11,
+            E_TRANSLATION_TRANSPORT = 12,
+            E_TRANSLATION_PARSE = 13,
+            E_TRANSLATION_DEADLINE = 14,
+            E_TRANSLATION_LOCAL = 15,
+            E_ENGINE_UNAVAILABLE = 16'''
+          text = replace_once(text, old, new, "protocol error-code conflict")
+          text = replace_once(text, "#define VW_ERROR_MAX 15U", "#define VW_ERROR_MAX 16U", "protocol error max")
+          path.write_text(text)
+
+          # Keep the generic ASR facade while retaining main's authoritative session-state and
+          # queued-audio STATUS reporting.
+          path = Path("worker/src/vw_worker.c")
+          text = path.read_text()
+          old = '''<<<<<<< ours
+                                            const vw_worker_config_t* config, const vw_asr_engine_t* engine,
+                                            const vw_worker_queue_t* queue, uint64_t* sequence) {
+          =======
+                                            const vw_worker_config_t* config, const vw_whisper_engine_t* engine,
+                                            const vw_worker_queue_t* queue, const vw_audio_buffer_t* audio_buf,
+                                            bool session_active, bool paused, uint64_t* sequence) {
+          >>>>>>> theirs'''
+          new = '''                                  const vw_worker_config_t* config, const vw_asr_engine_t* engine,
+                                            const vw_worker_queue_t* queue, const vw_audio_buffer_t* audio_buf,
+                                            bool session_active, bool paused, uint64_t* sequence) {'''
+          text = replace_once(text, old, new, "worker status signature conflict")
+          old = '''<<<<<<< ours
+            status.state = 1;
+            status.inference_us = (int64_t)(engine ? vw_asr_engine_get_total_inference_us(engine) : 0);
+          =======
+            if (!session_active) {
+              status.state = VW_SESSION_STATE_IDLE;
+            } else if (paused) {
+              status.state = VW_SESSION_STATE_PAUSED;
+            } else {
+              status.state = VW_SESSION_STATE_PLAYING;
+            }
+            uint64_t queued_audio_us = queue ? vw_worker_queue_get_queued_audio_us(queue) : 0;
+            if (audio_buf) {
+              size_t samples = vw_audio_buffer_get_available(audio_buf);
+              queued_audio_us += (uint64_t)samples * 1000000ULL / VW_AUDIO_SAMPLE_RATE;
+            }
+            status.queued_audio_us = (int64_t)queued_audio_us;
+            status.inference_us = (int64_t)(engine ? vw_whisper_engine_get_total_inference_us(engine) : 0);
+          >>>>>>> theirs'''
+          new = '''  if (!session_active) {
+              status.state = VW_SESSION_STATE_IDLE;
+            } else if (paused) {
+              status.state = VW_SESSION_STATE_PAUSED;
+            } else {
+              status.state = VW_SESSION_STATE_PLAYING;
+            }
+            uint64_t queued_audio_us = queue ? vw_worker_queue_get_queued_audio_us(queue) : 0;
+            if (audio_buf) {
+              size_t samples = vw_audio_buffer_get_available(audio_buf);
+              queued_audio_us += (uint64_t)samples * 1000000ULL / VW_AUDIO_SAMPLE_RATE;
+            }
+            status.queued_audio_us = (int64_t)queued_audio_us;
+            status.inference_us = (int64_t)(engine ? vw_asr_engine_get_total_inference_us(engine) : 0);'''
+          text = replace_once(text, old, new, "worker status body conflict")
+          path.write_text(text)
+          PY
+          if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' \
+              lua/extensions/vlc_whisper_settings.lua protocol/include/vw_protocol_types.h worker/src/vw_worker.c; then
+            echo "unresolved merge markers remain" >&2
+            exit 1
+          fi
+          git add lua/extensions/vlc_whisper_settings.lua protocol/include/vw_protocol_types.h worker/src/vw_worker.c
+          git diff --check --cached
           rm -f .github/workflows/pr55-merge-helper.yml
           git add -A
-          git commit -m "chore: prepare PR 55 merge result"
-          git push --force origin HEAD:refs/heads/tmp/pr55-main-merge-result
+          git commit -m "chore: prepare resolved PR 55 merge tree"
+          git push origin HEAD:refs/heads/tmp/pr55-main-merge-resolved
