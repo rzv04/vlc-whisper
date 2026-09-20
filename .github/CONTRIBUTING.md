@@ -2,9 +2,6 @@
 
 Start with root `AGENTS.md`. It is the canonical coding/invariant rule set.
 
->[!WARNING]
-> The details found below are (_not exclusively!_) for AI agents that contribute and must have a clear purpose, goal, and must thoroughly respect invariants and templates. Actual contributors are free to choose any pull request template they desire, with the condition of it being easy to follow and understand.
-
 ## Before implementation
 
 For meaningful behavior changes:

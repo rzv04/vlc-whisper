@@ -16,7 +16,7 @@ What problem does this feature solve? How does it align with the current version
 
 ## Proposed Technical Design
 
-Concisely describe your proposed implementation.
+Describe your proposed implementation, affected modules (plugin, worker), and IPC protocol changes if applicable.
 
 ## Alternatives Considered
 
