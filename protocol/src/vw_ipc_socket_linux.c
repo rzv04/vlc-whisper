@@ -193,7 +193,10 @@ vw_ipc_handle_t* vw_ipc_connect(const char* endpoint_name) {
 static ssize_t vw_ipc_recv_record(int fd, void* buffer, size_t buffer_size) {
   struct iovec iov = {.iov_base = buffer, .iov_len = buffer_size};
   struct msghdr message = {.msg_iov = &iov, .msg_iovlen = 1};
-  ssize_t bytes = recvmsg(fd, &message, 0);
+  ssize_t bytes;
+  do {
+    bytes = recvmsg(fd, &message, 0);
+  } while (bytes < 0 && errno == EINTR);
   if (bytes >= 0 && (message.msg_flags & MSG_TRUNC)) {
     errno = EMSGSIZE;
     return -EMSGSIZE;

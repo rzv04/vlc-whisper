@@ -38,6 +38,7 @@ bool vw_worker_config_resolve_model_path(const vw_worker_config_t* config, char*
 
 // Resolves an explicit VAD path or discovers Silero beside the effective model, model directory, install models, then
 // compatibility CWD paths. Returns true only when a usable VAD file is found or explicitly configured.
+bool vw_worker_config_default_model_dir(char* out, size_t out_size);
 bool vw_worker_config_resolve_vad_model_path(const vw_worker_config_t* config, const char* effective_model_path,
                                              char* out, size_t out_size);
 

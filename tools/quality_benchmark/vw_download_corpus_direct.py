@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import json
 import math
@@ -14,8 +15,6 @@ import urllib.request
 import wave
 from pathlib import Path
 from typing import Any
-
-import numpy as np
 
 DATASET_ID = "google/fleurs"
 DATASET_SPLIT = "test"
@@ -40,11 +39,18 @@ def safe_sample_id(value: Any, fallback: int) -> str:
 
 def write_pcm16_wav(path: Path, pcm_bytes: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(pcm_bytes)
+    tmp_path = path.with_suffix(".tmp")
+    try:
+        with wave.open(str(tmp_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(SAMPLE_RATE)
+            wav.writeframes(pcm_bytes)
+        tmp_path.replace(path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 def parse_wav_float32_to_pcm16(wav_bytes: bytes) -> tuple[bytes, float]:
@@ -60,6 +66,8 @@ def parse_wav_float32_to_pcm16(wav_bytes: bytes) -> tuple[bytes, float]:
         tag, size = struct.unpack("<4sI", wav_bytes[pos : pos + 8])
         chunk_start = pos + 8
         chunk_end = chunk_start + size
+        if chunk_end > len(wav_bytes):
+            raise ValueError(f"RIFF chunk '{tag.decode('latin1', errors='replace')}' extends beyond file buffer")
         if tag == b"fmt ":
             fmt_data = wav_bytes[chunk_start:chunk_end]
             if len(fmt_data) >= 16:
@@ -79,12 +87,25 @@ def parse_wav_float32_to_pcm16(wav_bytes: bytes) -> tuple[bytes, float]:
     if data_bytes is None:
         raise ValueError("missing data chunk in WAV")
 
-    floats = np.frombuffer(data_bytes, dtype=np.float32)
-    floats = np.clip(floats, -1.0, 1.0)
-    pcm = np.round(floats * 32767.0).astype(np.int16)
-    pcm_bytes = pcm.tobytes()
-    duration_seconds = len(pcm) / float(SAMPLE_RATE)
-    return pcm_bytes, duration_seconds
+    try:
+        import numpy as np
+
+        floats = np.frombuffer(data_bytes, dtype=np.float32)
+        floats = np.clip(floats, -1.0, 1.0)
+        pcm = np.round(floats * 32767.0).astype(np.int16)
+        pcm_bytes = pcm.tobytes()
+        duration_seconds = len(pcm) / float(SAMPLE_RATE)
+        return pcm_bytes, duration_seconds
+    except ImportError:
+        floats_arr = array.array("f")
+        floats_arr.frombytes(data_bytes)
+        pcm_arr = array.array("h")
+        for f in floats_arr:
+            clamped = -1.0 if f < -1.0 else (1.0 if f > 1.0 else f)
+            pcm_arr.append(int(round(clamped * 32767.0)))
+        pcm_bytes = pcm_arr.tobytes()
+        duration_seconds = len(pcm_arr) / float(SAMPLE_RATE)
+        return pcm_bytes, duration_seconds
 
 
 def resolve_dataset_revision() -> str:
@@ -146,6 +167,8 @@ def select_candidates_from_tsv(
         duration_seconds = num_samples / float(SAMPLE_RATE)
         if not duration_is_eligible(duration_seconds, min_seconds, max_seconds):
             continue
+        if not transcription:
+            continue
 
         sample_id = safe_sample_id(source_id, row_index)
         candidates.append(
@@ -199,6 +222,10 @@ def download_language_audio(
 
                     wav_bytes = extracted_file.read()
                     pcm_bytes, duration_seconds = parse_wav_float32_to_pcm16(wav_bytes)
+                    if abs(duration_seconds - cand["expected_duration"]) > 0.5:
+                        raise ValueError(
+                            f"sample {cand['sample_id']} extracted duration {duration_seconds:.3f}s differs from expected {cand['expected_duration']:.3f}s"
+                        )
 
                     relative_path = Path("audio") / language / cand["target_filename"]
                     wav_path = output_dir / relative_path
@@ -310,7 +337,9 @@ def main() -> int:
         "samples": samples,
     }
     manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_manifest = manifest_path.with_suffix(".tmp")
+    tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_manifest.replace(manifest_path)
     total_seconds = sum(float(sample["duration_seconds"]) for sample in samples)
     print(f"Wrote {len(samples)} local samples ({total_seconds:.1f}s) to {output_dir}")
     print(f"Manifest: {manifest_path}")

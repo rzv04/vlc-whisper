@@ -202,6 +202,7 @@ static void test_local_file_download(void) {
   char lock_path[4096];
   snprintf(lock_path, sizeof(lock_path), "%s/local.bin.lock", dest_dir);
   EXPECT(unlink(final_path) == 0);
+  EXPECT(access(lock_path, F_OK) == 0);
   EXPECT(unlink(lock_path) == 0);
   EXPECT(unlink(source_tmpl) == 0);
   EXPECT(rmdir(dest_dir) == 0);
@@ -253,6 +254,7 @@ static void test_poll_and_lifecycle(void) {
   struct stat st;
   EXPECT(stat(part_path, &st) != 0);
   EXPECT(unlink(fifo_path) == 0);
+  EXPECT(access(lock_path, F_OK) == 0);
   EXPECT(unlink(lock_path) == 0);
   EXPECT(rmdir(tmpdir) == 0);
 #endif

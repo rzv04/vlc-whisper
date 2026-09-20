@@ -19,6 +19,7 @@ struct vw_worker_queue {
   size_t tail;  // next read index (unbounded; slot index = tail % capacity)
   pthread_mutex_t mutex;
   _Atomic uint64_t dropped_audio_us;
+  _Atomic uint64_t queued_audio_us;
 };
 
 vw_worker_queue_t* vw_worker_queue_create(size_t capacity) {
@@ -67,11 +68,16 @@ static uint64_t vw_worker_queue_audio_duration_us(const uint8_t* payload, uint32
   return audio.duration_us > 0 ? (uint64_t)audio.duration_us : 0;
 }
 
+static uint64_t vw_worker_queue_frame_audio_duration_us(uint16_t type, const uint8_t* payload, uint32_t payload_len) {
+  return type == VW_MSG_AUDIO_PCM ? vw_worker_queue_audio_duration_us(payload, payload_len) : 0;
+}
+
 bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload, uint32_t payload_len) {
   if (!q) {
     free(payload);
     return false;
   }
+  uint64_t incoming_audio_us = vw_worker_queue_frame_audio_duration_us(type, payload, payload_len);
   pthread_mutex_lock(&q->mutex);
 
   // Fast path: room available.
@@ -81,6 +87,9 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
     q->slots[idx].payload_len = payload_len;
     q->slots[idx].payload = payload;
     q->head++;
+    if (incoming_audio_us > 0) {
+      atomic_fetch_add_explicit(&q->queued_audio_us, incoming_audio_us, memory_order_relaxed);
+    }
     pthread_mutex_unlock(&q->mutex);
     return true;
   }
@@ -98,9 +107,11 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   }
   if (evict_found) {
     vw_worker_frame_t* victim = &q->slots[evict % q->capacity];
-    atomic_fetch_add_explicit(&q->dropped_audio_us,
-                              vw_worker_queue_audio_duration_us(victim->payload, victim->payload_len),
-                              memory_order_relaxed);
+    uint64_t victim_audio_us = vw_worker_queue_audio_duration_us(victim->payload, victim->payload_len);
+    atomic_fetch_add_explicit(&q->dropped_audio_us, victim_audio_us, memory_order_relaxed);
+    if (victim_audio_us > 0) {
+      atomic_fetch_sub_explicit(&q->queued_audio_us, victim_audio_us, memory_order_relaxed);
+    }
     free(victim->payload);
     // Shift everything after the evicted slot one position left, keeping FIFO order of survivors.
     for (size_t i = evict; i + 1 < q->head; i++) {
@@ -112,6 +123,9 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
     q->slots[idx].payload_len = payload_len;
     q->slots[idx].payload = payload;
     q->head++;
+    if (incoming_audio_us > 0) {
+      atomic_fetch_add_explicit(&q->queued_audio_us, incoming_audio_us, memory_order_relaxed);
+    }
     pthread_mutex_unlock(&q->mutex);
     return true;
   }
@@ -124,8 +138,7 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
   // soft incoming (PAUSE/RESUME) can be dropped; required incomings always land. Reachable only in
   // a pathological burst of controls; the main loop pops controls immediately.
   if (type == VW_MSG_AUDIO_PCM) {
-    atomic_fetch_add_explicit(&q->dropped_audio_us, vw_worker_queue_audio_duration_us(payload, payload_len),
-                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&q->dropped_audio_us, incoming_audio_us, memory_order_relaxed);
     free(payload);
     pthread_mutex_unlock(&q->mutex);
     return false;
@@ -172,9 +185,12 @@ bool vw_worker_queue_push(vw_worker_queue_t* q, uint16_t type, uint8_t* payload,
     return false;
   }
   vw_worker_frame_t* victim = &q->slots[evict_ctrl % q->capacity];
-  atomic_fetch_add_explicit(&q->dropped_audio_us,
-                            vw_worker_queue_audio_duration_us(victim->payload, victim->payload_len),
-                            memory_order_relaxed);
+  uint64_t victim_audio_us =
+      vw_worker_queue_frame_audio_duration_us(victim->type, victim->payload, victim->payload_len);
+  if (victim_audio_us > 0) {
+    atomic_fetch_add_explicit(&q->dropped_audio_us, victim_audio_us, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&q->queued_audio_us, victim_audio_us, memory_order_relaxed);
+  }
   free(victim->payload);
   for (size_t i = evict_ctrl; i + 1 < q->head; i++) {
     q->slots[i % q->capacity] = q->slots[(i + 1) % q->capacity];
@@ -200,6 +216,10 @@ bool vw_worker_queue_pop(vw_worker_queue_t* q, vw_worker_frame_t* out) {
   }
   *out = q->slots[q->tail % q->capacity];
   q->tail++;
+  uint64_t popped_audio_us = vw_worker_queue_frame_audio_duration_us(out->type, out->payload, out->payload_len);
+  if (popped_audio_us > 0) {
+    atomic_fetch_sub_explicit(&q->queued_audio_us, popped_audio_us, memory_order_relaxed);
+  }
   pthread_mutex_unlock(&q->mutex);
   return true;
 }
@@ -209,4 +229,11 @@ uint64_t vw_worker_queue_get_dropped_audio_us(const vw_worker_queue_t* q) {
     return 0;
   }
   return atomic_load_explicit(&q->dropped_audio_us, memory_order_relaxed);
+}
+
+uint64_t vw_worker_queue_get_queued_audio_us(const vw_worker_queue_t* q) {
+  if (!q) {
+    return 0;
+  }
+  return atomic_load_explicit(&q->queued_audio_us, memory_order_relaxed);
 }

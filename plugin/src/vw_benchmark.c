@@ -247,6 +247,12 @@ static bool vw_benchmark_write(const vw_benchmark_t* benchmark, bool finalized, 
   fprintf(report, "translation_tier2_count=%llu\n", (unsigned long long)benchmark->translation_tier2_count);
   fprintf(report, "translation_tier3_count=%llu\n", (unsigned long long)benchmark->translation_tier3_count);
   fprintf(report, "translation_failure_count=%llu\n", (unsigned long long)benchmark->translation_failure_count);
+  fprintf(report, "translation_provider_failure_count=%llu\n",
+          (unsigned long long)benchmark->translation_provider_failure_count);
+  fprintf(report, "translation_transport_failure_count=%llu\n",
+          (unsigned long long)benchmark->translation_transport_failure_count);
+  fprintf(report, "translation_parse_failure_count=%llu\n",
+          (unsigned long long)benchmark->translation_parse_failure_count);
   fprintf(report, "translation_timeout_count=%llu\n", (unsigned long long)benchmark->translation_timeout_count);
   if (vw_benchmark_format_u64_s(value, sizeof(value), benchmark->translation_duration_us))
     fprintf(report, "translation_duration_sec=%s\n", value);
@@ -341,20 +347,7 @@ void vw_benchmark_record_caption_filtered(vw_benchmark_t* benchmark, bool paused
 }
 
 void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, uint32_t latency_us, bool success) {
-  if (!benchmark) return;
-  if (!success) {
-    char start_pts_sec[64];
-    char end_pts_sec[64];
-    char latency_ms[64];
-    if (!vw_benchmark_format_s(start_pts_sec, sizeof(start_pts_sec), benchmark->last_segment_start_pts_us)) return;
-    if (!vw_benchmark_format_s(end_pts_sec, sizeof(end_pts_sec), benchmark->last_segment_end_pts_us)) return;
-    if (!vw_benchmark_format_ms(latency_ms, sizeof(latency_ms), (int64_t)latency_us)) return;
-    vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE",
-                 "segment=%llu start_pts_sec=%s end_pts_sec=%s latency_ms=%s reason=translation_failed "
-                 "detail=worker_did_not_provide_explicit_failure_cause",
-                 (unsigned long long)benchmark->last_segment_id, start_pts_sec, end_pts_sec, latency_ms);
-  }
-  if (!benchmark->active) return;
+  if (!benchmark || !benchmark->active) return;
   benchmark->translation_requests_sent++;
   benchmark->translation_duration_us += latency_us;
   if (latency_us > 0 && benchmark->translation_latency_sample_count < VW_BENCHMARK_MAX_LATENCY_SAMPLES) {
@@ -369,10 +362,23 @@ void vw_benchmark_record_translation(vw_benchmark_t* benchmark, uint8_t tier, ui
     } else if (tier == 3) {
       benchmark->translation_tier3_count++;
     }
-  } else if (latency_us >= VW_BENCHMARK_TRANSLATION_TIMEOUT_US) {
-    benchmark->translation_timeout_count++;
   } else {
     benchmark->translation_failure_count++;
+  }
+}
+
+void vw_benchmark_record_translation_failure(vw_benchmark_t* benchmark, uint32_t error_code, const char* detail) {
+  const char* message = detail && detail[0] ? detail : "cause=unknown";
+  vw_log_event(VW_LOG_LEVEL_ERROR, "PLUGIN_TRANSLATION_FAILURE", "%s", message);
+  if (!benchmark || !benchmark->active) return;
+  if (error_code == E_TRANSLATION_PROVIDER) {
+    benchmark->translation_provider_failure_count++;
+  } else if (error_code == E_TRANSLATION_TRANSPORT) {
+    benchmark->translation_transport_failure_count++;
+  } else if (error_code == E_TRANSLATION_PARSE) {
+    benchmark->translation_parse_failure_count++;
+  } else if (error_code == E_TRANSLATION_DEADLINE) {
+    benchmark->translation_timeout_count++;
   }
 }
 
