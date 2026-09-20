@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -45,14 +46,20 @@ void print_usage(std::ostream& out) {
 }
 
 std::size_t parse_size(const std::string& value, const char* option) {
+  const std::string error = std::string(option) + " expects a non-negative integer";
+  if (value.empty() || value.front() == '-' || value.front() == '+') throw std::runtime_error(error);
+
   std::size_t consumed = 0;
   unsigned long long parsed = 0;
   try {
     parsed = std::stoull(value, &consumed);
   } catch (...) {
-    throw std::runtime_error(std::string(option) + " expects a non-negative integer");
+    throw std::runtime_error(error);
   }
-  if (consumed != value.size()) throw std::runtime_error(std::string(option) + " expects a non-negative integer");
+  if (consumed != value.size() ||
+      parsed > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+    throw std::runtime_error(error);
+  }
   return static_cast<std::size_t>(parsed);
 }
 

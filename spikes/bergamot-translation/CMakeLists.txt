@@ -93,5 +93,21 @@ if(VW_BERGAMOT_BUILD_ENGINE)
                     PASS_REGULAR_EXPRESSION "--budget-ms expects a positive finite number"
             )
         endforeach()
+
+        foreach(count_option warmup repeat limit)
+            add_test(
+                NAME vw_bergamot_rejects_signed_${count_option}
+                COMMAND vw-bergamot-translate-spike benchmark
+                    --model-config unused.yml
+                    --${count_option} -1
+                    unused.srt
+            )
+            set_tests_properties(
+                vw_bergamot_rejects_signed_${count_option}
+                PROPERTIES
+                    WILL_FAIL TRUE
+                    PASS_REGULAR_EXPRESSION "--${count_option} expects a non-negative integer"
+            )
+        endforeach()
     endif()
 endif()
