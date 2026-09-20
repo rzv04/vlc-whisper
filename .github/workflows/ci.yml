@@ -26,15 +26,6 @@ jobs:
           sudo apt-get install -y cmake ninja-build clang-format valgrind gcovr python3-pip
           sudo python3 -m pip install --break-system-packages --upgrade gcovr
 
-      - name: Check code formatting (STRICT)
-        run: |
-          clang-format --dry-run --Werror \
-            plugin/include/*.h plugin/src/*.c \
-            protocol/include/*.h protocol/src/*.c \
-            worker/include/*.h worker/src/*.c \
-            tests/include/*.h tests/unit/*.c tests/integration/*.c \
-            tools/quality_benchmark/*.c
-
       - name: Configure CMake (coverage preset)
         run: cmake --preset linux-x64-coverage -DVW_QUALITY_BENCHMARK_HOOKS=ON
 
@@ -52,6 +43,15 @@ jobs:
 
       - name: Valgrind memcheck (STRICT)
         run: ctest --test-dir build/linux-x64-coverage -T memcheck --output-on-failure
+
+      - name: Check code formatting (STRICT)
+        run: |
+          clang-format --dry-run --Werror \
+            plugin/include/*.h plugin/src/*.c \
+            protocol/include/*.h protocol/src/*.c \
+            worker/include/*.h worker/src/*.c \
+            tests/include/*.h tests/unit/*.c tests/integration/*.c \
+            tools/quality_benchmark/*.c
 
       - name: Generate per-file coverage summary (gcovr)
         if: github.event_name == 'pull_request'

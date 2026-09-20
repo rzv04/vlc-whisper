@@ -55,13 +55,13 @@ int main(void) {
   EXPECT(!vw_worker_queue_pop(q, &f));  // empty
 
   // --- Full-queue eviction drops only the oldest AUDIO frame; control frames survive ---
-  uint32_t l = 0;
-  uint8_t* a = make_audio_payload(500000, &l);
-  uint8_t* b = make_audio_payload(600000, &l);
-  uint8_t* c = make_audio_payload(700000, &l);
-  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, a, l));
-  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, b, l));
-  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, c, l));
+  uint32_t la = 0, lb = 0, lc = 0;
+  uint8_t* a = make_audio_payload(500000, &la);
+  uint8_t* b = make_audio_payload(600000, &lb);
+  uint8_t* c = make_audio_payload(700000, &lc);
+  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, a, la));
+  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, b, lb));
+  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, c, lc));
   EXPECT(vw_worker_queue_push(q, VW_MSG_PAUSE, NULL, 0));  // control: never dropped
 
   // Queue is full (4/4). Push another AUDIO: oldest AUDIO (500000) is evicted, PAUSE stays.
@@ -93,13 +93,13 @@ int main(void) {
   EXPECT(!vw_worker_queue_pop(q, &f));
 
   // --- Control frame pushed into a full queue evicts oldest AUDIO, control still accepted ---
-  uint32_t l3 = 0;
-  uint8_t* e1 = make_audio_payload(111111, &l3);
-  uint8_t* e2 = make_audio_payload(222222, &l3);
-  uint8_t* e3 = make_audio_payload(333333, &l3);
-  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e1, l3));
-  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e2, l3));
-  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e3, l3));
+  uint32_t le1 = 0, le2 = 0, le3 = 0;
+  uint8_t* e1 = make_audio_payload(111111, &le1);
+  uint8_t* e2 = make_audio_payload(222222, &le2);
+  uint8_t* e3 = make_audio_payload(333333, &le3);
+  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e1, le1));
+  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e2, le2));
+  EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e3, le3));
   uint32_t l4 = 0;
   uint8_t* e4 = make_audio_payload(444444, &l4);
   EXPECT(vw_worker_queue_push(q, VW_MSG_AUDIO_PCM, e4, l4));  // full again (4/4)
@@ -266,11 +266,11 @@ int main(void) {
   // destroy with queued payloads must free them (valgrind-verified)
   vw_worker_queue_t* q2 = vw_worker_queue_create(2);
   EXPECT(q2 != NULL);
-  uint32_t l5 = 0;
-  uint8_t* g1 = make_audio_payload(1000, &l5);
-  uint8_t* g2 = make_audio_payload(2000, &l5);
-  EXPECT(vw_worker_queue_push(q2, VW_MSG_AUDIO_PCM, g1, l5));
-  EXPECT(vw_worker_queue_push(q2, VW_MSG_AUDIO_PCM, g2, l5));
+  uint32_t lg1 = 0, lg2 = 0;
+  uint8_t* g1 = make_audio_payload(1000, &lg1);
+  uint8_t* g2 = make_audio_payload(2000, &lg2);
+  EXPECT(vw_worker_queue_push(q2, VW_MSG_AUDIO_PCM, g1, lg1));
+  EXPECT(vw_worker_queue_push(q2, VW_MSG_AUDIO_PCM, g2, lg2));
   vw_worker_queue_destroy(q2);  // frees g1, g2
 
   // Default capacity constant sanity check

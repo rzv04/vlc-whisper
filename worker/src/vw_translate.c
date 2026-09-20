@@ -38,6 +38,14 @@ extern char** environ;
 #define VW_TRANSLATE_RPC_JSON_BYTES (VW_TRANSLATE_MAX_TEXT_BYTES * 8U + 512U)
 #define VW_TRANSLATE_RPC_BODY_BYTES 65536U
 
+static _Thread_local uint8_t g_http_failure_cause = VW_TRANSLATE_FAILURE_TRANSPORT;
+static _Thread_local uint16_t g_http_provider_status = 0;
+
+static void vw_translate_http_failure_reset(void) {
+  g_http_failure_cause = VW_TRANSLATE_FAILURE_TRANSPORT;
+  g_http_provider_status = 0;
+}
+
 static int64_t get_monotonic_us(void) {
 #ifdef _WIN32
   LARGE_INTEGER freq;
@@ -139,7 +147,10 @@ bool vw_html_unescape(const char* src, char* dst, size_t dst_size) {
       for (size_t n = 0; n < sizeof(named) / sizeof(named[0]); n++) {
         size_t len = strlen(named[n].entity);
         if (strncmp(src + i, named[n].entity, len) == 0) {
-          if (dst_idx + 1 >= dst_size) return false;
+          if (dst_idx + 1 >= dst_size) {
+            dst[dst_idx < dst_size ? dst_idx : dst_size - 1] = '\0';
+            return false;
+          }
           dst[dst_idx++] = named[n].value;
           i += len - 1;
           matched = true;
@@ -161,21 +172,37 @@ bool vw_html_unescape(const char* src, char* dst, size_t dst_size) {
             number[digit_count] = '\0';
             char* parse_end = NULL;
             unsigned long code = strtoul(number, &parse_end, hex ? 16 : 10);
-            if (parse_end && *parse_end == '\0' && code <= 0x10FFFFUL &&
-                append_utf8_scalar((uint32_t)code, dst, dst_size, &dst_idx)) {
-              i = end_idx;
-              continue;
+            if (parse_end && *parse_end == '\0') {
+              if (code > 0x10FFFFUL || (code >= 0xD800UL && code <= 0xDFFFUL) || code == 0) {
+                // Invalid code point: entity cannot be parsed, emit '&' and keep original characters cleanly.
+              } else {
+                if (!append_utf8_scalar((uint32_t)code, dst, dst_size, &dst_idx)) {
+                  dst[dst_size - 1] = '\0';
+                  return false;
+                }
+                i = end_idx;
+                continue;
+              }
             }
           }
         }
       }
     }
 
-    if (dst_idx + 1 >= dst_size) return false;
+    if (dst_idx + 1 >= dst_size) {
+      dst[dst_size - 1] = '\0';
+      return false;
+    }
     dst[dst_idx++] = src[i];
   }
   dst[dst_idx] = '\0';
   return true;
+}
+
+// In-place HTML unescape helper for string buffers.
+static inline bool html_unescape_in_place(char* str) {
+  if (!str) return false;
+  return vw_html_unescape(str, str, strlen(str) + 1);
 }
 
 static bool parse_hex4(const char* src, uint32_t* out) {
@@ -592,10 +619,17 @@ done:
 #ifdef VW_TRANSLATE_TESTING
 static vw_translate_test_http_hook_t g_test_http_hook = NULL;
 static void* g_test_http_user_data = NULL;
+static vw_translate_test_http_diagnostic_hook_t g_test_http_diagnostic_hook = NULL;
+static void* g_test_http_diagnostic_user_data = NULL;
 
 void vw_translate_set_test_http_hook(vw_translate_test_http_hook_t hook, void* user_data) {
   g_test_http_hook = hook;
   g_test_http_user_data = user_data;
+}
+
+void vw_translate_set_test_http_diagnostic_hook(vw_translate_test_http_diagnostic_hook_t hook, void* user_data) {
+  g_test_http_diagnostic_hook = hook;
+  g_test_http_diagnostic_user_data = user_data;
 }
 
 bool vw_translate_build_rpc_body_for_test(const char* text, const char* src_lang, const char* dst_lang, char* out,
@@ -615,7 +649,14 @@ static bool set_winhttp_remaining_timeouts(HINTERNET session, int64_t deadline_u
 
 static bool win32_http_request(const char* host, const char* path, const char* body, const char* content_type,
                                char* out_buf, size_t buf_size, int64_t deadline_us) {
-  if (!host || !path || !out_buf || buf_size < 2 || remaining_timeout_ms(deadline_us) == 0) return false;
+  if (!host || !path || !out_buf || buf_size < 2) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    return false;
+  }
+  if (remaining_timeout_ms(deadline_us) == 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    return false;
+  }
   bool ok = false;
   HINTERNET session = WinHttpOpen(L"VLC-Whisper/0.1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0);
@@ -626,16 +667,28 @@ static bool win32_http_request(const char* host, const char* path, const char* b
   if (!session || !set_winhttp_remaining_timeouts(session, deadline_us, 4U)) goto done;
 
   int host_len = MultiByteToWideChar(CP_UTF8, 0, host, -1, NULL, 0);
-  if (host_len <= 0) goto done;
+  if (host_len <= 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    goto done;
+  }
   whost = (WCHAR*)malloc((size_t)host_len * sizeof(WCHAR));
-  if (!whost || !MultiByteToWideChar(CP_UTF8, 0, host, -1, whost, host_len)) goto done;
+  if (!whost || !MultiByteToWideChar(CP_UTF8, 0, host, -1, whost, host_len)) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    goto done;
+  }
   connect = WinHttpConnect(session, whost, INTERNET_DEFAULT_HTTPS_PORT, 0);
   if (!connect || remaining_timeout_ms(deadline_us) == 0) goto done;
 
   int path_len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-  if (path_len <= 0) goto done;
+  if (path_len <= 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    goto done;
+  }
   wpath = (WCHAR*)malloc((size_t)path_len * sizeof(WCHAR));
-  if (!wpath || !MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, path_len)) goto done;
+  if (!wpath || !MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, path_len)) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    goto done;
+  }
   request = WinHttpOpenRequest(connect, body ? L"POST" : L"GET", wpath, NULL, WINHTTP_NO_REFERER,
                                WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
   if (!request) goto done;
@@ -643,23 +696,28 @@ static bool win32_http_request(const char* host, const char* path, const char* b
   WCHAR wheaders[256] = {0};
   if (content_type) {
     int written = swprintf(wheaders, sizeof(wheaders) / sizeof(wheaders[0]), L"Content-Type: %hs\r\n", content_type);
-    if (written <= 0 || (size_t)written >= sizeof(wheaders) / sizeof(wheaders[0])) goto done;
+    if (written <= 0 || (size_t)written >= sizeof(wheaders) / sizeof(wheaders[0])) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+      goto done;
+    }
   }
   if (!set_winhttp_remaining_timeouts(session, deadline_us, 3U)) goto done;
   LPCWSTR headers = wheaders[0] ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS;
   DWORD headers_len = wheaders[0] ? (DWORD)wcslen(wheaders) : 0;
   LPVOID req_data = body ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA;
   DWORD body_len = body ? (DWORD)strlen(body) : 0;
-  if (!WinHttpSendRequest(request, headers, headers_len, req_data, body_len, body_len, 0)) {
-    goto done;
-  }
+  if (!WinHttpSendRequest(request, headers, headers_len, req_data, body_len, body_len, 0)) goto done;
   if (!set_winhttp_remaining_timeouts(session, deadline_us, 2U) || !WinHttpReceiveResponse(request, NULL)) goto done;
 
   DWORD status_code = 0;
   DWORD status_size = sizeof(status_code);
   if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
-                           &status_code, &status_size, WINHTTP_NO_HEADER_INDEX) ||
-      status_code < 200 || status_code >= 300) {
+                           &status_code, &status_size, WINHTTP_NO_HEADER_INDEX)) {
+    goto done;
+  }
+  if (status_code < 200 || status_code >= 300) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
+    g_http_provider_status = status_code <= UINT16_MAX ? (uint16_t)status_code : 0;
     goto done;
   }
 
@@ -687,6 +745,8 @@ done:
   if (request) WinHttpCloseHandle(request);
   if (connect) WinHttpCloseHandle(connect);
   if (session) WinHttpCloseHandle(session);
+  if (!ok && g_http_failure_cause == VW_TRANSLATE_FAILURE_TRANSPORT && remaining_timeout_ms(deadline_us) == 0)
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
   return ok;
 }
 #else
@@ -702,11 +762,16 @@ static bool set_nonblocking(int fd) {
 
 static bool posix_http_request(const char* base_url, const char* post_body, const char* query_text,
                                const char* content_type, char* out_buf, size_t buf_size, int64_t deadline_us) {
-  if (!base_url || !out_buf || buf_size < 2) return false;
+  if (!base_url || !out_buf || buf_size < 2) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    return false;
+  }
   uint32_t timeout_ms = remaining_timeout_ms(deadline_us);
-  if (timeout_ms == 0) return false;
+  if (timeout_ms == 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    return false;
+  }
 
-  // Ignore SIGPIPE so premature exit of curl child during pipe write never terminates the worker.
   struct sigaction sa_ign;
   struct sigaction sa_old;
   memset(&sa_ign, 0, sizeof(sa_ign));
@@ -715,10 +780,12 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
 
   int pipe_out[2] = {-1, -1};
   if (pipe(pipe_out) != 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
     sigaction(SIGPIPE, &sa_old, NULL);
     return false;
   }
   if (!set_cloexec(pipe_out[0]) || !set_cloexec(pipe_out[1])) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
     close(pipe_out[0]);
     close(pipe_out[1]);
     sigaction(SIGPIPE, &sa_old, NULL);
@@ -729,12 +796,14 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
   int pipe_in[2] = {-1, -1};
   if (input_payload) {
     if (pipe(pipe_in) != 0) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
       close(pipe_out[0]);
       close(pipe_out[1]);
       sigaction(SIGPIPE, &sa_old, NULL);
       return false;
     }
     if (!set_cloexec(pipe_in[0]) || !set_cloexec(pipe_in[1])) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
       close(pipe_in[0]);
       close(pipe_in[1]);
       close(pipe_out[0]);
@@ -746,7 +815,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
 
   char timeout_sec_str[16];
   snprintf(timeout_sec_str, sizeof(timeout_sec_str), "%.3f", (double)timeout_ms / 1000.0);
-  const char* argv[24];
+  const char* argv[26];
   int argc = 0;
   argv[argc++] = VW_CURL_EXECUTABLE;
   argv[argc++] = "--disable";
@@ -762,6 +831,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
   if (content_type) {
     int written = snprintf(ct_header, sizeof(ct_header), "Content-Type: %s", content_type);
     if (written < 0 || (size_t)written >= sizeof(ct_header)) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
       close(pipe_out[0]);
       close(pipe_out[1]);
       if (input_payload) {
@@ -785,11 +855,14 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     argv[argc++] = "q@-";
   }
 
+  argv[argc++] = "-w";
+  argv[argc++] = "\n%{response_code}";
   argv[argc++] = base_url;
   argv[argc] = NULL;
 
   posix_spawn_file_actions_t actions;
   if (posix_spawn_file_actions_init(&actions) != 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
     close(pipe_out[0]);
     close(pipe_out[1]);
     if (input_payload) {
@@ -823,9 +896,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
   int spawn_status =
       posix_spawn(&pid, VW_CURL_EXECUTABLE, &actions, attr_init ? &attr : NULL, (char* const*)argv, environ);
   posix_spawn_file_actions_destroy(&actions);
-  if (attr_init) {
-    posix_spawnattr_destroy(&attr);
-  }
+  if (attr_init) posix_spawnattr_destroy(&attr);
 
   close(pipe_out[1]);
   pipe_out[1] = -1;
@@ -834,6 +905,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     pipe_in[0] = -1;
   }
   if (spawn_status != 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
     close(pipe_out[0]);
     pipe_out[0] = -1;
     if (input_payload) {
@@ -845,10 +917,9 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
   }
 
   bool nonblocking_ok = set_nonblocking(pipe_out[0]);
-  if (input_payload) {
-    nonblocking_ok = set_nonblocking(pipe_in[1]) && nonblocking_ok;
-  }
+  if (input_payload) nonblocking_ok = set_nonblocking(pipe_in[1]) && nonblocking_ok;
   if (!nonblocking_ok) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
     close(pipe_out[0]);
     pipe_out[0] = -1;
     if (input_payload) {
@@ -867,7 +938,7 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
 
   size_t payload_len = input_payload ? strlen(input_payload) : 0;
   size_t written = 0;
-  bool in_open = (input_payload != NULL);
+  bool in_open = input_payload != NULL;
   bool out_open = true;
   bool write_failed = false;
   bool overflow = false;
@@ -971,14 +1042,8 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     }
   }
 
-  if (pipe_in[1] >= 0) {
-    close(pipe_in[1]);
-    pipe_in[1] = -1;
-  }
-  if (pipe_out[0] >= 0) {
-    close(pipe_out[0]);
-    pipe_out[0] = -1;
-  }
+  if (pipe_in[1] >= 0) close(pipe_in[1]);
+  if (pipe_out[0] >= 0) close(pipe_out[0]);
   out_buf[total_read] = '\0';
   sigaction(SIGPIPE, &sa_old, NULL);
 
@@ -1002,35 +1067,87 @@ static bool posix_http_request(const char* base_url, const char* post_body, cons
     nanosleep(&ts, NULL);
   }
 
-  return !overflow && !write_failed && total_read > 0 && waited == pid && WIFEXITED(wait_status) &&
-         WEXITSTATUS(wait_status) == 0 && get_monotonic_us() <= deadline_us;
+  uint16_t response_status = 0;
+  bool response_status_valid = false;
+  if (total_read >= 4 && out_buf[total_read - 4] == '\n' && isdigit((unsigned char)out_buf[total_read - 3]) &&
+      isdigit((unsigned char)out_buf[total_read - 2]) && isdigit((unsigned char)out_buf[total_read - 1])) {
+    response_status = (uint16_t)((out_buf[total_read - 3] - '0') * 100 + (out_buf[total_read - 2] - '0') * 10 +
+                                 (out_buf[total_read - 1] - '0'));
+    total_read -= 4;
+    out_buf[total_read] = '\0';
+    response_status_valid = true;
+    g_http_provider_status = response_status;
+  }
+
+  bool ok = !overflow && !write_failed && total_read > 0 && response_status_valid && response_status >= 200 &&
+            response_status < 300 && waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0 &&
+            get_monotonic_us() <= deadline_us;
+  if (!ok) {
+    if (remaining_timeout_ms(deadline_us) == 0 ||
+        (waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 28)) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else if (response_status_valid && (response_status < 200 || response_status >= 300)) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
+    } else if (waited == pid && WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 22) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
+    } else {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_TRANSPORT;
+    }
+  }
+  return ok;
 }
 #endif
 
 static bool http_request(const char* host, const char* path, const char* body, const char* query_text,
                          const char* content_type, char* out_buf, size_t buf_size, int64_t deadline_us) {
+  vw_translate_http_failure_reset();
   uint32_t timeout_ms = remaining_timeout_ms(deadline_us);
-  if (timeout_ms == 0) return false;
+  if (timeout_ms == 0) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    return false;
+  }
 #ifdef VW_TRANSLATE_TESTING
+  if (g_test_http_diagnostic_hook) {
+    uint16_t status = 0;
+    vw_translate_test_http_outcome_t outcome = g_test_http_diagnostic_hook(
+        host, path, body, content_type, out_buf, buf_size, timeout_ms, &status, g_test_http_diagnostic_user_data);
+    g_http_provider_status = status;
+    if (outcome == VW_TRANSLATE_TEST_HTTP_OK) return true;
+    if (outcome == VW_TRANSLATE_TEST_HTTP_PROVIDER) g_http_failure_cause = VW_TRANSLATE_FAILURE_PROVIDER;
+    if (outcome == VW_TRANSLATE_TEST_HTTP_TRANSPORT) g_http_failure_cause = VW_TRANSLATE_FAILURE_TRANSPORT;
+    if (outcome == VW_TRANSLATE_TEST_HTTP_DEADLINE) g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    return false;
+  }
   if (g_test_http_hook) {
-    return g_test_http_hook(host, path, body, content_type, out_buf, buf_size, timeout_ms, g_test_http_user_data);
+    bool ok = g_test_http_hook(host, path, body, content_type, out_buf, buf_size, timeout_ms, g_test_http_user_data);
+    if (!ok && remaining_timeout_ms(deadline_us) == 0) g_http_failure_cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    return ok;
   }
 #endif
 #ifdef _WIN32
   if (query_text) {
     char win_path[VW_TRANSLATE_MAX_URL_BYTES];
     char encoded_text[VW_TRANSLATE_MAX_TEXT_BYTES * 3U + 1U];
-    if (!vw_url_encode(query_text, encoded_text, sizeof(encoded_text))) return false;
+    if (!vw_url_encode(query_text, encoded_text, sizeof(encoded_text))) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+      return false;
+    }
     const char* sep = strchr(path, '?') ? "&" : "?";
     int win_written = snprintf(win_path, sizeof(win_path), "%s%sq=%s", path, sep, encoded_text);
-    if (win_written < 0 || (size_t)win_written >= sizeof(win_path)) return false;
+    if (win_written < 0 || (size_t)win_written >= sizeof(win_path)) {
+      g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+      return false;
+    }
     return win32_http_request(host, win_path, body, content_type, out_buf, buf_size, deadline_us);
   }
   return win32_http_request(host, path, body, content_type, out_buf, buf_size, deadline_us);
 #else
   char full_url[VW_TRANSLATE_MAX_URL_BYTES];
   int written = snprintf(full_url, sizeof(full_url), "https://%s%s", host, path);
-  if (written < 0 || (size_t)written >= sizeof(full_url)) return false;
+  if (written < 0 || (size_t)written >= sizeof(full_url)) {
+    g_http_failure_cause = VW_TRANSLATE_FAILURE_LOCAL;
+    return false;
+  }
   return posix_http_request(full_url, body, query_text, content_type, out_buf, buf_size, deadline_us);
 #endif
 }
@@ -1042,21 +1159,37 @@ static bool is_valid_lang_tag(const char* lang, bool allow_auto) {
   if (len < 2 || len > 15) return false;
   for (size_t i = 0; i < len; i++) {
     char c = lang[i];
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) {
-      return false;
-    }
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) return false;
   }
   return true;
 }
 
-bool vw_translate_text(const char* text, const char* src_lang, const char* dst_lang, char* out_text, size_t out_size,
-                       uint8_t* out_tier, uint32_t* out_latency_us) {
-  if (!text || !out_text || out_size == 0) return false;
+static void vw_translate_set_failure(vw_translate_failure_t* failure, uint8_t cause, uint8_t tier, uint8_t mask,
+                                     uint16_t status) {
+  if (!failure) return;
+  failure->cause = cause;
+  failure->terminal_tier = tier;
+  failure->attempted_tiers = mask;
+  failure->provider_status = status;
+}
+
+bool vw_translate_text_detailed(const char* text, const char* src_lang, const char* dst_lang, char* out_text,
+                                size_t out_size, uint8_t* out_tier, uint32_t* out_latency_us,
+                                vw_translate_failure_t* out_failure) {
+  vw_translate_failure_t failure = {0};
+  if (out_failure) *out_failure = failure;
+  if (!text || !out_text || out_size == 0) {
+    vw_translate_set_failure(out_failure, VW_TRANSLATE_FAILURE_LOCAL, VW_TRANSLATE_TIER_NONE, 0, 0);
+    return false;
+  }
   out_text[0] = '\0';
   if (out_tier) *out_tier = VW_TRANSLATE_TIER_NONE;
   if (out_latency_us) *out_latency_us = 0;
   if (text[0] == '\0') return true;
-  if (strlen(text) > VW_TRANSLATE_MAX_TEXT_BYTES) return false;
+  if (strlen(text) > VW_TRANSLATE_MAX_TEXT_BYTES) {
+    vw_translate_set_failure(out_failure, VW_TRANSLATE_FAILURE_LOCAL, VW_TRANSLATE_TIER_NONE, 0, 0);
+    return false;
+  }
 
   const char* sl = (src_lang && is_valid_lang_tag(src_lang, true)) ? src_lang : "auto";
   const char* tl = (dst_lang && is_valid_lang_tag(dst_lang, false)) ? dst_lang : "en";
@@ -1066,62 +1199,110 @@ bool vw_translate_text(const char* text, const char* src_lang, const char* dst_l
   char* rpc_body = NULL;
   char* route_path = NULL;
   bool translated = false;
+  uint8_t attempted = 0;
 
   char enc_sl[32];
   char enc_tl[32];
   if (!vw_url_encode(sl, enc_sl, sizeof(enc_sl)) || !vw_url_encode(tl, enc_tl, sizeof(enc_tl))) {
+    failure.cause = VW_TRANSLATE_FAILURE_LOCAL;
     goto failed;
   }
   response = (char*)malloc(VW_TRANSLATE_MAX_RESPONSE_BYTES);
   rpc_body = (char*)malloc(VW_TRANSLATE_RPC_BODY_BYTES);
   route_path = (char*)malloc(VW_TRANSLATE_MAX_URL_BYTES);
-  if (!response || !rpc_body || !route_path) goto failed;
-  if (build_rpc_body(text, sl, tl, rpc_body, VW_TRANSLATE_RPC_BODY_BYTES)) {
+  if (!response || !rpc_body || !route_path) {
+    failure.cause = VW_TRANSLATE_FAILURE_LOCAL;
+    goto failed;
+  }
+
+  attempted |= 0x01U;
+  failure.terminal_tier = VW_TRANSLATE_TIER_WEB_RPC;
+  if (!build_rpc_body(text, sl, tl, rpc_body, VW_TRANSLATE_RPC_BODY_BYTES)) {
+    failure.cause = VW_TRANSLATE_FAILURE_LOCAL;
+  } else {
     const char* rpc_path =
         "/_/TranslateWebserverUi/data/batchexecute?rpcids=MkEWBc&bl=boq_translate-webserver_20221005.09_p0&soc-app=1&"
         "soc-platform=1&soc-device=1&rt=c";
-    if (http_request("translate.google.com", rpc_path, rpc_body, NULL,
-                     "application/x-www-form-urlencoded;charset=UTF-8", response, VW_TRANSLATE_MAX_RESPONSE_BYTES,
-                     deadline_us) &&
-        get_monotonic_us() <= deadline_us && vw_translate_parse_rpc_response(response, out_text, out_size) &&
-        get_monotonic_us() <= deadline_us) {
+    bool http_ok = http_request("translate.google.com", rpc_path, rpc_body, NULL,
+                                "application/x-www-form-urlencoded;charset=UTF-8", response,
+                                VW_TRANSLATE_MAX_RESPONSE_BYTES, deadline_us);
+    if (!http_ok) {
+      failure.cause = g_http_failure_cause;
+      failure.provider_status = g_http_provider_status;
+    } else if (get_monotonic_us() > deadline_us) {
+      failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else if (!vw_translate_parse_rpc_response(response, out_text, out_size)) {
+      failure.cause = VW_TRANSLATE_FAILURE_PARSE;
+    } else if (get_monotonic_us() > deadline_us) {
+      failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_WEB_RPC;
-      if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
       translated = true;
       goto done;
     }
   }
+  if (failure.cause == VW_TRANSLATE_FAILURE_DEADLINE || remaining_timeout_ms(deadline_us) == 0) {
+    failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    goto failed;
+  }
 
-  if (remaining_timeout_ms(deadline_us) > 0) {
-    int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t",
-                           enc_sl, enc_tl);
-    if (written >= 0 && (size_t)written < VW_TRANSLATE_MAX_URL_BYTES &&
-        http_request("translate.googleapis.com", route_path, NULL, text, NULL, response,
-                     VW_TRANSLATE_MAX_RESPONSE_BYTES, deadline_us) &&
-        get_monotonic_us() <= deadline_us && vw_translate_parse_gtx_response(response, out_text, out_size) &&
-        get_monotonic_us() <= deadline_us) {
+  attempted |= 0x02U;
+  failure.terminal_tier = VW_TRANSLATE_TIER_GTX;
+  failure.provider_status = 0;
+  int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t",
+                         enc_sl, enc_tl);
+  if (written < 0 || (size_t)written >= VW_TRANSLATE_MAX_URL_BYTES) {
+    failure.cause = VW_TRANSLATE_FAILURE_LOCAL;
+  } else {
+    bool http_ok = http_request("translate.googleapis.com", route_path, NULL, text, NULL, response,
+                                VW_TRANSLATE_MAX_RESPONSE_BYTES, deadline_us);
+    if (!http_ok) {
+      failure.cause = g_http_failure_cause;
+      failure.provider_status = g_http_provider_status;
+    } else if (get_monotonic_us() > deadline_us) {
+      failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else if (!vw_translate_parse_gtx_response(response, out_text, out_size)) {
+      failure.cause = VW_TRANSLATE_FAILURE_PARSE;
+    } else if (get_monotonic_us() > deadline_us) {
+      failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_GTX;
-      if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
       translated = true;
       goto done;
     }
   }
+  if (failure.cause == VW_TRANSLATE_FAILURE_DEADLINE || remaining_timeout_ms(deadline_us) == 0) {
+    failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    goto failed;
+  }
 
-  if (remaining_timeout_ms(deadline_us) > 0) {
-    int written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/m?sl=%s&tl=%s", enc_sl, enc_tl);
-    if (written >= 0 && (size_t)written < VW_TRANSLATE_MAX_URL_BYTES &&
-        http_request("translate.google.com", route_path, NULL, text, NULL, response, VW_TRANSLATE_MAX_RESPONSE_BYTES,
-                     deadline_us) &&
-        get_monotonic_us() <= deadline_us && vw_translate_parse_mobile_response(response, out_text, out_size) &&
-        get_monotonic_us() <= deadline_us) {
+  attempted |= 0x04U;
+  failure.terminal_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
+  failure.provider_status = 0;
+  written = snprintf(route_path, VW_TRANSLATE_MAX_URL_BYTES, "/m?sl=%s&tl=%s", enc_sl, enc_tl);
+  if (written < 0 || (size_t)written >= VW_TRANSLATE_MAX_URL_BYTES) {
+    failure.cause = VW_TRANSLATE_FAILURE_LOCAL;
+  } else {
+    bool http_ok = http_request("translate.google.com", route_path, NULL, text, NULL, response,
+                                VW_TRANSLATE_MAX_RESPONSE_BYTES, deadline_us);
+    if (!http_ok) {
+      failure.cause = g_http_failure_cause;
+      failure.provider_status = g_http_provider_status;
+    } else if (get_monotonic_us() > deadline_us) {
+      failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else if (!vw_translate_parse_mobile_response(response, out_text, out_size)) {
+      failure.cause = VW_TRANSLATE_FAILURE_PARSE;
+    } else if (get_monotonic_us() > deadline_us) {
+      failure.cause = VW_TRANSLATE_FAILURE_DEADLINE;
+    } else {
       if (out_tier) *out_tier = VW_TRANSLATE_TIER_MOBILE_SCRAPE;
-      if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
       translated = true;
       goto done;
     }
   }
 
 failed:
+  failure.attempted_tiers = attempted;
 done:
   free(route_path);
   free(rpc_body);
@@ -1129,7 +1310,15 @@ done:
   if (!translated) {
     out_text[0] = '\0';
     if (out_tier) *out_tier = VW_TRANSLATE_TIER_NONE;
-    if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
+  } else {
+    memset(&failure, 0, sizeof(failure));
   }
+  if (out_latency_us) *out_latency_us = elapsed_to_u32(started_us);
+  if (out_failure) *out_failure = failure;
   return translated;
+}
+
+bool vw_translate_text(const char* text, const char* src_lang, const char* dst_lang, char* out_text, size_t out_size,
+                       uint8_t* out_tier, uint32_t* out_latency_us) {
+  return vw_translate_text_detailed(text, src_lang, dst_lang, out_text, out_size, out_tier, out_latency_us, NULL);
 }

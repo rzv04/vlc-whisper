@@ -49,6 +49,9 @@ bool vw_caption_presenter_show_segment(vw_caption_presenter_t* presenter, const 
 // timestamps; live system-date cues render immediately.
 bool vw_caption_presenter_flush(vw_caption_presenter_t* presenter, int64_t input_time_us, bool media_timeline);
 
+// Replaces the caption channel with one cue that remains visible until explicitly replaced or blanked while paused.
+bool vw_caption_presenter_show_paused(vw_caption_presenter_t* presenter, const vw_caption_segment_t* segment);
+
 // Blanks currently displayed caption overlays by flushing both private SPU and OSD channels while preserving filter
 // context, guaranteeing clean subtitle erasure across seek jumps before upcoming segments arrive.
 void vw_caption_presenter_blank(vw_caption_presenter_t* presenter);

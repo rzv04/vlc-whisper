@@ -82,6 +82,8 @@ target_link_libraries(test_asr_engine_config_contract PRIVATE whisper)
 add_vw_test(test_worker_config_failure_paths unit/test_worker_config_failure_paths.c
             ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
 target_link_libraries(test_worker_config_failure_paths PRIVATE whisper)
+add_vw_test(test_protocol_edge_contracts unit/test_protocol_edge_contracts.c ${CMAKE_SOURCE_DIR}/worker/src/vw_worker_config.c)
+target_link_libraries(test_protocol_edge_contracts PRIVATE whisper)
 add_vw_test(test_audio_buffer unit/test_audio_buffer.c ${CMAKE_SOURCE_DIR}/worker/src/vw_audio_buffer.c)
 add_vw_test(test_vad unit/test_vad.c ${CMAKE_SOURCE_DIR}/worker/src/vw_vad.c)
 target_link_libraries(test_vad PRIVATE whisper)
@@ -117,6 +119,13 @@ add_vw_test(test_translate_async unit/test_translate_async.c ${CMAKE_SOURCE_DIR}
 target_compile_definitions(test_translate_async PRIVATE VW_TRANSLATE_TESTING=1)
 if(WIN32)
     target_link_libraries(test_translate_async PRIVATE winhttp)
+endif()
+
+add_vw_test(test_translation_blame unit/test_translation_blame.c ${CMAKE_SOURCE_DIR}/worker/src/vw_translate.c
+            ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
+target_compile_definitions(test_translation_blame PRIVATE VW_TRANSLATE_TESTING=1)
+if(WIN32)
+    target_link_libraries(test_translation_blame PRIVATE winhttp)
 endif()
 
 add_vw_test(test_queue_audio_timeline integration/test_queue_audio_timeline.c
@@ -188,11 +197,19 @@ add_vw_stub_worker_contract_test(test_live_media_end_flushes_tail
 target_link_options(test_live_media_end_flushes_tail PRIVATE -Wl,--wrap=vw_whisper_engine_transcribe_pcm)
 target_compile_definitions(test_live_media_end_flushes_tail PRIVATE VW_TRANSLATE_TESTING)
 target_sources(test_live_media_end_flushes_tail PRIVATE ${CMAKE_SOURCE_DIR}/plugin/src/vw_benchmark.c)
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY test_live_media_end_flushes_tail APPEND PROPERTY
+             COMPILE_OPTIONS "-include" "${CMAKE_SOURCE_DIR}/worker/include/vw_worker_translation_diag_override.h")
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/worker/src/vw_worker.c TARGET_DIRECTORY test_live_media_end_flushes_tail APPEND PROPERTY
+             COMPILE_DEFINITIONS VW_WORKER_TRANSLATION_DIAG_OVERRIDE=1)
 add_test(NAME vw_tail_translation_timeout COMMAND test_live_media_end_flushes_tail timeout)
 add_vw_stub_worker_contract_test(test_new_session_resets_all_session_state
                                  integration/test_new_session_resets_all_session_state.c)
 add_vw_stub_worker_contract_test(test_worker_p2_contracts
                                  integration/vw_test_worker_p2_contracts.c)
+add_vw_stub_worker_contract_test(test_paused_source_preview
+                                 integration/test_paused_source_preview.c)
+target_sources(test_paused_source_preview PRIVATE ${CMAKE_SOURCE_DIR}/plugin/src/vw_caption_presenter.c)
+target_compile_definitions(test_paused_source_preview PRIVATE __PLUGIN__ MODULE_STRING="vlc_whisper" _GNU_SOURCE)
 
 add_vw_test(test_oversized_uri_rejected_before_truncation unit/test_oversized_uri_rejected_before_truncation.c)
 target_compile_definitions(test_oversized_uri_rejected_before_truncation

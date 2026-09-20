@@ -1,3 +1,9 @@
+#include <math.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include "vw_protocol_codec.h"
 
 bool vw_protocol_validate_header(const vw_frame_header_t* header) {
@@ -5,14 +11,9 @@ bool vw_protocol_validate_header(const vw_frame_header_t* header) {
   if (header->magic != VW_PROTOCOL_MAGIC) return false;
   if (header->major != VW_PROTOCOL_VERSION_MAJOR) return false;
   if (header->payload_length > VW_MAX_PAYLOAD_BYTES) return false;
+  if (header->type < VW_MSG_HELLO || header->type > VW_MSG_TRANSLATE_CTRL) return false;
   return true;
 }
-
-#include <math.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <string.h>
 
 static bool is_valid_language_code(const char code[16], bool allow_auto) {
   size_t length = 0;
@@ -141,6 +142,7 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
     case VW_MSG_AUDIO_PCM: {
       const vw_msg_audio_t* p = (const vw_msg_audio_t*)payload;
       if (p->duration_us <= 0 || p->duration_us > 30000000) return false;
+      if (p->pcm_bytes % sizeof(int16_t) != 0) return false;
       // pcm_bytes = duration_us * 16000 / 1000000 * 2 = duration_us * 32 / 1000.
       // api-contracts allows "documented whole-sample rounding": producers may round duration up
       // or down by half a sample (0.5 sample = 1 byte at 16kHz S16LE), so accept ±1 byte. A
@@ -150,13 +152,26 @@ bool vw_protocol_validate_payload(vw_message_type_t type, const void* payload) {
       if (p->pcm_bytes > 0 && !p->pcm_data) return false;
       return true;
     }
-    case VW_MSG_PAUSE:
-    case VW_MSG_RESUME:
-    case VW_MSG_STOP_SESSION:
+    case VW_MSG_PAUSE: {
+      const vw_msg_pause_t* p = (const vw_msg_pause_t*)payload;
+      return p->reason == VW_CTRL_REASON_USER_PAUSE;
+    }
+    case VW_MSG_RESUME: {
+      const vw_msg_resume_t* p = (const vw_msg_resume_t*)payload;
+      return p->reason == VW_CTRL_REASON_USER_RESUME;
+    }
+    case VW_MSG_STOP_SESSION: {
+      const vw_msg_stop_t* p = (const vw_msg_stop_t*)payload;
+      return p->reason == VW_CTRL_REASON_USER_STOP || p->reason == VW_CTRL_REASON_SEEK_DISCONTINUITY ||
+             p->reason == VW_CTRL_REASON_MEDIA_END;
+    }
     case VW_MSG_STATUS:
-    case VW_MSG_ERROR:
     case VW_MSG_SHUTDOWN:
       return true;
+    case VW_MSG_ERROR: {
+      const vw_msg_error_t* p = (const vw_msg_error_t*)payload;
+      return p->error_code >= E_PROTOCOL_VERSION && p->error_code <= VW_ERROR_MAX;
+    }
     case VW_MSG_STARTED: {
       const vw_msg_started_t* p = (const vw_msg_started_t*)payload;
       if (p->source_active != VW_SOURCE_ACTIVE_INACTIVE && p->source_active != VW_SOURCE_ACTIVE_ACTIVE) return false;

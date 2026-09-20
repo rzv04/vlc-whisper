@@ -156,6 +156,10 @@ int main(int argc, char** argv) {
     vw_test_check_true("close translation included in benchmark", vw_slow_translation
                                                                       ? benchmark.translation_requests_sent > 0
                                                                       : benchmark.translation_success_count > 0);
+    if (vw_slow_translation) {
+      vw_test_check_true("deadline diagnostic crosses production worker IPC seam",
+                         benchmark.translation_timeout_count > 0);
+    }
     vw_test_check_true("tail caption is flushed for presentation before disconnect", g_presenter_flush_calls > 0);
     vw_test_check_true("presenter context is released after final tail delivery", presenter.p_filter_ctx == NULL);
 
