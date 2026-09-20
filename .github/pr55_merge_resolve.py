@@ -68,7 +68,7 @@ replacements = [
     ('dlg:add_label("Model availability: checking...", 1, 15, 4, 1)', 'dlg:add_label("Model availability: checking...", 1, 16, 4, 1)'),
     ('dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 16, 4, 1)', 'dlg:add_label(".en models force English; enabling translation sends finalized subtitle text to Google.", 1, 17, 4, 1)'),
 ]
-for old, new in replacements:
+for old, new in reversed(replacements):
     count = text.count(old)
     if count != 1:
         raise RuntimeError(f"lua row replacement expected once, found {count}: {old}")
