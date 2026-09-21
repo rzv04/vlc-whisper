@@ -113,7 +113,7 @@ int main(void) {
   got = 0;
   while (got < (int32_t)sizeof(rbuf)) {
     int32_t r = vw_ipc_receive((vw_ipc_handle_t*)client->pipe_handle, rbuf + got, sizeof(rbuf) - got);
-    if (r == VW_IPC_RECV_FATAL) break;
+    if (r == VW_IPC_RECV_FATAL || r == VW_IPC_RECV_TIMEOUT) break;
     if (r > 0) got += r;
   }
   EXPECT(got == (int32_t)sizeof(rbuf));
@@ -122,7 +122,7 @@ int main(void) {
   got = 0;
   while (got < (int32_t)reply_hdr.payload_length) {
     int32_t r = vw_ipc_receive((vw_ipc_handle_t*)client->pipe_handle, rpayload + got, reply_hdr.payload_length - got);
-    if (r == VW_IPC_RECV_FATAL) break;
+    if (r == VW_IPC_RECV_FATAL || r == VW_IPC_RECV_TIMEOUT) break;
     if (r > 0) got += r;
   }
   EXPECT(got == (int32_t)reply_hdr.payload_length);
