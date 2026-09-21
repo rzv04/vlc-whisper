@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, "gemini/*"]
   pull_request:
-    branches: [main, "gemini/*"]
+    branches: [main, "gemini/*", "feat/standalone-qt-settings"]
   workflow_dispatch:
 
 permissions:

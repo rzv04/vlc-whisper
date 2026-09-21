@@ -97,7 +97,8 @@ Open `View > VLC-Whisper Settings`. The Lua extension immediately launches the s
 - **CPU threads:** `4` is a reasonable default for many systems.
 - **Paused subtitles:** enabled by default for local files; holds the visible cue and previews the first cue after seeking while paused.
 - **Translation:** disabled by default; choose translation-only or dual-line display when enabled.
-- **Model download:** choose a model and press **Download Selected Model**. The button becomes **Abort Model Download** while that request is pending.
+- **Model download:** choose a model and press **Download Selected Model**, even with no media playing. The button becomes **Abort Model Download** until the settings-owned worker finishes cleanup. Downloads retain catalog/SHA-256 verification and atomic installation. Closing settings cancels an active download.
+- **Translation test:** enter source text, choose **Source (from)** and **Translation (to)**, then click **Test translation**. A secondary dialog shows the result or error. This explicit action sends only the typed text to Google, needs no playback or Apply, and does not enable subtitle translation. Test text/results are not saved.
 
 Settings are written atomically without elevation to `%LOCALAPPDATA%\vlc-whisper\settings.json` on Windows or `$XDG_CONFIG_HOME/vlc-whisper/settings.json` (default `~/.config/vlc-whisper/settings.json`) on Linux. Installing the project again intentionally resets that JSON to the current defaults; downloaded models remain separate user data.
 
@@ -111,7 +112,7 @@ If the launcher cannot resolve or start the settings executable immediately, VLC
 - **Transcription/audio:** local only.
 - **Settings UI:** local filesystem and local single-instance signalling only; it performs no HTTP requests.
 - **Model downloads:** explicit user action; the worker downloads and integrity-checks model bytes before activation.
-- **Translation:** opt-in; finalized subtitle text is sent over HTTPS. Audio is never sent for translation.
+- **Translation:** opt-in; finalized subtitle text or explicitly submitted settings test text is sent over HTTPS. Audio is never sent for translation.
 - **Logs:** diagnostics are opt-in and must not contain PCM, subtitle bodies, tokens, or credentials.
 
 ## Troubleshooting
@@ -177,8 +178,9 @@ flowchart TB
         QT["Standalone Qt settings process"]
     end
 
+    QT -->|"private child pipes; download or typed-text test"| UTILITY["Worker utility mode (no ASR startup)"]
     LUA -->|"detached launch"| QT
-    QT -->|"atomic per-user settings.json / one-shot model command"| SENDER
+    QT -->|"atomic per-user settings.json"| SENDER
 
     subgraph IPC["Authenticated local IPC"]
         SENDER -->|"audio + control"| WORKER_IN

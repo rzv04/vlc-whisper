@@ -42,7 +42,8 @@ def main() -> None:
     assert "LOCALAPPDATA" in settings_cpp
     assert "XDG_CONFIG_HOME" in settings_cpp
     assert ".config/vlc-whisper" in settings_cpp
-    assert "model-command" in settings_cpp and "model-command" in settings_bridge
+    assert "model-command" in settings_bridge  # Legacy playback command consumer remains supported.
+    assert "--settings-download" in settings_cpp  # Qt now owns an independent worker child.
     assert "model-path-download-base" in settings_cpp and "model-path-download-base" in settings_bridge
     assert "QNetwork" not in settings_cpp
     assert "WinHttp" not in settings_cpp and "winhttp" not in settings_cpp.lower()

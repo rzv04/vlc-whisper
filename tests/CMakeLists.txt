@@ -211,6 +211,13 @@ target_compile_definitions(test_oversized_uri_rejected_before_truncation
 # they return 77 while the feature is absent and automatically become active when the tool lands on this branch.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME test_settings_independent_contract
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/unit/test_settings_independent_contract.py)
+    if(NOT WIN32)
+        add_test(NAME test_settings_service
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/unit/test_settings_service.py)
+        set_tests_properties(test_settings_service PROPERTIES ENVIRONMENT "CC=${CMAKE_C_COMPILER}")
+    endif()
     add_test(NAME test_benchmark_rejects_empty_reference
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/quality/test_quality_benchmark_failure_paths.py
                      empty-reference)

@@ -50,3 +50,18 @@ if(WIN32)
         message(STATUS "windeployqt not found: build the app normally, then provide VW_SETTINGS_DEPLOY_DIR to packaging")
     endif()
 endif()
+
+# Real UI -> private child pipes -> production C service adapter; no playback, model or network required.
+if(BUILD_TESTING AND NOT WIN32)
+    enable_language(C)
+    add_executable(vw_settings_service_fake
+        ../tests/support/vw_settings_service_fake.c ../worker/src/vw_settings_service.c)
+    target_include_directories(vw_settings_service_fake PRIVATE ../worker/include ../protocol/include)
+    target_compile_features(vw_settings_service_fake PRIVATE c_std_17)
+    add_executable(test_settings_qt_services ../tests/unit/test_settings_qt_services.cpp)
+    target_link_libraries(test_settings_qt_services PRIVATE Qt6::Widgets Qt6::Network)
+    target_compile_features(test_settings_qt_services PRIVATE cxx_std_17)
+    add_test(NAME test_settings_qt_services
+             COMMAND test_settings_qt_services $<TARGET_FILE:vw_settings_service_fake>)
+    set_tests_properties(test_settings_qt_services PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
