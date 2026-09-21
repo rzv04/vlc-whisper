@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, "gemini/*"]
   pull_request:
-    branches: [main, "gemini/*"]
+    branches: [main, "gemini/*", "feat/standalone-qt-settings"]
   workflow_dispatch:
 
 permissions:
@@ -42,7 +42,13 @@ jobs:
         run: ctest --preset linux-x64-coverage --output-on-failure
 
       - name: Valgrind memcheck (STRICT)
-        run: ctest --test-dir build/linux-x64-coverage -T memcheck --output-on-failure
+        run: |
+          if ! ctest --test-dir build/linux-x64-coverage -T memcheck --output-on-failure; then
+            # CTest summarizes defects but omits Valgrind stacks from --output-on-failure.
+            grep -l 'ERROR SUMMARY: [1-9]' build/linux-x64-coverage/Testing/Temporary/MemoryChecker.*.log |
+              xargs -r cat
+            exit 1
+          fi
 
       - name: Check code formatting (STRICT)
         run: |

@@ -113,3 +113,14 @@ The required contract is reject-on-overflow for every identity argument. Identit
 ## Logging/privacy
 
 Diagnostics are disabled by default. Enabled logs may contain bounded operational paths/IDs/counters but never authentication tokens, credentials, PCM, source subtitle bodies, or translated subtitle bodies.
+
+## Settings worker utility contract
+
+The installed worker supports two explicit utility modes before normal configuration/ASR initialization. No playback, caption session, model load, or public IPC listener is needed. Qt owns/reaps each child through private inherited standard pipes; the worker remains the network owner.
+
+| Request | Input | Output / completion |
+| --- | --- | --- |
+| `--settings-download <catalog-id>` | Keep stdin open while interested; any byte or EOF requests abort. No arbitrary URL/path accepted. | Changed snapshots as ASCII `stage pct\n`, using existing `VW_MODEL_STAGE_*` values and integer percent. Initial IDLE is not completion. Success requires DONE **and** normal exit 0 after joining cleanup. |
+| `--settings-translate <from> <to>` | 1–1023 UTF-8 bytes via stdin followed by EOF, collected within five seconds. NUL/overflow and unsupported language IDs are rejected. | Plain UTF-8 translation on stdout, no envelope. Nonempty output plus normal exit 0 means success. Text is absent from argv, settings files and logs. |
+
+Exit statuses: 0 completed, 2 invalid request/input, 3 download cancelled, 4 operation/transport failure. Abrupt/crashed children are failures, never completion. Input EOF and input error remain distinct for translation. Qt bounds download output framing and translation result storage, renders provider text as plain text, and permits only one child of each kind. Download EOF/abort joins its owner before releasing the destination lock; broken output pipes also clean up. Translation uses the unchanged provider fallback order and shared 800 ms network budget. An explicit Test click authorizes only that typed-text request, independent of the saved subtitle-translation toggle.

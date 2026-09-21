@@ -1,8 +1,11 @@
 #include <QApplication>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -14,6 +17,8 @@
 #include <QLineEdit>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
@@ -25,6 +30,10 @@
 #include <QWidget>
 #include <algorithm>
 #include <array>
+#include <memory>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -126,7 +135,9 @@ QString vw_data_dir() {
 QString vw_read_small_file(const QString& path) {
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
-  return QString::fromUtf8(file.read(256)).trimmed();
+  const QByteArray bytes = file.read(4096);
+  if (bytes.size() >= 4096) return {};  // Identity-bearing paths/markers must never be truncated.
+  return QString::fromUtf8(bytes).trimmed();
 }
 
 bool vw_write_small_file(const QString& path, const QByteArray& value) {
@@ -144,12 +155,41 @@ bool vw_write_small_file(const QString& path, const QByteArray& value) {
   return true;
 }
 
+// Fixed installation/build-relative paths only; never resolve a worker through PATH or a shell.
+QString vw_service_worker_path() {
+  const QDir app(QCoreApplication::applicationDirPath());
+#ifdef Q_OS_WIN
+  const QStringList dirs{QStringLiteral(".."), QStringLiteral("../worker")};
+  const QStringList names{QStringLiteral("vlc-whisper-worker-cpu.exe"), QStringLiteral("vlc-whisper-worker.exe")};
+#else
+  const QStringList dirs{QStringLiteral("../lib/x86_64-linux-gnu/vlc"), QStringLiteral("../lib/vlc"),
+                         QStringLiteral("../worker")};
+  const QStringList names{QStringLiteral("vlc-whisper-worker-cpu"), QStringLiteral("vlc-whisper-worker")};
+#endif
+  for (const auto& name : names)
+    for (const auto& dir : dirs) {
+      const QFileInfo file(QDir(app.filePath(dir)).filePath(name));
+      if (file.isFile() && file.isExecutable()) return file.absoluteFilePath();
+    }
+  return {};
+}
+
+// Keep utility workers invisible on Windows while retaining QProcess-owned private standard pipes.
+void vw_configure_service_process(QProcess* process) {
+#ifdef Q_OS_WIN
+  process->setCreateProcessArgumentsModifier(
+      [](QProcess::CreateProcessArguments* args) { args->flags |= CREATE_NO_WINDOW; });
+#else
+  Q_UNUSED(process);
+#endif
+}
+
 class vw_settings_window_t final : public QWidget {
  public:
-  vw_settings_window_t()
-      : vw_settings_dir_(vw_config_dir()),
+  explicit vw_settings_window_t(const QString& worker = vw_service_worker_path())
+      : vw_worker_path_(worker),
+        vw_settings_dir_(vw_config_dir()),
         vw_settings_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("settings.json"))),
-        vw_command_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("model-command"))),
         vw_model_download_base_path_(QDir(vw_settings_dir_).filePath(QStringLiteral("model-path-download-base"))) {
     setWindowTitle(QStringLiteral("VLC-Whisper Settings"));
 
@@ -184,11 +224,13 @@ class vw_settings_window_t final : public QWidget {
     layout->addWidget(vw_translation_enabled_, 6, 0, 1, 2);
 
     vw_translation_from_ = new QComboBox(this);
+    vw_translation_from_->setObjectName(QStringLiteral("translationFrom"));
     for (const auto& item : vw_translation_sources)
       vw_translation_from_->addItem(QString::fromUtf8(item.label), QString::fromUtf8(item.value));
     vw_add_row(layout, 7, QStringLiteral("Source (from):"), vw_translation_from_);
 
     vw_translation_to_ = new QComboBox(this);
+    vw_translation_to_->setObjectName(QStringLiteral("translationTo"));
     for (const auto& item : vw_translation_targets)
       vw_translation_to_->addItem(QString::fromUtf8(item.label), QString::fromUtf8(item.value));
     vw_add_row(layout, 8, QStringLiteral("Translation (to):"), vw_translation_to_);
@@ -198,23 +240,27 @@ class vw_settings_window_t final : public QWidget {
     vw_translation_mode_->addItem(QStringLiteral("Show translation only"), 0);
     vw_add_row(layout, 9, QStringLiteral("Screen placement:"), vw_translation_mode_);
 
-    auto* how_to_test = new QPushButton(QStringLiteral("How to test"), this);
-    layout->addWidget(new QLabel(QStringLiteral("Translation test:"), this), 10, 0);
-    layout->addWidget(how_to_test, 10, 1);
-
-    vw_translation_test_result_ =
-        new QLabel(QStringLiteral("Worker runtime performs translation; this dialog never makes HTTP requests."), this);
-    vw_translation_test_result_->setWordWrap(true);
-    layout->addWidget(vw_translation_test_result_, 11, 0, 1, 2);
+    vw_translation_text_ = new QLineEdit(this);
+    vw_translation_text_->setObjectName(QStringLiteral("translationText"));
+    vw_translation_text_->setPlaceholderText(QStringLiteral("Enter text in the source language"));
+    vw_add_row(layout, 10, QStringLiteral("Test text:"), vw_translation_text_);
+    vw_translation_test_ = new QPushButton(QStringLiteral("Test translation"), this);
+    vw_translation_test_->setObjectName(QStringLiteral("translationTest"));
+    layout->addWidget(vw_translation_test_, 11, 0);
+    auto* test_privacy = new QLabel(QStringLiteral("Test sends only this text to Google."), this);
+    test_privacy->setWordWrap(true);
+    layout->addWidget(test_privacy, 11, 1);
 
     auto* apply = new QPushButton(QStringLiteral("Apply"), this);
     vw_download_ = new QPushButton(QStringLiteral("Download Selected Model"), this);
+    vw_download_->setObjectName(QStringLiteral("modelDownload"));
     layout->addWidget(apply, 12, 0);
     layout->addWidget(vw_download_, 12, 1);
 
     vw_backend_status_ = new QLabel(this);
     layout->addWidget(vw_backend_status_, 13, 0, 1, 2);
     vw_model_status_ = new QLabel(this);
+    vw_model_status_->setObjectName(QStringLiteral("modelStatus"));
     layout->addWidget(vw_model_status_, 14, 0, 1, 2);
 
     auto* privacy = new QLabel(
@@ -223,12 +269,13 @@ class vw_settings_window_t final : public QWidget {
     privacy->setWordWrap(true);
     layout->addWidget(privacy, 15, 0, 1, 2);
 
-    connect(how_to_test, &QPushButton::clicked, this, [this]() { vw_show_translation_test_guidance(); });
+    connect(vw_translation_test_, &QPushButton::clicked, this, [this]() { vw_test_translation(); });
     connect(apply, &QPushButton::clicked, this, [this]() { vw_save_settings(); });
     connect(vw_download_, &QPushButton::clicked, this,
             [this]() { vw_download_pending_ ? vw_request_abort() : vw_request_download(); });
     connect(vw_model_, &QComboBox::currentIndexChanged, this, [this]() {
       vw_force_english_for_english_only_model();
+      if (!vw_download_process_) vw_local_download_status_.clear();
       vw_refresh_model_status();
     });
 
@@ -343,24 +390,18 @@ class vw_settings_window_t final : public QWidget {
     return vw_persisted_.value(QStringLiteral("model-path")).toString(QStringLiteral("models/ggml-tiny.bin"));
   }
   void vw_refresh_model_status() {
+    if (vw_download_process_) {
+      vw_download_pending_ = true;
+      vw_model_status_->setText(vw_local_download_status_);
+      vw_download_->setText(QStringLiteral("Abort Model Download"));
+      return;
+    }
     const auto& model = vw_selected_model();
     const bool bundled = vw_bundled_model_exists(model);
     const bool user = QFileInfo::exists(vw_user_model_path(model));
-    const QString command = vw_read_small_file(vw_command_path_);
-    const QString status = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-status")));
-    const QString stage = status.section(QLatin1Char(':'), 0, 0);
-    const QString progress = vw_read_small_file(QDir(vw_settings_dir_).filePath(QStringLiteral("model-progress")));
-
-    vw_download_pending_ = !command.isEmpty() || stage == QStringLiteral("downloading") ||
-                           stage == QStringLiteral("verifying") || stage == QStringLiteral("aborting");
-
-    if (stage == QStringLiteral("downloading") || stage == QStringLiteral("verifying") ||
-        stage == QStringLiteral("aborting")) {
-      vw_model_status_->setText(
-          QStringLiteral("Model: %1%2")
-              .arg(stage, progress.isEmpty() ? QString() : QStringLiteral(" (%1%)").arg(progress)));
-    } else if (stage == QStringLiteral("failed")) {
-      vw_model_status_->setText(QStringLiteral("Model: download failed"));
+    vw_download_pending_ = false;
+    if (!vw_local_download_status_.isEmpty()) {
+      vw_model_status_->setText(vw_local_download_status_);
     } else if (bundled && user) {
       vw_model_status_->setText(QStringLiteral("Model: available (bundled + downloaded)"));
     } else if (bundled) {
@@ -493,44 +534,200 @@ class vw_settings_window_t final : public QWidget {
     return true;
   }
 
-  void vw_show_translation_test_guidance() {
-    vw_translation_test_result_->setText(
-        QStringLiteral("Worker-only test: enable Auto translation, Apply, then play media (%1 -> %2).")
+  void vw_maybe_close() {
+    if (vw_closing_ && !vw_download_process_ && !vw_translation_process_) close();
+  }
+
+  void closeEvent(QCloseEvent* event) override {
+    if (!vw_download_process_ && !vw_translation_process_) {
+      event->accept();
+      return;
+    }
+    event->ignore();
+    vw_closing_ = true;
+    setEnabled(false);
+    if (vw_download_process_) vw_download_process_->closeWriteChannel();
+    // Translation already has a bounded input/network deadline; let it reap its own transport.
+  }
+
+  void vw_test_translation() {
+    if (vw_translation_process_) return;
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(
+        QStringLiteral("Translation test (%1 → %2)")
             .arg(vw_translation_from_->currentData().toString(), vw_translation_to_->currentData().toString()));
+    auto* layout = new QVBoxLayout(dialog);
+    auto* status = new QLabel(QStringLiteral("Translating…"), dialog);
+    status->setTextFormat(Qt::PlainText);
+    status->setWordWrap(true);
+    layout->addWidget(status);
+    auto* result = new QPlainTextEdit(dialog);
+    result->setObjectName(QStringLiteral("translationResult"));
+    result->setReadOnly(true);
+    layout->addWidget(result);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+    layout->addWidget(buttons);
+    dialog->resize(460, 240);
+    dialog->show();
+
+    const QByteArray text = vw_translation_text_->text().toUtf8();
+    if (text.isEmpty() || text.size() >= 1024 || text.contains('\0')) {
+      status->setText(QStringLiteral("Enter between 1 and 1023 UTF-8 bytes of text."));
+      return;
+    }
+    if (vw_worker_path_.isEmpty()) {
+      status->setText(QStringLiteral("Worker not found. Please reinstall VLC-Whisper."));
+      return;
+    }
+    auto* process = new QProcess(this);
+    vw_configure_service_process(process);
+    vw_translation_process_ = process;
+    vw_translation_test_->setEnabled(false);
+    const QPointer<QLabel> safe_status(status);
+    const QPointer<QPlainTextEdit> safe_result(result);
+    auto output = std::make_shared<QByteArray>();
+    auto overflow = std::make_shared<bool>(false);
+    connect(process, &QProcess::readyReadStandardOutput, this, [process, output, overflow]() {
+      const QByteArray chunk = process->readAllStandardOutput();
+      if (output->size() + chunk.size() > 65536) *overflow = true;
+      if (!*overflow) output->append(chunk);
+    });
+    connect(process, &QProcess::readyReadStandardError, this, [process]() { process->readAllStandardError(); });
+    const auto finish = [this, process, safe_status, safe_result, output, overflow](bool success) {
+      if (vw_translation_process_ != process) return;
+      const QByteArray tail = process->readAllStandardOutput();
+      if (output->size() + tail.size() > 65536) *overflow = true;
+      if (!*overflow) output->append(tail);
+      const bool ok = success && !*overflow && !output->isEmpty();
+      if (safe_status)
+        safe_status->setText(ok ? QStringLiteral("Translation:")
+                                : QStringLiteral("Translation failed. Check your connection and retry."));
+      if (ok && safe_result) safe_result->setPlainText(QString::fromUtf8(*output));
+      vw_translation_process_ = nullptr;
+      vw_translation_test_->setEnabled(true);
+      process->deleteLater();
+      vw_maybe_close();
+    };
+    connect(process, &QProcess::errorOccurred, this, [finish, safe_status](QProcess::ProcessError error) {
+      if (error == QProcess::FailedToStart) {
+        finish(false);
+        if (safe_status) safe_status->setText(QStringLiteral("Could not start worker. Please reinstall VLC-Whisper."));
+      }
+    });
+    connect(process, &QProcess::finished, this,
+            [finish](int code, QProcess::ExitStatus status) { finish(status == QProcess::NormalExit && code == 0); });
+    connect(process, &QProcess::started, this, [process, text]() {
+      process->write(text);
+      process->closeWriteChannel();
+    });
+    process->start(vw_worker_path_,
+                   {QStringLiteral("--settings-translate"), vw_translation_from_->currentData().toString(),
+                    vw_translation_to_->currentData().toString()});
   }
 
   void vw_request_download() {
+    if (vw_worker_path_.isEmpty()) {
+      vw_local_download_status_ = QStringLiteral("Worker not found. Please reinstall VLC-Whisper.");
+      vw_refresh_model_status();
+      return;
+    }
     const auto& model = vw_selected_model();
     const QString effective = vw_active_model_path_for_download();
+    if (effective.contains(QLatin1Char('\n')) || effective.contains(QLatin1Char('\r'))) return;
     const QByteArray marker = QByteArray(model.filename) + '\n' + effective.toUtf8() + '\n';
+    if (marker.size() >= 4096) {
+      vw_backend_status_->setText(QStringLiteral("Model rollback path is too long"));
+      return;
+    }
     if (!vw_write_small_file(vw_model_download_base_path_, marker)) {
       vw_backend_status_->setText(QStringLiteral("Model request could not preserve the active model"));
       return;
     }
     if (!vw_save_settings(true)) return;
-    if (!vw_write_small_file(vw_command_path_, QByteArray(model.id) + '\n')) {
-      vw_backend_status_->setText(QStringLiteral("Model request could not be queued"));
-      return;
-    }
+    auto* process = new QProcess(this);
+    vw_configure_service_process(process);
+    vw_download_process_ = process;
     vw_download_pending_ = true;
-    vw_download_->setText(QStringLiteral("Abort Model Download"));
-    vw_backend_status_->setText(
-        QStringLiteral("Model %1: queued (play media to start worker)").arg(QString::fromUtf8(model.id)));
+    vw_local_download_status_ = QStringLiteral("Model: starting download…");
+    vw_refresh_model_status();
+    auto buffer = std::make_shared<QByteArray>();
+    auto verified = std::make_shared<bool>(false);
+    auto invalid = std::make_shared<bool>(false);
+    const auto read_progress = [this, process, buffer, verified, invalid]() {
+      buffer->append(process->readAllStandardOutput());
+      if (buffer->size() > 4096) {
+        *invalid = true;
+        buffer->clear();
+        process->closeWriteChannel();
+        return;
+      }
+      while (buffer->contains('\n')) {
+        const int end = buffer->indexOf('\n');
+        const QList<QByteArray> fields = buffer->left(end).trimmed().split(' ');
+        buffer->remove(0, end + 1);
+        bool stage_ok = false, pct_ok = false;
+        const int stage = fields.size() == 2 ? fields[0].toInt(&stage_ok) : -1;
+        const int pct = fields.size() == 2 ? fields[1].toInt(&pct_ok) : -1;
+        if (!stage_ok || !pct_ok || stage < 0 || stage > 5 || pct < 0 || pct > 100) {
+          *invalid = true;
+          process->closeWriteChannel();
+          continue;
+        }
+        *verified = stage == 3;
+        const QStringList stages{QStringLiteral("starting"), QStringLiteral("downloading"), QStringLiteral("verifying"),
+                                 QStringLiteral("verified"), QStringLiteral("failed"),      QStringLiteral("aborting")};
+        vw_local_download_status_ = QStringLiteral("Model: %1 (%2%)").arg(stages[stage]).arg(pct);
+        vw_refresh_model_status();
+      }
+    };
+    connect(process, &QProcess::readyReadStandardOutput, this, read_progress);
+    connect(process, &QProcess::readyReadStandardError, this, [process]() { process->readAllStandardError(); });
+    const auto finish = [this, process, marker, read_progress, verified, invalid, buffer](int code) {
+      if (vw_download_process_ != process) return;
+      read_progress();
+      if (code == 0 && *verified && !*invalid && buffer->isEmpty()) {
+        // Only release the rollback marker that belongs to this operation, after the worker verified publication.
+        if (vw_read_small_file(vw_model_download_base_path_) == QString::fromUtf8(marker).trimmed())
+          QFile::remove(vw_model_download_base_path_);
+        vw_local_download_status_ = QStringLiteral("Model: download verified and installed");
+      } else {
+        vw_local_download_status_ =
+            code == 3
+                ? QStringLiteral("Model: download cancelled")
+                : QStringLiteral("Model: download failed (worker unavailable, busy, or network/verification error)");
+      }
+      vw_download_process_ = nullptr;
+      vw_download_pending_ = false;
+      process->deleteLater();
+      vw_refresh_model_status();
+      vw_maybe_close();
+    };
+    connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) {
+      if (error == QProcess::FailedToStart) finish(4);
+    });
+    connect(process, &QProcess::finished, this,
+            [finish](int code, QProcess::ExitStatus status) { finish(status == QProcess::NormalExit ? code : 4); });
+    process->start(vw_worker_path_, {QStringLiteral("--settings-download"), QString::fromUtf8(model.id)});
   }
 
   void vw_request_abort() {
-    if (!vw_write_small_file(vw_command_path_, QByteArrayLiteral("abort\n"))) {
-      vw_backend_status_->setText(QStringLiteral("Model abort could not be queued"));
+    if (vw_download_process_) {
+      vw_download_process_->closeWriteChannel();
+      vw_local_download_status_ = QStringLiteral("Model: aborting…");
+      vw_refresh_model_status();
       return;
     }
-    vw_download_pending_ = true;
-    vw_refresh_model_status();
-    vw_backend_status_->setText(QStringLiteral("Model download: abort requested"));
   }
 
+  const QString vw_worker_path_;
+  QProcess* vw_download_process_ = nullptr;
+  QProcess* vw_translation_process_ = nullptr;
+  QString vw_local_download_status_;
+  bool vw_closing_ = false;
   const QString vw_settings_dir_;
   const QString vw_settings_path_;
-  const QString vw_command_path_;
   const QString vw_model_download_base_path_;
   QJsonObject vw_persisted_;
   bool vw_download_pending_ = false;
@@ -545,7 +742,8 @@ class vw_settings_window_t final : public QWidget {
   QComboBox* vw_translation_from_ = nullptr;
   QComboBox* vw_translation_to_ = nullptr;
   QComboBox* vw_translation_mode_ = nullptr;
-  QLabel* vw_translation_test_result_ = nullptr;
+  QLineEdit* vw_translation_text_ = nullptr;
+  QPushButton* vw_translation_test_ = nullptr;
   QPushButton* vw_download_ = nullptr;
   QLabel* vw_backend_status_ = nullptr;
   QLabel* vw_model_status_ = nullptr;

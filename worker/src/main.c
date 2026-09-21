@@ -23,6 +23,7 @@
 
 #include "vw_log.h"
 #include "vw_process_policy.h"
+#include "vw_settings_service.h"
 #include "vw_worker.h"
 #include "vw_worker_config.h"
 #include "vw_worker_log_policy.h"
@@ -81,6 +82,14 @@ int main(int argc, char** argv) {
   argc = utf8_argc;
   argv = utf8_argv;
 #endif
+  if (argc > 1 && (strcmp(argv[1], "--settings-download") == 0 || strcmp(argv[1], "--settings-translate") == 0)) {
+    vw_log_set_enabled(false);
+    int service_rc = vw_settings_service_run(argc, argv);
+#ifdef _WIN32
+    vw_worker_free_utf8_arguments(argc, argv);
+#endif
+    return service_rc;
+  }
   vw_worker_config_t config;
   vw_worker_config_init_defaults(&config);  // zeros auth_token, sets model/language/rate
 

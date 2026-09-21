@@ -96,10 +96,16 @@ Authenticated IPC is local only: Windows named pipe / Linux Unix-domain socket. 
 Network use is worker-confined:
 
 - model download: explicit user action, catalog URL, SHA-256 verification, temp file + atomic publish;
-- translation: explicit opt-in, finalized text only, bounded async queue/deadline.
+- translation: explicit opt-in, finalized captions through the bounded async queue, or explicitly submitted settings test text through a utility worker; existing provider tiers/deadline are shared.
 
 No cloud transcription, telemetry, PCM egress, or implicit runtime transcript persistence. Explicit user-initiated subtitle exports and local git-ignored developer benchmark text artifacts are permitted; captured runtime PCM is not persisted.
 
 ## Dependency discipline
 
 VLC and `whisper.cpp` are pinned dependencies. Dependency-sensitive claims must be verified against the exact pin, not remembered/current upstream behavior. Exhaustive vendor API copies are intentionally not maintained in project docs; see `vlc-api-essentials.md` and `whisper-api.md` for the project-specific subset.
+
+## Playback-independent settings operations
+
+The Qt dialog owns one download child and one translation-test child of the existing worker executable. Utility dispatch precedes normal playback configuration and never initializes Whisper or playback IPC. The fixed installed CPU worker is preferred; no shell or PATH search is used. Private inherited pipes bind each request to its launching process without a public listener. See [the utility contract](api-contracts.md#settings-worker-utility-contract).
+
+Qt keeps HTTP outside the UI process. Model installation retains the existing destination lock, retries, SHA-256 check, partial-file cleanup and atomic publication. New Qt downloads do not queue `model-command` for the playback worker or consume playback-written progress. A rollback marker preserves the active model until verified success; failure/cancellation leaves it intact. The legacy playback command consumer remains available. Closing settings closes the child control pipe and defers window shutdown until cleanup completes, without a UI-thread wait. Playback lifecycle events do not own these children.
