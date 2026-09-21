@@ -51,3 +51,21 @@
    fun:__llvm*
    obj:*/libLLVM*
 }
+
+# Qt 6.4.2's forkfd capability probe deliberately invokes
+# sys_waitid(P_PIDFD, INT_MAX, NULL, WEXITED|WNOHANG, NULL) and checks for EBADF.
+# No result buffer is accessed for the invalid fd. Valgrind 3.22 flags the NULL
+# infop before the kernel returns. Verified against Qt tag v6.4.2, commit
+# e3e40c44d3f998a433a6a1080297c5f28e9a768f, forkfd_linux.c:100-128:
+# https://github.com/qt/qtbase/blob/v6.4.2/src/3rdparty/forkfd/forkfd_linux.c
+# Scope: this exact syscall parameter, two Qt 6.4.2 frames, and our test's first
+# QProcess startup. No project memory errors, leaks or other Qt versions are suppressed.
+{
+   vw_qt_642_forkfd_pidfd_probe
+   Memcheck:Param
+   waitid(infop)
+   fun:syscall
+   obj:*/libQt6Core.so.6.4.2
+   obj:*/libQt6Core.so.6.4.2
+   fun:*vw_settings_window_t*vw_test_translation*
+}
