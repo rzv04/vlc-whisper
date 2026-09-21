@@ -46,7 +46,7 @@ Most session messages carry `session_id[16]`; `HELLO` is pre-session. A fresh pl
 | `STARTED` | worker→plugin | v1.6 correlates `session_id` and reports `source_active`; legacy smaller payload accepted only for negotiated older minor. |
 | `POSITION` | plugin→worker | Source pacing: media playhead, sampled input time, positive finite playback rate, strict flag mask. Source seek from the plugin client normally becomes STOP(old) → fresh START → reapply translation → POSITION(new). |
 | `AUDIO` | plugin→worker | Session + start PTS + duration + PCM bytes. Payload/sample/duration relation must be exact; stale/overlapping discontinuity audio is rejected. |
-| `SEGMENT` | worker→plugin | Session, segment ID, start/end PTS, final flag, bounded UTF-8 source text, optional translated text/latency/tier. Plugin renders only current-session valid final cues. |
+| `SEGMENT` | worker→plugin | Session, segment ID, start/end PTS, final flag, bounded UTF-8 source text, optional translated text/latency/tier. Plugin renders only current-session valid final cues. A future streaming revision contract must preserve one utterance identity across partial revisions before setting `is_final=true`. |
 | `PAUSE` / `RESUME` | plugin→worker | Session-scoped lifecycle controls. Pause clears/invalidate in-flight partial work as defined by worker lifecycle. |
 | `STOP` | plugin→worker | Session-scoped stop; reasons include user stop, seek discontinuity, media end. Current-session STOP is idempotent. |
 | `SHUTDOWN` | plugin→worker | Header-only process shutdown. Worker closes transport and exits cleanly with code 0. `STOP(MEDIA_END)` and active live-session `SHUTDOWN` flush held-back PCM through normal final-caption translation before clearing session. Plugin close path waits for EOF with 120s hung-worker watchdog. |
@@ -85,6 +85,7 @@ Downloads are worker-owned, user-initiated, single-flight, catalog-limited, SHA-
 | `E_PROTOCOL_VERSION` | no compatible protocol | disable captions for item |
 | `E_AUTH` | token/ACL failure | close local transport; no network fallback |
 | `E_MODEL_MISSING` / `E_MODEL_INVALID` | absent or invalid model | disable caption session; playback continues |
+| `E_ENGINE_UNAVAILABLE` | explicitly selected engine is known but not available in this build | disable caption session; never fall back silently |
 | `E_AUDIO_FORMAT` | canonical PCM contract failed | disable caption session |
 | `E_BACKPRESSURE` | audio discarded | continue with explicit drop accounting |
 | `E_DISCONTINUITY` | timeline/source epoch changed | clear/resync caption epoch |
@@ -104,7 +105,7 @@ Translation error messages are bounded operational metadata only: segment ID, cl
 ```text
 vlc-whisper-worker --pipe <path> --token <64_hex> [--model <path>]
   [--model-dir <path>] [--vad-model <path>]
-  [--backend auto|gpu|cpu] [--gpu-device <id>]
+  [--asr-engine whisper|nemotron] [--backend auto|gpu|cpu] [--gpu-device <id>]
   [--log-file <path>] [--enable-logging]
 ```
 

@@ -73,12 +73,13 @@ typedef enum vw_error_code {
   E_TRANSLATION_TRANSPORT = 12,
   E_TRANSLATION_PARSE = 13,
   E_TRANSLATION_DEADLINE = 14,
-  E_TRANSLATION_LOCAL = 15
+  E_TRANSLATION_LOCAL = 15,
+  E_ENGINE_UNAVAILABLE = 16
 } vw_error_code_t;
 
 #define VW_ERROR_INTERNAL 9U
 #define VW_ERROR_SOURCE_OPEN 10U
-#define VW_ERROR_MAX 15U
+#define VW_ERROR_MAX 16U
 
 // Binary frame header (20 bytes packed on wire)
 #pragma pack(push, 1)

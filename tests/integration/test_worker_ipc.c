@@ -33,6 +33,7 @@ int main(void) {
   snprintf(config.pipe_name, sizeof(config.pipe_name), "/tmp/vlc-whisper-test-ipc-%ld.sock", (long)getpid());
 #endif
   for (size_t i = 0; i < VW_AUTH_TOKEN_BYTES; i++) config.auth_token[i] = (uint8_t)i;
+  config.asr_engine = VW_ASR_ENGINE_NEMOTRON;
 
   pthread_t thread;
   int err = pthread_create(&thread, NULL, worker_thread, &config);
@@ -101,13 +102,41 @@ int main(void) {
   EXPECT(vw_protocol_decode_payload(VW_MSG_ERROR, rpayload, reply_hdr.payload_length, &dec));
   EXPECT(dec.error.error_code == E_AUDIO_FORMAT);
 
+  // An explicitly chosen but unavailable engine must fail closed, not run Whisper under its name.
+  start.sample_rate = VW_AUDIO_SAMPLE_RATE;
+  start_hdr.sequence = 3;
+  EXPECT(vw_protocol_encode_payload(VW_MSG_START_SESSION, &start, start_payload, sizeof(start_payload), &start_len));
+  start_hdr.payload_length = (uint32_t)start_len;
+  EXPECT(vw_protocol_encode_header(&start_hdr, start_hdr_buf, sizeof(start_hdr_buf)));
+  EXPECT(vw_ipc_send((vw_ipc_handle_t*)client->pipe_handle, start_hdr_buf, sizeof(start_hdr_buf)));
+  EXPECT(vw_ipc_send((vw_ipc_handle_t*)client->pipe_handle, start_payload, start_len));
+  got = 0;
+  while (got < (int32_t)sizeof(rbuf)) {
+    int32_t r = vw_ipc_receive((vw_ipc_handle_t*)client->pipe_handle, rbuf + got, sizeof(rbuf) - got);
+    if (r == VW_IPC_RECV_FATAL || r == VW_IPC_RECV_TIMEOUT) break;
+    if (r > 0) got += r;
+  }
+  EXPECT(got == (int32_t)sizeof(rbuf));
+  EXPECT(vw_protocol_decode_header(rbuf, sizeof(rbuf), &reply_hdr));
+  EXPECT(reply_hdr.type == VW_MSG_ERROR);
+  got = 0;
+  while (got < (int32_t)reply_hdr.payload_length) {
+    int32_t r = vw_ipc_receive((vw_ipc_handle_t*)client->pipe_handle, rpayload + got, reply_hdr.payload_length - got);
+    if (r == VW_IPC_RECV_FATAL || r == VW_IPC_RECV_TIMEOUT) break;
+    if (r > 0) got += r;
+  }
+  EXPECT(got == (int32_t)reply_hdr.payload_length);
+  EXPECT(vw_protocol_decode_payload(VW_MSG_ERROR, rpayload, reply_hdr.payload_length, &dec));
+  EXPECT(dec.error.error_code == E_ENGINE_UNAVAILABLE);
+  EXPECT(strstr(dec.error.message, "unavailable") != NULL);
+
   // Send a valid SHUTDOWN message after HELLO (sequence 1) and START (sequence 2).
   vw_frame_header_t hdr;
   hdr.magic = VW_PROTOCOL_MAGIC;
   hdr.major = VW_PROTOCOL_VERSION_MAJOR;
   hdr.type = VW_MSG_SHUTDOWN;
   hdr.payload_length = 0;
-  hdr.sequence = 3;
+  hdr.sequence = 4;
 
   uint8_t hdr_buf[20];
   EXPECT(vw_protocol_encode_header(&hdr, hdr_buf, 20));
