@@ -49,6 +49,16 @@ void test_malformed_srt_rejected() {
   check(!error.empty(), "malformed SRT reports an error");
 }
 
+void test_out_of_range_timestamps_rejected() {
+  std::vector<vw::spike::SubtitleCue> cues;
+  std::string error;
+
+  check(!vw::spike::parse_srt("1\n00:60:00,000 --> 00:00:01,000\nHello\n", cues, error),
+        "timestamp minutes above 59 are rejected");
+  check(!vw::spike::parse_srt("1\n00:00:00,000 --> 00:00:60,000\nHello\n", cues, error),
+        "timestamp seconds above 59 are rejected");
+}
+
 void test_render_preserves_identity_and_timing() {
   std::vector<vw::spike::SubtitleCue> cues = {
       {"7", "00:00:10,100 --> 00:00:11,900", "Salut!"},
@@ -89,6 +99,7 @@ void test_empty_benchmark_samples() {
 int main() {
   test_parse_multiline_srt();
   test_malformed_srt_rejected();
+  test_out_of_range_timestamps_rejected();
   test_render_preserves_identity_and_timing();
   test_percentiles_and_deadline_rate();
   test_empty_benchmark_samples();

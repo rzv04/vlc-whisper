@@ -49,6 +49,9 @@ bool parse_timestamp(const std::string& value, std::size_t offset, std::size_t* 
         !std::isdigit(static_cast<unsigned char>(value[offset + 1])) || value[offset + 2] != separator) {
       return false;
     }
+    const unsigned component = static_cast<unsigned>(value[offset] - '0') * 10U +
+                               static_cast<unsigned>(value[offset + 1] - '0');
+    if (component > 59U) return false;
     offset += 3;
     return true;
   };
