@@ -78,7 +78,9 @@ bool valid_timing_line(const std::string& timing) {
   while (pos < timing.size() && timing[pos] == ' ') ++pos;
 
   std::size_t second_len = 0;
-  return parse_timestamp(timing, pos, &second_len);
+  if (!parse_timestamp(timing, pos, &second_len)) return false;
+  pos += second_len;
+  return pos == timing.size() || std::isspace(static_cast<unsigned char>(timing[pos])) != 0;
 }
 
 double nearest_rank_percentile(const std::vector<double>& sorted, double percentile) {
