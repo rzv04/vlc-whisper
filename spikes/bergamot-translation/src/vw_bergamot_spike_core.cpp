@@ -26,7 +26,28 @@ std::string normalize_newlines(std::string text) {
       normalized.push_back(text[i]);
     }
   }
-  return normalized;
+
+  std::string canonical;
+  canonical.reserve(normalized.size());
+  std::size_t line_start = 0;
+  while (line_start < normalized.size()) {
+    std::size_t line_end = normalized.find('\n', line_start);
+    const bool has_newline = line_end != std::string::npos;
+    if (!has_newline) line_end = normalized.size();
+
+    bool whitespace_only = true;
+    for (std::size_t i = line_start; i < line_end; ++i) {
+      if (std::isspace(static_cast<unsigned char>(normalized[i])) == 0) {
+        whitespace_only = false;
+        break;
+      }
+    }
+    if (!whitespace_only) canonical.append(normalized, line_start, line_end - line_start);
+    if (!has_newline) break;
+    canonical.push_back('\n');
+    line_start = line_end + 1;
+  }
+  return canonical;
 }
 
 bool is_digits(const std::string& value) {

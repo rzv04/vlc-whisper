@@ -41,6 +41,22 @@ void test_parse_multiline_srt() {
   }
 }
 
+void test_whitespace_only_cue_separator() {
+  const std::string input =
+      "1\n"
+      "00:00:01,000 --> 00:00:02,000\n"
+      "First cue.\n"
+      " \t \n"
+      "2\n"
+      "00:00:03,000 --> 00:00:04,000\n"
+      "Second cue.\n";
+
+  std::vector<vw::spike::SubtitleCue> cues;
+  std::string error;
+  check(vw::spike::parse_srt(input, cues, error), "whitespace-only cue separator is accepted");
+  check(cues.size() == 2, "whitespace-only separator preserves both cues");
+}
+
 void test_malformed_srt_rejected() {
   const std::string input = "1\nnot-a-timestamp\nHello\n";
   std::vector<vw::spike::SubtitleCue> cues;
@@ -108,6 +124,7 @@ void test_empty_benchmark_samples() {
 
 int main() {
   test_parse_multiline_srt();
+  test_whitespace_only_cue_separator();
   test_malformed_srt_rejected();
   test_out_of_range_timestamps_rejected();
   test_timing_suffix_boundaries();
