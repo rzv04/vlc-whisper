@@ -75,6 +75,16 @@ void test_out_of_range_timestamps_rejected() {
         "timestamp seconds above 59 are rejected");
 }
 
+void test_reverse_timestamp_range_rejected() {
+  std::vector<vw::spike::SubtitleCue> cues;
+  std::string error;
+
+  check(!vw::spike::parse_srt("1\n00:00:02,000 --> 00:00:01,000\nHello\n", cues, error),
+        "cue ending before its start is rejected");
+  check(vw::spike::parse_srt("1\n00:00:02,000 --> 00:00:02,000\nHello\n", cues, error),
+        "zero-duration cue remains accepted");
+}
+
 void test_timing_suffix_boundaries() {
   std::vector<vw::spike::SubtitleCue> cues;
   std::string error;
@@ -127,6 +137,7 @@ int main() {
   test_whitespace_only_cue_separator();
   test_malformed_srt_rejected();
   test_out_of_range_timestamps_rejected();
+  test_reverse_timestamp_range_rejected();
   test_timing_suffix_boundaries();
   test_render_preserves_identity_and_timing();
   test_percentiles_and_deadline_rate();

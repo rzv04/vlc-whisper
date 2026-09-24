@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 #include <sstream>
 #include <utility>
@@ -55,42 +57,64 @@ bool is_digits(const std::string& value) {
          std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
 }
 
-bool parse_timestamp(const std::string& value, std::size_t offset, std::size_t* consumed) {
+bool parse_timestamp(const std::string& value, std::size_t offset, std::size_t* consumed,
+                     std::uint64_t* milliseconds) {
   const std::size_t start = offset;
+  std::uint64_t hours = 0;
   std::size_t digits = 0;
   while (offset < value.size() && std::isdigit(static_cast<unsigned char>(value[offset]))) {
+    const unsigned digit = static_cast<unsigned>(value[offset] - '0');
+    if (hours > (std::numeric_limits<std::uint64_t>::max() - digit) / 10U) return false;
+    hours = hours * 10U + digit;
     ++offset;
     ++digits;
   }
   if (digits < 2 || offset >= value.size() || value[offset++] != ':') return false;
 
-  auto take_two_digits = [&](char separator) {
+  auto take_two_digits = [&](char separator, unsigned* component) {
     if (offset + 2 >= value.size()) return false;
     if (!std::isdigit(static_cast<unsigned char>(value[offset])) ||
         !std::isdigit(static_cast<unsigned char>(value[offset + 1])) || value[offset + 2] != separator) {
       return false;
     }
-    const unsigned component = static_cast<unsigned>(value[offset] - '0') * 10U +
-                               static_cast<unsigned>(value[offset + 1] - '0');
-    if (component > 59U) return false;
+    *component = static_cast<unsigned>(value[offset] - '0') * 10U +
+                 static_cast<unsigned>(value[offset + 1] - '0');
+    if (*component > 59U) return false;
     offset += 3;
     return true;
   };
 
-  if (!take_two_digits(':')) return false;
-  if (!take_two_digits(',')) return false;
+  unsigned minutes = 0;
+  unsigned seconds = 0;
+  if (!take_two_digits(':', &minutes)) return false;
+  if (!take_two_digits(',', &seconds)) return false;
   if (offset + 3 > value.size()) return false;
+
+  unsigned millis = 0;
   for (std::size_t i = 0; i < 3; ++i) {
     if (!std::isdigit(static_cast<unsigned char>(value[offset + i]))) return false;
+    millis = millis * 10U + static_cast<unsigned>(value[offset + i] - '0');
   }
   offset += 3;
+
+  std::uint64_t total = hours;
+  const std::uint64_t max = std::numeric_limits<std::uint64_t>::max();
+  if (total > (max - minutes) / 60U) return false;
+  total = total * 60U + minutes;
+  if (total > (max - seconds) / 60U) return false;
+  total = total * 60U + seconds;
+  if (total > (max - millis) / 1000U) return false;
+  total = total * 1000U + millis;
+
   if (consumed) *consumed = offset - start;
+  if (milliseconds) *milliseconds = total;
   return true;
 }
 
 bool valid_timing_line(const std::string& timing) {
   std::size_t first_len = 0;
-  if (!parse_timestamp(timing, 0, &first_len)) return false;
+  std::uint64_t start_ms = 0;
+  if (!parse_timestamp(timing, 0, &first_len, &start_ms)) return false;
 
   std::size_t pos = first_len;
   while (pos < timing.size() && timing[pos] == ' ') ++pos;
@@ -99,9 +123,11 @@ bool valid_timing_line(const std::string& timing) {
   while (pos < timing.size() && timing[pos] == ' ') ++pos;
 
   std::size_t second_len = 0;
-  if (!parse_timestamp(timing, pos, &second_len)) return false;
+  std::uint64_t end_ms = 0;
+  if (!parse_timestamp(timing, pos, &second_len, &end_ms)) return false;
   pos += second_len;
-  return pos == timing.size() || std::isspace(static_cast<unsigned char>(timing[pos])) != 0;
+  if (pos != timing.size() && std::isspace(static_cast<unsigned char>(timing[pos])) == 0) return false;
+  return end_ms >= start_ms;
 }
 
 double nearest_rank_percentile(const std::vector<double>& sorted, double percentile) {
