@@ -66,14 +66,20 @@ def download_gzip(base_url: str, relative_path: str, destination_dir: Path) -> t
 
     print(f"Downloading {url}", file=sys.stderr)
     request = urllib.request.Request(url, headers={"User-Agent": "VLC-Whisper-Bergamot-Spike/1"})
-    with tempfile.NamedTemporaryFile(prefix=output_name + ".", suffix=".download", dir=destination_dir, delete=False) as tmp:
-        temp_path = Path(tmp.name)
-        with urllib.request.urlopen(request, timeout=120) as response:
-            shutil.copyfileobj(response, tmp)
-
     decompressed_tmp = output_path.with_suffix(output_path.suffix + ".partial")
     digest = hashlib.sha256()
+    temp_path = None
     try:
+        with tempfile.NamedTemporaryFile(
+            prefix=output_name + ".",
+            suffix=".download",
+            dir=destination_dir,
+            delete=False,
+        ) as tmp:
+            temp_path = Path(tmp.name)
+            with urllib.request.urlopen(request, timeout=120) as response:
+                shutil.copyfileobj(response, tmp)
+
         if gz_name.endswith(".gz"):
             source_stream = gzip.open(temp_path, "rb")
         else:
@@ -87,7 +93,8 @@ def download_gzip(base_url: str, relative_path: str, destination_dir: Path) -> t
                 output.write(chunk)
         decompressed_tmp.replace(output_path)
     finally:
-        temp_path.unlink(missing_ok=True)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
         decompressed_tmp.unlink(missing_ok=True)
 
     return output_path, digest.hexdigest()
