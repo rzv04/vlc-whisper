@@ -12,7 +12,7 @@
 
 ## Hard invariants
 
-- **C17:** project-authored C is C17; no project-authored C++ except the explicitly approved, isolated `spikes/qt-settings/` Qt Widgets feasibility spike (C++17, outside root build/CI/packaging until an ADR accepts a production exception). Use 2-space Google-style formatting, 120 columns, `vw_` namespacing, and `clang-format`.
+- **C17:** project-authored C is C17; no project-authored C++ except the explicitly approved, isolated `spikes/qt-settings/` Qt Widgets and `spikes/bergamot-translation/` local translation feasibility spikes (C++17, outside root build/CI/packaging until an ADR accepts a production exception). Use 2-space Google-style formatting, 120 columns, `vw_` namespacing, and `clang-format`.
 - **Playback first:** caption failure may disable captions; it must not stall/crash VLC or corrupt playback.
 - **Realtime callback:** VLC audio callbacks may only do bounded non-blocking capture/queue work. No inference, IPC/filesystem I/O, blocking locks/waits, or heap allocation.
 - **Timeline:** media/caption time is signed 64-bit microseconds. Preserve PTS continuity explicitly; gaps/discontinuities must never be silently collapsed.
